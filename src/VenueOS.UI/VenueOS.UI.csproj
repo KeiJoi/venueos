@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><ProjectReference Include="..\VenueOS.Core\VenueOS.Core.csproj" /><ProjectReference Include="..\VenueOS.Venues\VenueOS.Venues.csproj" /><ProjectReference Include="..\VenueOS.Services\VenueOS.Services.csproj" /></ItemGroup></Project>
