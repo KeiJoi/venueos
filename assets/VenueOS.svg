@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    VenueOS plugin icon — source of truth for assets/icon-512.png and assets/icon-64.png.
+    A tablet/app-launcher glyph: a 2x2 grid of app tiles inside a screen inside a chassis, with one tile
+    picked out in an accent color to suggest a live, modular operations console — not any single module.
+    Regenerate the PNGs from this file (or from scripts/render_icon.py, which draws the same geometry
+    procedurally) if this design changes; keep both in sync.
+  -->
+  <rect x="24" y="24" width="464" height="464" rx="96" fill="#1a202e" stroke="#3a445c" stroke-width="6"/>
+  <rect x="72" y="72" width="368" height="368" rx="64" fill="#222a3a"/>
+  <rect x="112" y="112" width="128" height="128" rx="28" fill="#44d3c4"/>
+  <rect x="272" y="112" width="128" height="128" rx="28" fill="#34605e"/>
+  <rect x="112" y="272" width="128" height="128" rx="28" fill="#34605e"/>
+  <rect x="272" y="272" width="128" height="128" rx="28" fill="#f5b041"/>
+  <circle cx="368" cy="304" r="14" fill="#1a202e"/>
+</svg>
