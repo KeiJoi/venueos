@@ -10,6 +10,10 @@ VenueOS is a [Dalamud](https://dalamud.dev) plugin for Final Fantasy XIV: a sing
 
 Each module is a small application inside VenueOS — see [NEW_MODULE_GUIDE.md](NEW_MODULE_GUIDE.md) for the full architecture if you're extending it.
 
+## User Manual
+
+**[docs/USER_MANUAL.md](docs/USER_MANUAL.md)** — the practical, step-by-step guide for venue operators: installing VenueOS, Venue Profiles, Settings, and full instructions for every working module (ShoutRunner, Attendance, Greeter, VIP, Party Finder, Mair's Trivia, Mair's Editor).
+
 ## Installing
 
 **From the experimental repository:** add this repository's `repo.json` URL under Dalamud Settings → Experimental → Custom Plugin Repositories, then install VenueOS from the plugin installer like any other plugin.
