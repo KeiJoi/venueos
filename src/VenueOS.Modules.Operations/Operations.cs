@@ -590,7 +590,7 @@ public sealed class GreetingCoordinator(Func<GuestIdentity, bool> isGreeted, Gre
 
 public sealed class AttendanceModule(AttendanceService attendance, PresenceService presence, VenueProfileService profiles, Action? draw = null, Action? drawSettings = null) : IVenueModule
 {
-    public ModuleDescriptor Descriptor { get; } = new("core.attendance", "Attendance", "Venue attendance and session history.", "users");
+    public ModuleDescriptor Descriptor { get; } = new("core.attendance", "Attendance", "Venue attendance and session history.", "users", DisplayOrder: 2);
     public bool IsEnabled { get; set; } = true;
     private AttendanceSettings settings = new();
     public AttendanceSettings Settings => settings;
@@ -611,7 +611,7 @@ public sealed class AttendanceModule(AttendanceService attendance, PresenceServi
 }
 public sealed class GreeterModule(GreeterService greeter, VenueProfileService profiles, Action? draw = null, Action? drawSettings = null) : IVenueModule
 {
-    public ModuleDescriptor Descriptor { get; } = new("core.greeter", "Greeter", "DJ greeting presets and guest greetings.", "message", ["core.attendance"]);
+    public ModuleDescriptor Descriptor { get; } = new("core.greeter", "Greeter", "DJ greeting presets and guest greetings.", "message", ["core.attendance"], DisplayOrder: 3);
     public bool IsEnabled { get; set; } = true;
     public Task InitializeAsync(ModuleContext c, CancellationToken t) => Task.CompletedTask;
     public Task OnVenueChangedAsync(VenueContext c, CancellationToken t)
@@ -634,7 +634,7 @@ public sealed class GreeterModule(GreeterService greeter, VenueProfileService pr
 /// <see cref="AttendanceService.AutomaticGreetingEligible"/> handler is the only automatic trigger, for VIP and
 /// non-VIP guests alike.</summary>
 public sealed class VipModule(VipOrchestrationService vip, GreetingCoordinator coordinator, VenueProfileService profiles, Action? draw = null, Action? drawSettings = null) : IVenueModule
-{ public ModuleDescriptor Descriptor { get; } = new("core.vip", "VIP", "VIP recognition and entrance announcements.", "star", ["core.greeter"]); public bool IsEnabled { get; set; } = true; public Task InitializeAsync(ModuleContext c, CancellationToken t) { coordinator.Attach(); return Task.CompletedTask; }
+{ public ModuleDescriptor Descriptor { get; } = new("core.vip", "VIP", "VIP recognition and entrance announcements.", "star", ["core.greeter"], DisplayOrder: 4); public bool IsEnabled { get; set; } = true; public Task InitializeAsync(ModuleContext c, CancellationToken t) { coordinator.Attach(); return Task.CompletedTask; }
     public Task OnVenueChangedAsync(VenueContext c, CancellationToken t)
     {
         coordinator.ResetForVenue();
@@ -659,7 +659,7 @@ public sealed class VenueRaffleService(VenueRaffleClient client, VenueProfileSer
 }
 public sealed record RaffleDashboard(int RaffleCount, string? SelectedRaffleName, string? WinnerName);
 public sealed class VenueRaffleModule(VenueRaffleService raffle, Action? draw = null) : IVenueModule
-{ public ModuleDescriptor Descriptor { get; } = new("games.raffle", "Raffle", "Backend-compatible raffle operations.", "ticket", UnderDevelopment: true); public bool IsEnabled { get; set; } = false; public Task InitializeAsync(ModuleContext c, CancellationToken t) => Task.CompletedTask; public Task OnVenueChangedAsync(VenueContext c, CancellationToken t) { raffle.Load(c.VenueId); return Task.CompletedTask; } public void Tick(DateTimeOffset now) { } public void Draw() => draw?.Invoke(); public void DrawSettings() => draw?.Invoke(); public ValueTask DisposeAsync() => ValueTask.CompletedTask; }
+{ public ModuleDescriptor Descriptor { get; } = new("games.raffle", "Raffle", "Backend-compatible raffle operations.", "ticket", UnderDevelopment: true, DisplayOrder: 9); public bool IsEnabled { get; set; } = false; public Task InitializeAsync(ModuleContext c, CancellationToken t) => Task.CompletedTask; public Task OnVenueChangedAsync(VenueContext c, CancellationToken t) { raffle.Load(c.VenueId); return Task.CompletedTask; } public void Tick(DateTimeOffset now) { } public void Draw() => draw?.Invoke(); public void DrawSettings() => draw?.Invoke(); public ValueTask DisposeAsync() => ValueTask.CompletedTask; }
 
 // Mair's Trivia's settings/service/module moved to VenueOS.Modules.Operations.Trivia.MairsTriviaService.cs — a
 // backend-backed module with this much surface (Series, occurrences, player management) gets its own file/folder
@@ -717,7 +717,7 @@ public sealed class TournamentControlService(TournamentControlClient client, Ven
     private void Save() => profiles.SaveModuleConfig(venueId, "games.tournament", 1, Settings);
 }
 public sealed class TournamentControlModule(TournamentControlService tournament, Action? draw = null) : IVenueModule
-{ public ModuleDescriptor Descriptor { get; } = new("games.tournament", "TournamentControl", "Backend-compatible tournament bracket operations.", "trophy", UnderDevelopment: true); public bool IsEnabled { get; set; } = false; public Task InitializeAsync(ModuleContext c, CancellationToken t) => Task.CompletedTask; public Task OnVenueChangedAsync(VenueContext c, CancellationToken t) { tournament.Load(c.VenueId); return Task.CompletedTask; } public void Tick(DateTimeOffset now) { } public void Draw() => draw?.Invoke(); public void DrawSettings() => draw?.Invoke(); public ValueTask DisposeAsync() { tournament.Load(Guid.Empty); return ValueTask.CompletedTask; } }
+{ public ModuleDescriptor Descriptor { get; } = new("games.tournament", "TournamentControl", "Backend-compatible tournament bracket operations.", "trophy", UnderDevelopment: true, DisplayOrder: 10); public bool IsEnabled { get; set; } = false; public Task InitializeAsync(ModuleContext c, CancellationToken t) => Task.CompletedTask; public Task OnVenueChangedAsync(VenueContext c, CancellationToken t) { tournament.Load(c.VenueId); return Task.CompletedTask; } public void Tick(DateTimeOffset now) { } public void Draw() => draw?.Invoke(); public void DrawSettings() => draw?.Invoke(); public ValueTask DisposeAsync() { tournament.Load(Guid.Empty); return ValueTask.CompletedTask; } }
 
 public sealed record VenueBingoSettings(BingoConnectionSettings Connection, string RoomCode, string VenueName, string GameType, string Letters, int CostPerCard, int StartingPot, double PrizePercentage, BingoColors Colors, int PollSeconds = 5)
 { public static VenueBingoSettings Default() => new(new(), "", "", "Single Line", "BINGO", 0, 0, 100, new()); }
@@ -739,4 +739,4 @@ public sealed class VenueBingoService(VenueBingoClient client, VenueProfileServi
     private void Save() => profiles.SaveModuleConfig(venueId, "games.bingo", 1, Settings);
 }
 public sealed class VenueBingoModule(VenueBingoService bingo, Action? draw = null) : IVenueModule
-{ public ModuleDescriptor Descriptor { get; } = new("games.bingo", "Bingo", "Backend-compatible Bingo host operations; payout automation deferred.", "grid", UnderDevelopment: true); public bool IsEnabled { get; set; } = false; public Task InitializeAsync(ModuleContext c, CancellationToken t) => Task.CompletedTask; public Task OnVenueChangedAsync(VenueContext c, CancellationToken t) { bingo.Load(c.VenueId); return Task.CompletedTask; } public void Tick(DateTimeOffset now) => bingo.Tick(now); public void Draw() => draw?.Invoke(); public void DrawSettings() => draw?.Invoke(); public ValueTask DisposeAsync() { bingo.Load(Guid.Empty); return ValueTask.CompletedTask; } }
+{ public ModuleDescriptor Descriptor { get; } = new("games.bingo", "Bingo", "Backend-compatible Bingo host operations; payout automation deferred.", "grid", UnderDevelopment: true, DisplayOrder: 8); public bool IsEnabled { get; set; } = false; public Task InitializeAsync(ModuleContext c, CancellationToken t) => Task.CompletedTask; public Task OnVenueChangedAsync(VenueContext c, CancellationToken t) { bingo.Load(c.VenueId); return Task.CompletedTask; } public void Tick(DateTimeOffset now) => bingo.Tick(now); public void Draw() => draw?.Invoke(); public void DrawSettings() => draw?.Invoke(); public ValueTask DisposeAsync() { bingo.Load(Guid.Empty); return ValueTask.CompletedTask; } }

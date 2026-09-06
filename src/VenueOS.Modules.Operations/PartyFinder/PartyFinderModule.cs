@@ -7,7 +7,7 @@ namespace VenueOS.Modules.Operations.PartyFinder;
 /// NEW_MODULE_GUIDE.md §8 where every existing module currently mirrors the two).</summary>
 public sealed class PartyFinderModule(PartyFinderService service, Action? draw = null, Action? drawSettings = null) : IVenueModule
 {
-    public ModuleDescriptor Descriptor { get; } = new(PartyFinderService.ModuleId, "Party Finder", "Venue-scoped Party Finder recruitment automation.", "search");
+    public ModuleDescriptor Descriptor { get; } = new(PartyFinderService.ModuleId, "Party Finder", "Venue-scoped Party Finder recruitment automation.", "search", DisplayOrder: 5);
     public bool IsEnabled { get; set; } = true;
 
     public Task InitializeAsync(ModuleContext context, CancellationToken cancellationToken) => Task.CompletedTask;

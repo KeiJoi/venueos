@@ -471,7 +471,7 @@ public sealed class MairsTriviaService(MairsTriviaClient client, VenueProfileSer
 
 public sealed class MairsTriviaModule(MairsTriviaService trivia, Action? draw = null, Action? drawSettings = null) : IVenueModule
 {
-    public ModuleDescriptor Descriptor { get; } = new("games.trivia", "Mair's Trivia", "Live host trivia operation.", "circle-question");
+    public ModuleDescriptor Descriptor { get; } = new("games.trivia", "Mair's Trivia", "Live host trivia operation.", "circle-question", DisplayOrder: 6);
     public bool IsEnabled { get; set; } = true;
     public Task InitializeAsync(ModuleContext c, CancellationToken t) => Task.CompletedTask;
     public Task OnVenueChangedAsync(VenueContext c, CancellationToken t) { trivia.Load(c.VenueId); return Task.CompletedTask; }

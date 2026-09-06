@@ -31,28 +31,32 @@ place to change the order other than renaming a module's stable ID (which is als
 never do that casually).
 
 **After this pass:** `ModuleDescriptor.DisplayOrder` (`src/VenueOS.Core/Modules.cs`, default `0`) is the one
-authoritative place to change display order — `ModuleHost.Modules` now sorts by `(DisplayOrder, Id)`. Every
-module is still at the default `0` today, so current behavior is unchanged (alphabetical-by-Id).
+authoritative place to change display order — `ModuleHost.Modules` now sorts by `(DisplayOrder, Id)`. Both Home
+(`HomeScreen.DrawGrid`) and Settings → Modules (`ModulesSettingsPage.DrawList`) iterate that same property, so
+there is exactly one ordering to keep correct.
 
-**Current order** (all `DisplayOrder = 0`, so alphabetical by stable ID):
+**Final order** (set explicitly, `DisplayOrder` 1–10 in registration order below — no more ties to break):
 
-- Full registered order (what Settings → Modules shows): Attendance, Greeter, VIP, ShoutRunner, Bingo, Mair's
-  Editor, Raffle, TournamentControl, Mair's Trivia, Party Finder.
-- Fresh-install Home order (Bingo/Raffle/TournamentControl hidden while disabled): Attendance, Greeter, VIP,
-  ShoutRunner, Mair's Editor, Mair's Trivia, Party Finder.
+1. ShoutRunner — 2. Attendance — 3. Greeter — 4. VIP — 5. Party Finder — 6. Mair's Trivia — 7. Mair's Editor —
+   8. Bingo — 9. Raffle — 10. TournamentControl.
+
+This is what Settings → Modules shows in full. Fresh-install Home order (Bingo/Raffle/TournamentControl hidden
+while disabled) is the same sequence with those three removed: ShoutRunner, Attendance, Greeter, VIP, Party
+Finder, Mair's Trivia, Mair's Editor. Verified end to end with real production module instances in
+`tests/VenueOS.Services.Tests/ModuleDisplayOrderTests.cs`.
 
 **To change it later:** set `DisplayOrder` on the module's `ModuleDescriptor` construction (in
 `src/VenueOS.Modules.Operations/Operations.cs` for the modules that live there, or the module's own file for
-the rest) — no other file needs to change. No final aesthetic order has been chosen; this pass only establishes
-the mechanism, per the release instructions' explicit direction not to block packaging on that decision.
+the rest) — no other file needs to change.
 
 ## Build / test
 
 - [x] `dotnet build VenueOS.sln -c Debug` — 0 warnings, 0 errors.
 - [x] `dotnet build VenueOS.sln -c Release` — 0 warnings, 0 errors.
-- [x] `dotnet test VenueOS.sln` — 334/334 passing (up from a 321/321 baseline; 13 new tests cover the three
+- [x] `dotnet test VenueOS.sln` — 336/336 passing (up from a 321/321 baseline; 15 new tests cover the three
       unfinished modules' fresh-install defaults/Under Development flag, the module-enabled override
-      persistence mechanism, and the new `DisplayOrder` sort).
+      persistence mechanism, the `DisplayOrder` sort mechanism, and (using real production module instances)
+      the exact final ten-module order and the fresh-install Home subset).
 - [x] Module default audit — see matrix above.
 - [x] `repo.json` parses as valid JSON and its `AssemblyVersion` (`0.1.0.0`) matches the built
       `VenueOS.dll`'s actual assembly version and `VenueOS.json`'s `AssemblyVersion`.

@@ -120,7 +120,7 @@ public sealed class MairsEditorService(IQuestionSetRepository library, Func<Guid
 /// local authoring works fully offline and must not gain an accidental dependency on a live session.</summary>
 public sealed class MairsEditorModule(Action? draw = null, Action? drawSettings = null) : IVenueModule
 {
-    public ModuleDescriptor Descriptor { get; } = new("games.mairseditor", "Mair's Editor", "Question-set and trivia-content authoring.", "file-pen");
+    public ModuleDescriptor Descriptor { get; } = new("games.mairseditor", "Mair's Editor", "Question-set and trivia-content authoring.", "file-pen", DisplayOrder: 7);
     public bool IsEnabled { get; set; } = true;
     public Task InitializeAsync(ModuleContext c, CancellationToken t) => Task.CompletedTask;
     // The shared question library is VenueOS-wide, not per-venue — a venue switch never resets or touches the editor's working draft.

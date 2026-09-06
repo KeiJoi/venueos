@@ -13,7 +13,7 @@ public sealed class ShoutRunnerModule(ShoutRunnerService service, Action? draw =
 {
     private bool isEnabled = true;
 
-    public ModuleDescriptor Descriptor { get; } = new(ShoutRunnerService.ModuleId, "ShoutRunner", "Data Center shout route automation.", "megaphone");
+    public ModuleDescriptor Descriptor { get; } = new(ShoutRunnerService.ModuleId, "ShoutRunner", "Data Center shout route automation.", "megaphone", DisplayOrder: 1);
 
     /// <summary>A custom setter, not a plain auto-property — disabling the module must behave like a strong Stop
     /// (reconstruction brief "MODULE DISABLE"), and <c>IVenueModule</c>/<c>ModuleHost</c> have no separate
