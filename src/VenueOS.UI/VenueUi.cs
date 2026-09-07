@@ -19,13 +19,16 @@ public sealed record UiStyle(string Background, string Foreground, float Roundin
 public sealed class VenueShell(ModuleHost modules, VenueProfileService venues)
 {
     private const string SettingsId = "__settings__";
+    private const string ManualId = "__manual__";
     public string? SelectedModuleId { get; private set; }
     public IReadOnlyList<IVenueModule> Navigation => modules.Modules;
     public string Header => $"VenueOS · {venues.Current.DisplayName}";
     public bool IsHome => SelectedModuleId is null;
     public bool IsSettingsSelected => SelectedModuleId == SettingsId;
+    public bool IsManualSelected => SelectedModuleId == ManualId;
     public void SelectModule(string id) => SelectedModuleId = modules.Modules.Any(x => x.Descriptor.Id == id) ? id : null;
     public void SelectSettings() => SelectedModuleId = SettingsId;
+    public void SelectManual() => SelectedModuleId = ManualId;
     public void SelectHome() => SelectedModuleId = null;
     public void DrawSelected() { var module = modules.Modules.SingleOrDefault(x => x.Descriptor.Id == SelectedModuleId); if (module is null) return; if (!module.IsEnabled) return; module.Draw(); }
 }

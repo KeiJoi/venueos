@@ -1,3 +1,4 @@
+using System.Numerics;
 using VenueOS.Services;
 
 namespace VenueOS.Services.Tests;
@@ -7,7 +8,7 @@ public sealed class AttendanceStoreTests
     [Fact] public void Start_pause_resume_close_and_delete_manage_session_lifecycle()
     {
         using var db = New(); var venue = Guid.NewGuid(); var opened = DateTimeOffset.UnixEpoch;
-        var sessionId = db.StartSession(venue, opened);
+        var sessionId = db.StartSession(venue, opened, PresenceAreaMode.FollowOperator, null, null);
         Assert.True(db.GetRecentSessions(venue).Single().IsResumable);
         Assert.True(db.PauseSession(venue, sessionId, opened.AddMinutes(5)));
         Assert.True(db.GetRecentSessions(venue).Single().IsResumable);
@@ -22,13 +23,13 @@ public sealed class AttendanceStoreTests
     [Fact] public void Mark_present_reports_first_visit_tonight_once_per_night_not_per_session()
     {
         using var db = New(); var venue = Guid.NewGuid(); var guest = new GuestIdentity("Mair", "Balmung"); var t = DateTimeOffset.UnixEpoch;
-        var s1 = db.StartSession(venue, t);
+        var s1 = db.StartSession(venue, t, PresenceAreaMode.FollowOperator, null, null);
         var first = db.MarkPresent(venue, s1, guest, t);
         Assert.True(first.BecamePresent); Assert.True(first.IsFirstVisitTonight);
         db.MarkAbsent(venue, s1, guest, t.AddMinutes(1));
         db.CloseSession(venue, s1, t.AddMinutes(1));
 
-        var s2 = db.StartSession(venue, t.AddMinutes(2));
+        var s2 = db.StartSession(venue, t.AddMinutes(2), PresenceAreaMode.FollowOperator, null, null);
         var second = db.MarkPresent(venue, s2, guest, t.AddMinutes(2));
         Assert.True(second.BecamePresent); Assert.False(second.IsFirstVisitTonight);
     }
@@ -36,7 +37,7 @@ public sealed class AttendanceStoreTests
     [Fact] public void Mark_present_is_idempotent_while_still_present()
     {
         using var db = New(); var venue = Guid.NewGuid(); var guest = new GuestIdentity("Mair", "Balmung"); var t = DateTimeOffset.UnixEpoch;
-        var session = db.StartSession(venue, t);
+        var session = db.StartSession(venue, t, PresenceAreaMode.FollowOperator, null, null);
         db.MarkPresent(venue, session, guest, t);
         var again = db.MarkPresent(venue, session, guest, t.AddSeconds(1));
         Assert.False(again.BecamePresent); Assert.False(again.IsFirstVisitTonight);
@@ -46,7 +47,7 @@ public sealed class AttendanceStoreTests
     [Fact] public void Total_time_accrues_only_when_marked_absent()
     {
         using var db = New(); var venue = Guid.NewGuid(); var guest = new GuestIdentity("Mair", "Balmung"); var t = DateTimeOffset.UnixEpoch;
-        var session = db.StartSession(venue, t);
+        var session = db.StartSession(venue, t, PresenceAreaMode.FollowOperator, null, null);
         db.MarkPresent(venue, session, guest, t);
         Assert.Equal(TimeSpan.Zero, db.GetSessionVisitors(venue, session).Single().TotalTime);
         db.MarkAbsent(venue, session, guest, t.AddMinutes(3));
@@ -60,7 +61,7 @@ public sealed class AttendanceStoreTests
     [Fact] public void Pausing_or_closing_marks_everyone_present_as_absent_and_finalizes_time()
     {
         using var db = New(); var venue = Guid.NewGuid(); var guest = new GuestIdentity("Mair", "Balmung"); var t = DateTimeOffset.UnixEpoch;
-        var session = db.StartSession(venue, t);
+        var session = db.StartSession(venue, t, PresenceAreaMode.FollowOperator, null, null);
         db.MarkPresent(venue, session, guest, t);
         db.PauseSession(venue, session, t.AddMinutes(4));
         var visitor = db.GetSessionVisitors(venue, session).Single();
@@ -70,7 +71,7 @@ public sealed class AttendanceStoreTests
     [Fact] public void Greeted_flag_is_tracked_independently_at_night_and_session_scope()
     {
         using var db = New(); var venue = Guid.NewGuid(); var guest = new GuestIdentity("Mair", "Balmung"); var t = DateTimeOffset.UnixEpoch;
-        var session = db.StartSession(venue, t);
+        var session = db.StartSession(venue, t, PresenceAreaMode.FollowOperator, null, null);
         db.MarkPresent(venue, session, guest, t);
         db.MarkGreeted(venue, session, guest, true, t);
         Assert.True(db.GetSessionVisitors(venue, session).Single().Greeted);
@@ -79,7 +80,7 @@ public sealed class AttendanceStoreTests
     [Fact] public void Samples_and_daily_stats_are_scoped_per_venue_and_per_night()
     {
         using var db = New(); var venueA = Guid.NewGuid(); var venueB = Guid.NewGuid(); var t = DateTimeOffset.UnixEpoch;
-        var sessionA = db.StartSession(venueA, t); var sessionB = db.StartSession(venueB, t);
+        var sessionA = db.StartSession(venueA, t, PresenceAreaMode.FollowOperator, null, null); var sessionB = db.StartSession(venueB, t, PresenceAreaMode.FollowOperator, null, null);
         db.RecordSample(venueA, sessionA, t, 5); db.RecordSample(venueA, sessionA, t.AddMinutes(5), 9);
         db.RecordSample(venueB, sessionB, t, 100);
         Assert.Equal(2, db.GetSessionSamples(venueA, sessionA).Count);
@@ -362,6 +363,59 @@ public sealed class AttendanceStoreTests
                 Assert.Null(assignments[3]);
                 Assert.Equal(presetA, assignments[5]);
             }
+        }
+        finally { CleanupDbFile(path); }
+    }
+
+    /// <summary>Live-verified product addition (Venue Area Type moving from a global setting to a per-opening
+    /// snapshot): a database created before <c>venue_sessions</c> had <c>area_mode</c>/<c>territory_lock</c>/
+    /// <c>fixed_center_*</c> columns must migrate idempotently, without losing the pre-existing opening — it simply
+    /// reads back as Normal/no-lock/no-origin (the safe default), since that's genuinely all that's recoverable for
+    /// an opening that predates this feature. The database must also remain genuinely writable for new
+    /// area-aware sessions afterward.</summary>
+    [Fact] public void Opening_a_database_created_before_the_area_mode_columns_existed_migrates_and_preserves_the_session()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"venueos-area-migration-{Guid.NewGuid():N}.db");
+        var venue = Guid.NewGuid();
+        try
+        {
+            using (var legacy = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path}"))
+            {
+                legacy.Open();
+                RawExec(legacy, """
+                    CREATE TABLE venue_nights (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        venue_id TEXT NOT NULL,
+                        night_date_local TEXT NOT NULL,
+                        created_at_utc TEXT NOT NULL,
+                        UNIQUE(venue_id, night_date_local)
+                    );
+                    """);
+                RawExec(legacy, """
+                    CREATE TABLE venue_sessions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        venue_id TEXT NOT NULL,
+                        night_id INTEGER NOT NULL REFERENCES venue_nights(id) ON DELETE CASCADE,
+                        opened_at_utc TEXT NOT NULL,
+                        closed_at_utc TEXT NULL
+                    );
+                    """);
+                RawExec(legacy, $"INSERT INTO venue_nights (venue_id, night_date_local, created_at_utc) VALUES ('{venue}', '2024-01-01', '2024-01-01T00:00:00Z');");
+                RawExec(legacy, $"INSERT INTO venue_sessions (venue_id, night_id, opened_at_utc) VALUES ('{venue}', 1, '2024-01-01T20:00:00Z');");
+            }
+
+            using var db = new SqliteVenueDatabase($"Data Source={path}");
+            var sessions = db.GetRecentSessions(venue);
+            Assert.Single(sessions); // the pre-existing opening is preserved, not wiped
+            Assert.Equal(PresenceAreaMode.FollowOperator, sessions[0].AreaMode);
+            Assert.Null(sessions[0].TerritoryLock);
+            Assert.Null(sessions[0].FixedCenter);
+
+            // The migration must leave the database genuinely writable for new area-aware sessions afterward.
+            var newSessionId = db.StartSession(venue, DateTimeOffset.UtcNow, PresenceAreaMode.FixedPoint, null, new Vector3(1, 2, 3));
+            var newSession = db.GetSession(venue, newSessionId);
+            Assert.Equal(PresenceAreaMode.FixedPoint, newSession!.AreaMode);
+            Assert.Equal(new Vector3(1, 2, 3), newSession.FixedCenter);
         }
         finally { CleanupDbFile(path); }
     }

@@ -195,6 +195,12 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
 
     public async Task<ShoutRunnerTransferOutcome> TravelToWorldAsync(string targetWorld, bool crossDataCenter, CancellationToken token)
     {
+        // Case 1 ("already on target World"): checked before ever touching Lifestream, so a World the character is
+        // already standing on never issues an unnecessary /li command.
+        var initialState = await GetGameStateAsync(token).ConfigureAwait(false);
+        if (initialState.IsLoggedIn && initialState.HasLocalPlayer && string.Equals(initialState.CurrentWorld, targetWorld, StringComparison.OrdinalIgnoreCase))
+            return ShoutRunnerTransferOutcome.Success();
+
         if (!await WaitForLifestreamReadyAsync(token).ConfigureAwait(false))
             return ShoutRunnerTransferOutcome.Failed("Lifestream is unavailable or busy.");
 
@@ -296,6 +302,13 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
         return false;
     }
 
+    /// <summary>Live-verified bug fix — see <see cref="VenueOS.Modules.Operations.ShoutRunner.ShoutRunnerSameDataCenterArrival"/>'s
+    /// doc comment for the exact scenario and the reasoning. The wrong-World branch below now requires Lifestream to
+    /// also confirm it is no longer busy before trusting that result, exactly mirroring
+    /// <see cref="WaitForCrossDataCenterTransferAsync"/>'s own already-correct equivalent check — a same-Data-Center
+    /// World Visit can settle briefly at an intermediate World-Visit-capable city (Ul'dah/Limsa/Gridania) before
+    /// Lifestream performs the actual World Visit, and that intermediate settle must never be mistaken for the
+    /// transfer having finished on the wrong World.</summary>
     private async Task<ShoutRunnerTransferOutcome> WaitForSameDataCenterTransferAsync(string targetWorld, CancellationToken token)
     {
         var deadline = DateTime.UtcNow + SameDataCenterTimeout;
@@ -324,14 +337,10 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
 
             if (!transitioning && seenTransition && state.IsLoggedIn && state.HasLocalPlayer)
             {
-                if (string.Equals(state.CurrentWorld, targetWorld, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (TryLifestreamIsBusy(out var busy) && !busy) return ShoutRunnerTransferOutcome.Success();
-                }
-                else if (!string.IsNullOrEmpty(state.CurrentWorld))
-                {
-                    return ShoutRunnerTransferOutcome.Failed($"Arrived at {state.CurrentWorld} instead of {targetWorld}.");
-                }
+                bool? lifestreamBusy = TryLifestreamIsBusy(out var busy) ? busy : null;
+                var decision = ShoutRunnerSameDataCenterArrival.Evaluate(state.IsLoggedIn, state.HasLocalPlayer, transitioning, seenTransition, state.CurrentWorld, targetWorld, lifestreamBusy);
+                if (decision == ShoutRunnerSameDataCenterArrival.Decision.Success) return ShoutRunnerTransferOutcome.Success();
+                if (decision == ShoutRunnerSameDataCenterArrival.Decision.Failed) return ShoutRunnerTransferOutcome.Failed($"Arrived at {state.CurrentWorld} instead of {targetWorld}.");
             }
 
             await Task.Delay(500, token).ConfigureAwait(false);

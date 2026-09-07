@@ -22,7 +22,7 @@ namespace VenueOS.Modules.Operations.ShoutRunner;
 /// Fully unit-testable with a fake <see cref="IShoutRunnerAutomation"/> (returning already-completed
 /// <see cref="Task{T}"/>s) and a fake <see cref="IClock"/> — no real waiting, no live Dalamud/game context, exactly
 /// like <c>VenueOS.Modules.Operations.PartyFinder.PartyFinderService</c>.</summary>
-public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCommandService chat, VenueProfileService profiles, DiagnosticsService diagnostics, IClock clock)
+public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCommandService chat, VenueProfileService profiles, DiagnosticsService diagnostics, IClock clock, IShoutRunnerRecoveryStore recoveryStore)
 {
     public const string ModuleId = "communication.announcements";
 
@@ -70,12 +70,61 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     private Task<bool>? shoutTask;
     private Task<ShoutRunnerReadinessOutcome>? stoppingTask;
 
+    // ----- crash-recovery journal state (see ShoutRunnerRecoveryJournal's doc comment) -----
+    private Guid? activeRunId;
+    private List<ShoutRunnerRecoverySkippedDataCenter> activeSkippedDataCenters = [];
+    private List<string> activeCompletedDestinationsInCurrentWorld = [];
+    private List<ShoutRunnerDestinationStep>? activeCurrentWorldPlan;
+    // Set only by Resume(), for exactly the one World it identified as already in progress; consumed (and cleared)
+    // the first time ProcessTransferCompletion's success branch runs afterward — see that method's doc comment.
+    private IReadOnlyList<ShoutRunnerDestinationStep>? pendingResumedWorldSteps;
+    private int pendingResumedStepIndex;
+
     public ShoutRunnerState State { get; private set; } = ShoutRunnerState.Stopped;
     public int RunNumber { get; private set; }
     public string StatusText { get; private set; } = "Stopped";
     public DateTimeOffset? NextRunAtUtc => State == ShoutRunnerState.WaitingRepeat ? nextRunAtUtc : null;
     public ShoutRunnerSettings Settings => settings;
     public IReadOnlyList<ShoutRunnerTerminalEvent> TerminalEvents => terminal.Events;
+
+    /// <summary>Loaded once, at construction, from whatever <see cref="IShoutRunnerRecoveryStore"/> already has on
+    /// disk — a recovery journal is not tied to any particular venue switch (<see cref="Load"/> never touches it),
+    /// since it represents "the one currently interrupted run," independent of which venue is currently being
+    /// viewed. Null means no recoverable run exists (either genuinely none, or the file was unreadable — see
+    /// <see cref="RecoveredJournalIsCorrupt"/> to distinguish those two cases).</summary>
+    public ShoutRunnerRecoveryJournal? RecoveredJournal { get; private set; } = recoveryStore.TryLoad(out _);
+
+    /// <summary>True only when a recovery file exists but could not be safely loaded (malformed JSON, unsupported
+    /// schema version, or internally inconsistent route state) — the crash-recovery brief's "CORRUPT / INCOMPATIBLE
+    /// RECOVERY FILE" case. VenueOS must never crash over this; the operator is offered Discard Recovery instead.</summary>
+    public bool RecoveredJournalIsCorrupt { get; private set; } = DetermineRecoveryCorrupt(recoveryStore);
+
+    /// <summary>Whether the recovered journal (if any) belongs to the venue currently loaded into this service — see
+    /// the crash-recovery brief's "VENUE PROFILE SAFETY". A journal from a different venue is never silently offered
+    /// for Resume; the operator must be on the owning venue first.</summary>
+    public bool RecoveredJournalBelongsToCurrentVenue => RecoveredJournal is { } journal && journal.VenueId == venueId;
+
+    /// <summary>Only meaningful alongside <see cref="RecoveredJournalBelongsToCurrentVenue"/> — Resume itself
+    /// re-validates venue ownership regardless (see <see cref="Resume"/>), so this is purely a UI convenience gate,
+    /// not the sole enforcement point for cross-venue safety.</summary>
+    public bool CanResume => CanStart && RecoveredJournal is not null && !RecoveredJournalIsCorrupt;
+
+    /// <summary>Everything the Resume summary UI needs to show the operator "what will happen" before they click
+    /// Resume — see the crash-recovery brief's "RESUME SUMMARY". Null whenever <see cref="RecoveredJournal"/> is.</summary>
+    public ShoutRunnerRecoverySummary? RecoveredSummary
+    {
+        get
+        {
+            if (RecoveredJournal is not { } journal) return null;
+            var venueName = profiles.Profiles.FirstOrDefault(v => v.Id == journal.VenueId)?.DisplayName ?? journal.VenueDisplayNameSnapshot;
+            var lastCompleted = journal.CompletedDestinationsInCurrentWorld.Count > 0 ? journal.CompletedDestinationsInCurrentWorld[^1] : null;
+            var next = journal.CurrentWorldPlan?.Select(s => s.Destination)
+                .FirstOrDefault(d => !journal.CompletedDestinationsInCurrentWorld.Contains(d, StringComparer.OrdinalIgnoreCase));
+            return new ShoutRunnerRecoverySummary(journal.VenueId, venueName, journal.RunNumber, journal.CurrentDataCenter, journal.CurrentWorld, lastCompleted, next, journal.SkippedDataCenters, journal.LastCheckpointAtUtc);
+        }
+    }
+
+    private static bool DetermineRecoveryCorrupt(IShoutRunnerRecoveryStore store) { store.TryLoad(out var corrupt); return corrupt; }
 
     /// <summary>Only <see cref="ShoutRunnerState.Stopped"/> and <see cref="ShoutRunnerState.Faulted"/> allow a new
     /// RUN to begin — every other state means a RUN or its Stop cleanup is already in flight, which is the entire
@@ -169,11 +218,24 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         runConfig = new ShoutRunnerRunConfig(dataCenters, [.. settings.Destinations], settings.ClampedDelaySeconds());
         RunNumber = 0;
         fallbackDirection = ShoutRunnerRoutePlanner.TraversalDirection.Forward;
+        // A brand-new run always supersedes whatever recovery journal was on disk — a deliberate, confirmed operator
+        // decision (see the crash-recovery brief's "START NEW RUN WITH RECOVERY PRESENT"; the confirmation itself is
+        // the operator panel's job, not this method's — see ShoutRunnerOperatorPanel). WriteCheckpoint's Save() call
+        // (triggered inside BeginNextRun below) atomically replaces whatever file was already there. Per-run identity
+        // (RunId, skip history) is reset in BeginNextRun itself, not here, since that same reset must also apply to
+        // every later Repeat-triggered RUN, not just this first one.
+        activeCompletedDestinationsInCurrentWorld = [];
+        activeCurrentWorldPlan = null;
         automation.ResetForVenue();
         runCts?.Dispose();
         runCts = new CancellationTokenSource();
         State = ShoutRunnerState.Starting;
         StatusText = "Starting…";
+        // BeginNextRun synchronously drives all the way into the first World's readiness gate (kicking off, but not
+        // yet resolving, the first automation call) before returning — AdvanceToNextWorld's own checkpoint write
+        // (see its doc comment) captures the initial journal, with the first Data Center/World already known,
+        // before any real travel/shout action has actually completed. This satisfies the crash-recovery brief's
+        // "create initial journal before the first travel/action begins" without a separate, less-accurate write.
         BeginNextRun();
         return ShoutRunnerStartResult.Started;
     }
@@ -196,6 +258,13 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         runCts?.Cancel();
         automation.Abort();
         ClearPendingTasks();
+        // Crash-recovery brief "STOP / CANCEL SEMANTICS": ShoutRunner has no Pause concept — Stop is the operator's
+        // only manual termination action, and represents an explicit decision to abandon this run, not merely an
+        // interruption. Cleared immediately (before the Stopping cleanup even runs) so a crash during that cleanup
+        // can never leave a stale journal behind either.
+        recoveryStore.Delete();
+        RecoveredJournal = null;
+        RecoveredJournalIsCorrupt = false;
         terminal.Add(Event(ShoutRunnerEventSeverity.Warning, "Stop requested."));
         State = ShoutRunnerState.Stopping;
         StatusText = "Stopping…";
@@ -263,6 +332,13 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     {
         RunNumber++;
         runStartedAt = clock.UtcNow;
+        // Each RUN — including one reached via Repeat, not just the very first Start() — is its own independent
+        // recovery unit with its own identity and its own clean skip history; a repeat cycle must never inherit the
+        // previous RUN's RunId or SkippedDataCenters into its checkpoint (a live-verified gap this fixes: only
+        // Start() used to reset these, so RUN 2's journal could silently still list RUN 1's already-resolved skips).
+        activeRunId = Guid.NewGuid();
+        activeSkippedDataCenters = [];
+        pendingResumedWorldSteps = null;
         terminal.Add(Event(ShoutRunnerEventSeverity.InProgress, $"RUN {RunNumber} started."));
         dataCenterIndex = -1;
         AdvanceToNextDataCenter();
@@ -285,6 +361,14 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     {
         var dc = runConfig!.DataCentersInOrder[dataCenterIndex];
         terminal.Add(Event(ShoutRunnerEventSeverity.Failure, $"{dc} — SKIPPED: {reason}", dc));
+        // Crash-recovery brief "RUN-SCOPED DATA CENTER SKIPS": recorded the moment the runner commits to skipping
+        // it, so Resume must never re-attempt a Data Center this run already gave up on. Deliberately NOT persisted
+        // to disk here, though — CurrentDataCenter in the journal still names THIS (about-to-be-skipped) Data
+        // Center at this exact point, so writing now would make a crash right here resume by re-entering the very
+        // Data Center just given up on. AdvanceToNextDataCenter (below) moves the cursor past it synchronously and
+        // itself triggers the next real checkpoint (via AdvanceToNextWorld, or CompleteRun deleting the journal
+        // entirely if this was the last Data Center) with the corrected position and this skip already included.
+        activeSkippedDataCenters.Add(new ShoutRunnerRecoverySkippedDataCenter(dc, reason, clock.UtcNow));
         AdvanceToNextDataCenter();
     }
 
@@ -302,8 +386,16 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
 
         var world = currentWorlds[worldIndex];
         currentWorldHadFailure = false;
+        // A freshly-entered World always starts with nothing completed yet — see ShoutRunnerRecoveryJournal's doc
+        // comment for why a World in this state is always resumed exactly like a fresh entry (nothing to preserve),
+        // never by replaying a stale plan. Checkpointed here (not just on each successful destination) so Resume's
+        // summary reflects this World immediately, without relying on the self-correcting replay a crash before its
+        // first destination would otherwise require (see the type-level remark on WriteCheckpoint).
+        activeCompletedDestinationsInCurrentWorld = [];
+        activeCurrentWorldPlan = null;
         terminal.Add(Event(ShoutRunnerEventSeverity.InProgress, $"{world} — starting.", dc, world));
         StatusText = $"RUN {RunNumber} — {dc} / {world}";
+        WriteCheckpoint();
         BeginReadinessGate(ReadinessPurpose.EnterWorld);
     }
 
@@ -372,6 +464,19 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         switch (outcome.Result)
         {
             case ShoutRunnerTransferResult.Success:
+                // Resume's one special case: a World that already has a persisted, partially-completed plan from
+                // before a crash replays its exact remaining steps (never re-detects location or re-plans) — see
+                // ShoutRunnerRecoveryJournal's and Resume's doc comments for why. Consumed exactly once; every other
+                // World (resumed-fresh or not) takes the normal locate-then-plan path unchanged.
+                if (pendingResumedWorldSteps is { } resumedSteps)
+                {
+                    currentSteps = resumedSteps;
+                    stepIndex = pendingResumedStepIndex - 1;
+                    pendingResumedWorldSteps = null;
+                    AdvanceToNextStep();
+                    return;
+                }
+
                 locateTask = automation.TryGetCurrentPlaceNameAsync(runCts!.Token);
                 return;
             case ShoutRunnerTransferResult.WorldCongestedSkip:
@@ -467,6 +572,12 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         else
         {
             terminal.Add(Event(ShoutRunnerEventSeverity.Success, $"{step.Destination} — SHOUT SENT.", dc, world, step.Destination));
+            // The crash-recovery brief's core checkpoint unit: a destination becomes durably completed only once its
+            // shout has actually succeeded — never merely because travel/teleport/a shout attempt started (see
+            // ShoutRunnerRecoveryJournal's doc comment). Checkpointed BEFORE the pacing delay/next step begins.
+            activeCompletedDestinationsInCurrentWorld.Add(step.Destination);
+            activeCurrentWorldPlan = [.. currentSteps];
+            WriteCheckpoint();
         }
 
         BeginActionDelay();
@@ -487,6 +598,16 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     private void CompleteRun()
     {
         terminal.Add(Event(ShoutRunnerEventSeverity.Success, $"RUN {RunNumber} complete."));
+        // Crash-recovery brief "WHEN TO DELETE THE JOURNAL": a RUN — one full pass through every selected Data
+        // Center — is this codebase's actual unit of "the run" (see the terminal's own "RUN {n} started"/"RUN {n}
+        // complete" language, which predates this feature); a repeating ShoutRunner's *next* RUN is a fresh start
+        // using live settings, not a continuation of anything that needs crash recovery, so the journal is cleared
+        // here regardless of whether Repeat immediately schedules another RUN. A crash during the WaitingRepeat gap
+        // itself is therefore not resumable — the operator starts RUN {n+1} manually (or waits for the timer) like
+        // any other fresh Start(); only an ACTIVE, mid-route RUN is ever checkpointed/resumable.
+        recoveryStore.Delete();
+        RecoveredJournal = null;
+        RecoveredJournalIsCorrupt = false;
         if (!settings.RepeatEnabled)
         {
             State = ShoutRunnerState.Stopped;
@@ -547,6 +668,152 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     {
         dataCenterIndex = -1; currentWorlds = []; worldIndex = -1; currentDataCenterHadSkip = false;
         currentSteps = []; stepIndex = -1; currentWorldHadFailure = false; runConfig = null;
+        activeRunId = null; activeSkippedDataCenters = []; activeCompletedDestinationsInCurrentWorld = []; activeCurrentWorldPlan = null; pendingResumedWorldSteps = null;
+    }
+
+    /// <summary>Resumes the one interrupted run described by <see cref="RecoveredJournal"/> — see that type's doc
+    /// comment for the full reconstruction rationale. Fully validates the journal against its own frozen route
+    /// snapshot (Data Center/World names actually exist within it) before committing any state, so a corrupt or
+    /// internally-inconsistent journal is reported as such rather than leaving this service half-mutated.
+    ///
+    /// A World with completed destinations already recorded resumes by replaying the exact remaining tail of its
+    /// already-computed plan (see <see cref="ProcessTransferCompletion"/>'s <c>pendingResumedWorldSteps</c> branch);
+    /// every other case (no Data Center/World recorded yet, or a World with zero completions) simply continues
+    /// forward through the normal <see cref="AdvanceToNextDataCenter"/>/<see cref="AdvanceToNextWorld"/> path exactly
+    /// like a fresh Start() would, using the journal's frozen <see cref="ShoutRunnerRecoveryJournal.Route"/> instead
+    /// of live Settings — see the crash-recovery brief's "ROUTE CONFIGURATION CHANGED AFTER CRASH".</summary>
+    public ShoutRunnerResumeResult Resume()
+    {
+        if (!CanStart) return ShoutRunnerResumeResult.AlreadyRunning;
+        if (RecoveredJournalIsCorrupt) return ShoutRunnerResumeResult.RecoveryCorrupt;
+        if (RecoveredJournal is not { } journal) return ShoutRunnerResumeResult.NoRecoveryAvailable;
+        // Crash-recovery brief "VENUE PROFILE SAFETY" — re-checked here regardless of what the UI already gated on,
+        // so cross-venue contamination is never possible even if a caller's own check is stale or buggy.
+        if (journal.VenueId != venueId) return ShoutRunnerResumeResult.DifferentVenue;
+
+        var dataCenters = journal.Route.DataCentersInOrder;
+        var dataCenterPosition = journal.CurrentDataCenter is null ? -1 : IndexOfOrdinal(dataCenters, journal.CurrentDataCenter);
+        if (journal.CurrentDataCenter is not null && dataCenterPosition < 0) return ShoutRunnerResumeResult.RecoveryCorrupt;
+
+        IReadOnlyList<string> worldsForCurrentDc = [];
+        var worldPosition = -1;
+        if (dataCenterPosition >= 0)
+        {
+            worldsForCurrentDc = ShoutRunnerCatalog.WorldsIn(dataCenters[dataCenterPosition]);
+            worldPosition = journal.CurrentWorld is null ? -1 : IndexOfOrdinal(worldsForCurrentDc, journal.CurrentWorld);
+            if (journal.CurrentWorld is not null && worldPosition < 0) return ShoutRunnerResumeResult.RecoveryCorrupt;
+        }
+
+        // Fully validated from here on — safe to commit.
+        runConfig = journal.Route;
+        RunNumber = journal.RunNumber;
+        runStartedAt = journal.RunStartedAtUtc;
+        fallbackDirection = journal.FallbackDirection;
+        activeRunId = journal.RunId;
+        activeSkippedDataCenters = [.. journal.SkippedDataCenters];
+        activeCompletedDestinationsInCurrentWorld = [.. journal.CompletedDestinationsInCurrentWorld];
+        activeCurrentWorldPlan = journal.CurrentWorldPlan is null ? null : [.. journal.CurrentWorldPlan];
+        pendingResumedWorldSteps = null;
+
+        automation.ResetForVenue();
+        runCts?.Dispose();
+        runCts = new CancellationTokenSource();
+        State = ShoutRunnerState.Starting;
+        StatusText = "Starting…";
+
+        terminal.Add(Event(ShoutRunnerEventSeverity.InProgress, $"Recovered interrupted RUN {RunNumber}."));
+        if (activeCompletedDestinationsInCurrentWorld.Count > 0)
+            terminal.Add(Event(ShoutRunnerEventSeverity.Success, $"Last successful destination: {activeCompletedDestinationsInCurrentWorld[^1]}."));
+        foreach (var skip in activeSkippedDataCenters)
+            terminal.Add(Event(ShoutRunnerEventSeverity.Warning, $"Skipped Data Centers (recovered): {skip.DataCenter} ({skip.Reason})."));
+
+        if (dataCenterPosition < 0)
+        {
+            dataCenterIndex = -1;
+            AdvanceToNextDataCenter();
+            return ShoutRunnerResumeResult.Resumed;
+        }
+
+        dataCenterIndex = dataCenterPosition;
+        currentWorlds = worldsForCurrentDc;
+        currentDataCenterHadSkip = false;
+
+        if (worldPosition < 0)
+        {
+            worldIndex = -1;
+            AdvanceToNextWorld();
+            return ShoutRunnerResumeResult.Resumed;
+        }
+
+        worldIndex = worldPosition;
+        currentWorldHadFailure = false;
+        var dc = dataCenters[dataCenterIndex];
+        var world = currentWorlds[worldIndex];
+        terminal.Add(Event(ShoutRunnerEventSeverity.InProgress, $"{world} — resuming.", dc, world));
+        StatusText = $"RUN {RunNumber} — {dc} / {world}";
+
+        if (activeCompletedDestinationsInCurrentWorld.Count > 0 && activeCurrentWorldPlan is { Count: > 0 })
+        {
+            pendingResumedWorldSteps = activeCurrentWorldPlan;
+            pendingResumedStepIndex = activeCompletedDestinationsInCurrentWorld.Count;
+        }
+
+        BeginReadinessGate(ReadinessPurpose.EnterWorld);
+        return ShoutRunnerResumeResult.Resumed;
+    }
+
+    /// <summary>Removes the interrupted-run checkpoint only — never touches saved route/settings (crash-recovery
+    /// brief "DISCARD RECOVERY"). Safe to call whether the journal loaded cleanly or was corrupt.</summary>
+    public void DiscardRecovery()
+    {
+        recoveryStore.Delete();
+        RecoveredJournal = null;
+        RecoveredJournalIsCorrupt = false;
+    }
+
+    private static int IndexOfOrdinal(IReadOnlyList<string> list, string value)
+    {
+        for (var i = 0; i < list.Count; i++)
+            if (string.Equals(list[i], value, StringComparison.OrdinalIgnoreCase)) return i;
+        return -1;
+    }
+
+    /// <summary>Persists the current in-progress run to <see cref="recoveryStore"/> — see
+    /// <see cref="ShoutRunnerRecoveryJournal"/>'s doc comment for exactly what each field means and
+    /// <see cref="ShoutRunnerService"/>'s call sites for exactly when this is called (RUN/World entry, a successful
+    /// destination, and a Data Center skip decision — never on a bare timer or every frame). A failure to persist is
+    /// reported to Diagnostics, not thrown — a missed checkpoint should never interrupt the live route itself.</summary>
+    private void WriteCheckpoint()
+    {
+        if (runConfig is null || activeRunId is not { } runId) return;
+        var dc = dataCenterIndex >= 0 && dataCenterIndex < runConfig.DataCentersInOrder.Count ? runConfig.DataCentersInOrder[dataCenterIndex] : null;
+        var world = worldIndex >= 0 && worldIndex < currentWorlds.Count ? currentWorlds[worldIndex] : null;
+        var journal = new ShoutRunnerRecoveryJournal(
+            ShoutRunnerRecoveryJournal.CurrentSchemaVersion,
+            venueId,
+            profiles.Current.DisplayName,
+            runId,
+            RunNumber,
+            runStartedAt,
+            runConfig,
+            dc,
+            world,
+            [.. activeCompletedDestinationsInCurrentWorld],
+            activeCurrentWorldPlan is null ? null : [.. activeCurrentWorldPlan],
+            fallbackDirection,
+            [.. activeSkippedDataCenters],
+            clock.UtcNow);
+
+        try
+        {
+            recoveryStore.Save(journal);
+            RecoveredJournal = journal;
+            RecoveredJournalIsCorrupt = false;
+        }
+        catch (Exception ex)
+        {
+            diagnostics.RecordFailure($"ShoutRunner: failed to persist recovery checkpoint: {ex.Message}");
+        }
     }
 
     private ShoutRunnerTerminalEvent Event(ShoutRunnerEventSeverity severity, string text, string? dc = null, string? world = null, string? destination = null) =>

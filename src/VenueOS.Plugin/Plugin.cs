@@ -46,7 +46,18 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] private static Dalamud.Plugin.Services.ICondition Condition { get; set; } = null!;
     private const string CommandName = "/venueos";
     private readonly ModuleHost modules = new(); private readonly VenueProfileService venues; private readonly VenueShell shell; private readonly NotificationService notifications; private readonly SchedulerService scheduler;
-    private readonly PresenceService presence; private readonly ChatCommandService chat; private readonly AttendanceModule attendance; private readonly VenueOperationsDashboard dashboard; private readonly DiagnosticsService diagnostics; private readonly SettingsScreen settingsScreen; private readonly ModuleWindowManager windowManager; private readonly GlobalSettingsService globalSettings; private readonly SqliteVenueDatabase venueDatabase; private readonly VenueOS.Plugin.PartyFinder.PartyFinderAutomationService partyFinderAutomation; private readonly VenueOS.Plugin.ShoutRunner.ShoutRunnerAutomationService shoutRunnerAutomation; private readonly Shell.VenueSwitchCoordinator switchCoordinator;
+    private readonly PresenceService presence; private readonly ChatCommandService chat; private readonly AttendanceModule attendance; private readonly VenueOperationsDashboard dashboard; private readonly DiagnosticsService diagnostics; private readonly SettingsScreen settingsScreen; private readonly ModuleWindowManager windowManager; private readonly GlobalSettingsService globalSettings; private readonly SqliteVenueDatabase venueDatabase; private readonly VenueOS.Plugin.PartyFinder.PartyFinderAutomationService partyFinderAutomation; private readonly VenueOS.Plugin.ShoutRunner.ShoutRunnerAutomationService shoutRunnerAutomation; private readonly VenueOS.Plugin.Bingo.BingoPayoutAutomationService bingoPayoutAutomation; private readonly Shell.VenueSwitchCoordinator switchCoordinator;
+    // Live-QA correction (detached-window lifecycle): drawn directly from this class's own Draw() below, gated
+    // only on bingoModule.IsEnabled — NOT nested inside VenueBingoOperatorPanel.Draw() any more, so they survive
+    // the main Bingo window/tablet being closed or navigated away from. See VenueBingoOperatorPanel's doc comment.
+    private readonly VenueOS.Plugin.Bingo.BingoCalledNumbersWindow bingoCalledNumbersWindow;
+    private readonly VenueOS.Plugin.Bingo.BingoPlayerCardViewerWindow bingoPlayerCardViewerWindow;
+    private readonly VenueOS.Plugin.Bingo.BingoCallAlertWindow bingoCallAlertWindow;
+    private readonly VenueOS.Modules.Operations.Bingo.VenueBingoModule bingoModule;
+    // The built-in offline manual — reads the bundled USER_MANUAL.md copy (see UserManualLoader's doc comment for
+    // why that file, not this class, is the single source of truth) once at construction; a missing/unreadable file
+    // renders a plain warning inside the screen itself rather than failing plugin construction.
+    private readonly Shell.UserManualScreen manualScreen;
     // Live-verified correction: this used to default to true, so the very first UiBuilder.Draw call after every
     // plugin load/enable rendered the main shell immediately — there is no persisted "was it open" state anywhere
     // (this field is never read from or written to Dalamud's plugin config), so this default was the entire root
@@ -68,7 +79,14 @@ public sealed class Plugin : IDalamudPlugin
         // ECommons is a shared, process-wide framework: initialized once here, before anything that depends on it
         // (promotion.partyfinder's automation engine, via ECommons' TaskManager/NeoTaskManager) is constructed, and
         // disposed once in Dispose(). Never initialized/disposed per-venue or per-module.
-        ECommonsMain.Init(PluginInterface, this); diagnostics = new DiagnosticsService(modules, venues, clock);
+        ECommonsMain.Init(PluginInterface, this);
+        // The About panel (Settings -> General) reads this back via DiagnosticsService.Capture().VenueOsVersion — it
+        // used to show a hard-coded "Phase 4" label that silently stopped matching the real package version. Reading
+        // it from this assembly's own AssemblyVersion means it can never drift from what was actually built/shipped.
+        var venueOsVersion = typeof(Plugin).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+        diagnostics = new DiagnosticsService(modules, venues, clock, venueOsVersion);
+        var pluginDirectory = System.IO.Path.GetDirectoryName(typeof(Plugin).Assembly.Location);
+        manualScreen = new Shell.UserManualScreen(pluginDirectory is null ? null : VenueOS.Services.UserManualLoader.Load(pluginDirectory));
         // Attendance is the single authoritative source of greeted state (see AttendanceService.IsGreeted/MarkGreeted's
         // doc comments) — Greeter only queries it and reports completions back to it, never deciding or storing the
         // boolean itself. AttendanceService already takes an optional GreeterService reference (constructed second,
@@ -87,14 +105,23 @@ public sealed class Plugin : IDalamudPlugin
         // and VipOrchestrationService's type-level doc comments for exactly what this replaces and why.
         var coordinator = new GreetingCoordinator(guest => attendanceService.IsGreeted(guest), greeterService, vipService, chat, msg => Log.Debug($"[Greeting] {msg}"));
         shoutRunnerAutomation = new VenueOS.Plugin.ShoutRunner.ShoutRunnerAutomationService(PluginInterface, ClientState, ObjectTable, Condition, ChatGui, DataManager, Framework, chat, Log);
-        var shoutRunnerService = new ShoutRunnerService(shoutRunnerAutomation, chat, venues, diagnostics, clock);
+        // Crash-recovery journal: a single small JSON file directly in the plugin's own Dalamud config directory,
+        // matching attendance.db's own top-level placement — see FileShoutRunnerRecoveryStore's doc comment for the
+        // atomic-write guarantee (same temp-file-then-move pattern already proven by FileQuestionSetRepository).
+        var shoutRunnerRecoveryStore = new FileShoutRunnerRecoveryStore(PluginInterface.ConfigDirectory.FullName);
+        var shoutRunnerService = new ShoutRunnerService(shoutRunnerAutomation, chat, venues, diagnostics, clock, shoutRunnerRecoveryStore);
         var raffleService = new VenueRaffleService(new VenueRaffleClient(new HttpClient { Timeout = TimeSpan.FromSeconds(15) }), venues);
         // The canonical question library is VenueOS-wide (not per-venue) and independent of either Trivia's or
         // Editor's enabled state — constructed once here, exactly like venueDatabase above.
         var questionLibrary = new FileQuestionSetRepository(System.IO.Path.Combine(PluginInterface.ConfigDirectory.FullName, "VenueOS", "question-sets"));
         var triviaService = new MairsTriviaService(new MairsTriviaClient(new HttpClient { Timeout = TimeSpan.FromSeconds(15) }), venues, questionLibrary, diagnostics);
         var editorService = new MairsEditorService(questionLibrary, id => triviaService.ActiveSourceSetIds.Contains(id));
-        var tournamentService = new TournamentControlService(new TournamentControlClient(new HttpClient { Timeout = TimeSpan.FromSeconds(10) }), venues, new TournamentCalloutService(scheduler, chat)); var bingoService = new VenueBingoService(new VenueBingoClient(new HttpClient { Timeout = TimeSpan.FromSeconds(10) }), venues);
+        var tournamentService = new TournamentControlService(new TournamentControlClient(new HttpClient { Timeout = TimeSpan.FromSeconds(10) }), venues, new TournamentCalloutService(scheduler, chat));
+        // Bingo: VenueOS-owned client + service (Modules.Operations/Bingo, per NEW_MODULE_GUIDE.md §21/§33) and the
+        // unsafe in-game payout-trade automation engine (VenueOS.Plugin.Bingo.BingoPayoutAutomationService),
+        // mirroring exactly how Party Finder's automation is wired above — see that engine's own doc comment for
+        // the full list of LIVE VERIFICATION REQUIRED assumptions it makes (never exercised against a live client).
+        var bingoClient = new VenueBingoClient(new HttpClient { Timeout = TimeSpan.FromSeconds(10) }); var bingoService = new VenueBingoService(bingoClient, venues, diagnostics, chat); bingoService.DiagnosticEvent += msg => Log.Debug($"[Bingo] {msg}"); bingoPayoutAutomation = new VenueOS.Plugin.Bingo.BingoPayoutAutomationService(ClientState, ChatGui, TargetManager, Log, diagnostics); var bingoPayoutOrchestrator = new BingoPayoutOrchestrator(bingoPayoutAutomation, bingoClient);
         // Party Finder is VenueOS-owned end to end: no live reference to the donor project. The unsafe automation
         // engine (VenueOS.Plugin.PartyFinder.PartyFinderAutomationService) depends only on VenueOS's own Dalamud
         // service instances and DiagnosticsService — never the donor's static Service locator or PluginConfiguration.
@@ -125,7 +152,7 @@ public sealed class Plugin : IDalamudPlugin
         // and AutomaticGreetingEligible (see PresenceService.ResetKnownPresence's doc comment), so no further reset
         // is needed here now that GreetingCoordinator has no arrival-idempotence state of its own.
         attendanceService.SessionOpened += () => presence.ResetKnownPresence();
-        var attendancePanel = new AttendanceOperatorPanel(attendanceService, venues, exportService, coordinator, addressProvider, TryTargetVisitor); var greeterPanel = new GreeterOperatorPanel(greeterService, venues, attendanceService); var vipPanel = new VipOperatorPanel(vipService, venues, targetedPlayerProvider); var shoutRunnerPanel = new ShoutRunnerOperatorPanel(shoutRunnerService, venues); var rafflePanel = new RaffleOperatorPanel(raffleService, venues); var triviaPanel = new MairsTriviaOperatorPanel(triviaService, venues, questionLibrary); var editorPanel = new MairsEditorOperatorPanel(editorService, venues); var tournamentPanel = new TournamentControlOperatorPanel(tournamentService, venues); var bingoPanel = new VenueBingoOperatorPanel(bingoService, venues); var partyFinderPanel = new PartyFinderOperatorPanel(partyFinderService, VenueOS.Plugin.PartyFinder.PartyFinderDutyLoader.Build(DataManager), venues); attendance = new AttendanceModule(attendanceService, presence, venues, attendancePanel.Draw, attendancePanel.DrawSettings); modules.Register(attendance); modules.Register(new GreeterModule(greeterService, venues, greeterPanel.Draw, greeterPanel.DrawSettings)); modules.Register(new VipModule(vipService, coordinator, venues, vipPanel.Draw, vipPanel.DrawSettings)); modules.Register(new ShoutRunnerModule(shoutRunnerService, shoutRunnerPanel.Draw, shoutRunnerPanel.DrawSettings)); modules.Register(new PartyFinderModule(partyFinderService, partyFinderPanel.Draw, partyFinderPanel.DrawSettings)); modules.Register(new VenueRaffleModule(raffleService, rafflePanel.Draw)); modules.Register(new MairsTriviaModule(triviaService, triviaPanel.Draw, triviaPanel.DrawSettings)); modules.Register(new MairsEditorModule(editorPanel.Draw)); modules.Register(new TournamentControlModule(tournamentService, tournamentPanel.Draw)); modules.Register(new VenueBingoModule(bingoService, bingoPanel.Draw)); ChatGui.ChatMessage += message => partyFinderService.HandleChatText(message.Message.TextValue); dashboard = new VenueOperationsDashboard(venues, modules, attendanceService, greeterService, vipService, shoutRunnerService, raffleService, triviaService, tournamentService, bingoService, diagnostics); var switchCoordinator = new VenueSwitchCoordinator(venues, [new TriviaVenueSwitchGuard(triviaService)]); settingsScreen = new SettingsScreen(venues, modules, diagnostics, globalSettings, switchCoordinator); windowManager = new ModuleWindowManager(diagnostics, shell, settingsScreen, RequestOpenAndFocusTablet); this.switchCoordinator = switchCoordinator;
+        var attendancePanel = new AttendanceOperatorPanel(attendanceService, venues, exportService, coordinator, addressProvider, TryTargetVisitor); var greeterPanel = new GreeterOperatorPanel(greeterService, venues, attendanceService); var vipPanel = new VipOperatorPanel(vipService, venues, targetedPlayerProvider); var shoutRunnerPanel = new ShoutRunnerOperatorPanel(shoutRunnerService, venues); var rafflePanel = new RaffleOperatorPanel(raffleService, venues); var triviaPanel = new MairsTriviaOperatorPanel(triviaService, venues, questionLibrary); var editorPanel = new MairsEditorOperatorPanel(editorService, venues); var tournamentPanel = new TournamentControlOperatorPanel(tournamentService, venues); var bingoPanel = new VenueBingoOperatorPanel(bingoService, bingoPayoutOrchestrator, bingoPayoutAutomation, venues, targetedPlayerProvider, () => { RequestOpenAndFocusTablet(); shell.SelectSettings(); settingsScreen!.FocusModuleConfiguration("games.bingo"); }, () => { RequestOpenAndFocusTablet(); shell.SelectModule("games.bingo"); }); var partyFinderPanel = new PartyFinderOperatorPanel(partyFinderService, VenueOS.Plugin.PartyFinder.PartyFinderDutyLoader.Build(DataManager), venues); attendance = new AttendanceModule(attendanceService, presence, venues, attendancePanel.Draw, attendancePanel.DrawSettings); modules.Register(attendance); modules.Register(new GreeterModule(greeterService, venues, greeterPanel.Draw, greeterPanel.DrawSettings)); modules.Register(new VipModule(vipService, coordinator, venues, vipPanel.Draw, vipPanel.DrawSettings)); modules.Register(new ShoutRunnerModule(shoutRunnerService, shoutRunnerPanel.Draw, shoutRunnerPanel.DrawSettings)); modules.Register(new PartyFinderModule(partyFinderService, partyFinderPanel.Draw, partyFinderPanel.DrawSettings)); modules.Register(new VenueRaffleModule(raffleService, rafflePanel.Draw)); modules.Register(new MairsTriviaModule(triviaService, triviaPanel.Draw, triviaPanel.DrawSettings)); modules.Register(new MairsEditorModule(editorPanel.Draw)); modules.Register(new TournamentControlModule(tournamentService, tournamentPanel.Draw)); bingoModule = new VenueBingoModule(bingoService, bingoPanel.Draw, bingoPanel.DrawSettings); modules.Register(bingoModule); bingoCalledNumbersWindow = bingoPanel.CalledNumbersWindow; bingoPlayerCardViewerWindow = bingoPanel.PlayerCardViewerWindow; bingoCallAlertWindow = bingoPanel.CallAlertWindow; ChatGui.ChatMessage += message => partyFinderService.HandleChatText(message.Message.TextValue); _ = new VenueOS.Plugin.Bingo.BingoRollChatAdapter(ChatGui, ObjectTable, bingoService.HandleRollObservation, msg => { Log.Debug($"[Bingo] {msg}"); bingoService.RecordAdapterDiagnostic(msg); }, () => bingoService.IsAwaitingRoll, bingoService.DescribePendingRoll); dashboard = new VenueOperationsDashboard(venues, modules, attendanceService, greeterService, vipService, shoutRunnerService, raffleService, triviaService, tournamentService, bingoService, diagnostics); var switchCoordinator = new VenueSwitchCoordinator(venues, [new TriviaVenueSwitchGuard(triviaService)]); settingsScreen = new SettingsScreen(venues, modules, diagnostics, globalSettings, switchCoordinator); windowManager = new ModuleWindowManager(diagnostics, shell, settingsScreen, RequestOpenAndFocusTablet); this.switchCoordinator = switchCoordinator;
         modules.ModuleFailed += (message, exception) => { diagnostics.RecordFailure(exception is null ? message : $"{message} {exception.Message}"); notifications.Push(exception is null ? message : $"{message} {exception.Message}", ToastLevel.Error); }; venues.ConfigurationRecovered += warning => notifications.Push(warning, ToastLevel.Warning);
         // Applies the operator's own persisted Settings → Modules toggle over each module's code-level default —
         // a module with no override here has never been explicitly toggled, so it keeps whatever its own IsEnabled
@@ -138,7 +165,7 @@ public sealed class Plugin : IDalamudPlugin
         modules.InitializeAsync().GetAwaiter().GetResult(); venues.InitializeAsync().GetAwaiter().GetResult(); PluginInterface.UiBuilder.Draw += Draw; Framework.Update += Update;
         CommandManager.AddHandler(CommandName, new CommandInfo(OnVenueOsCommand) { HelpMessage = "Open the VenueOS tablet.", ShowInHelp = true });
     }
-    public void Dispose() { CommandManager.RemoveHandler(CommandName); PluginInterface.UiBuilder.Draw -= Draw; Framework.Update -= Update; modules.DisposeAsync().AsTask().GetAwaiter().GetResult(); partyFinderAutomation.Dispose(); shoutRunnerAutomation.Dispose(); venueDatabase.Dispose(); ECommonsMain.Dispose(); }
+    public void Dispose() { CommandManager.RemoveHandler(CommandName); PluginInterface.UiBuilder.Draw -= Draw; Framework.Update -= Update; modules.DisposeAsync().AsTask().GetAwaiter().GetResult(); partyFinderAutomation.Dispose(); shoutRunnerAutomation.Dispose(); bingoPayoutAutomation.Dispose(); venueDatabase.Dispose(); ECommonsMain.Dispose(); }
     private void OnVenueOsCommand(string command, string args) => RequestOpenAndFocusTablet();
     /// <summary>Opens the main tablet if it's closed and focuses it either way — the same behavior `/venueos`
     /// provides, reused by a detached module window's Settings gear so it never opens a second tablet.</summary>
@@ -208,6 +235,13 @@ public sealed class Plugin : IDalamudPlugin
         // Detached module windows are independent ImGui windows and must keep rendering even while the main
         // tablet is closed — closing the tablet is a UI action on the tablet only, not on any module.
         windowManager.DrawAll(venueTheme, modules.Modules);
+        // Bingo's two auxiliary windows (Called Numbers, Player Cards) are a second tier of detached window below
+        // even that — they must survive not just the tablet closing, but the main Bingo screen itself being
+        // closed/hidden or navigated away from (live-QA product requirement: the host wants to free screen space
+        // by closing the main Bingo window while continuing to call numbers from Called Numbers alone). Gated on
+        // bingoModule.IsEnabled — matching ModuleWindowManager's own convention — so a disabled Bingo module still
+        // correctly stops showing its detached UI, per the module-disable/plugin-unload lifecycle requirement.
+        if (bingoModule.IsEnabled) { bingoCalledNumbersWindow.Draw(venueTheme); bingoPlayerCardViewerWindow.Draw(venueTheme); bingoCallAlertWindow.Draw(venueTheme); }
         if (!open) return;
 
         UiKit.PushWindowTheme(venueTheme);
@@ -227,6 +261,7 @@ public sealed class Plugin : IDalamudPlugin
         var footerReserve = venueTheme.Branding.ShowVenueOsBranding ? 22f : 0f;
         ImGui.BeginChild("content", new System.Numerics.Vector2(0, -footerReserve), false);
         if (shell.IsSettingsSelected) AppFrame.Draw(venueTheme, "gear", "Settings", "Venue management, theming and diagnostics.", () => settingsScreen.Draw(venueTheme));
+        else if (shell.IsManualSelected) AppFrame.Draw(venueTheme, "book", "User Manual", "The complete VenueOS user manual, bundled offline with this release.", () => manualScreen.Draw(venueTheme));
         else if (shell.IsHome) HomeScreen.Draw(venueTheme, modules, shell, diagnostics, globalSettings, windowManager, dashboard.Draw);
         else
         {

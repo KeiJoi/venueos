@@ -20,6 +20,14 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
     private readonly ConfirmDialog confirmDialog = new();
     private Guid settingsVenueId;
     private AttendanceSettings settingsCache = new();
+    // Live-verified product correction: Venue Area Type used to be a mutable Settings field, shared globally. It is
+    // now chosen right here, per-opening, immediately before "Start New Opening" — this is plain UI working state
+    // (never persisted on its own), deliberately defaulting to Normal so an operator who ran one outdoor event never
+    // has that choice silently carry over into the next ordinary housing-venue opening. Reset to Normal whenever the
+    // active venue changes (see DrawLive) and immediately after it's consumed by Start/Close, so it can never go
+    // stale across venues or linger past the opening it was picked for.
+    private Guid pendingAreaModeVenueId;
+    private PresenceAreaMode pendingAreaMode = PresenceAreaMode.FollowOperator;
 
     /// <summary>Live operation only, split into the donor's own sections (Live/Visitors/History/Analytics) rather
     /// than one long scrolling page. Presence-filtering and Venue Details setup live in <see cref="DrawSettings"/>.</summary>
@@ -45,22 +53,52 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
         var settings = ReadSettings();
         var isActive = attendance.CurrentSessionId is not null;
 
+        // A different venue's own pending selection must never leak in here — always reset to the safe default
+        // when the active venue changes, exactly like a completed opening resetting it (see below).
+        if (venues.Current.Id != pendingAreaModeVenueId) { pendingAreaModeVenueId = venues.Current.Id; pendingAreaMode = PresenceAreaMode.FollowOperator; }
+
         UiKit.BeginSectionCard("attendance-session", theme, "Session");
+
+        if (isActive)
+        {
+            // Live-verified product requirement: once an opening is active, its Venue Area Type is locked — no
+            // casual mid-session switching. Read-only status, not an editable control.
+            ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary));
+            ImGui.TextUnformatted("Venue Area Type:");
+            ImGui.PopStyleColor();
+            ImGui.SameLine();
+            ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextPrimary));
+            ImGui.TextUnformatted(attendance.ActiveAreaMode == PresenceAreaMode.FixedPoint ? "Outdoor Event Area (fixed origin)" : "Normal Venue Area");
+            ImGui.PopStyleColor();
+        }
+        else
+        {
+            Forms.FieldLabel(theme, "Venue Area Type");
+            var areaIndex = pendingAreaMode == PresenceAreaMode.FixedPoint ? 1 : 0;
+            if (Forms.Segmented(theme, "attendance-pending-area-mode", ["Normal Venue Area", "Outdoor Event Area"], ref areaIndex)) pendingAreaMode = areaIndex == 1 ? PresenceAreaMode.FixedPoint : PresenceAreaMode.FollowOperator;
+            ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary));
+            ImGui.TextWrapped(pendingAreaMode == PresenceAreaMode.FixedPoint
+                ? "Outdoor Event Area: the radius center is captured once when this opening starts and stays fixed — for open-world venues where the operator may move around."
+                : "Normal Venue Area: the radius always follows the operator's current position — appropriate for a housing instance. This is the safe default for every new opening.");
+            ImGui.PopStyleColor();
+        }
+        ImGui.Spacing();
+
         UiKit.StatusBadge(theme, isActive ? "Open" : "Closed", isActive ? ToastLevel.Success : ToastLevel.Information);
         ImGui.SameLine();
         if (isActive)
         {
             if (UiKit.GhostButton(theme, "Pause Opening")) attendance.PauseSession(DateTimeOffset.UtcNow);
             ImGui.SameLine();
-            if (UiKit.DangerButton(theme, "Close Opening")) attendance.CloseSession(DateTimeOffset.UtcNow);
+            if (UiKit.DangerButton(theme, "Close Opening")) { attendance.CloseSession(DateTimeOffset.UtcNow); pendingAreaMode = PresenceAreaMode.FollowOperator; }
         }
         else
         {
-            if (UiKit.PrimaryButton(theme, "Start New Opening")) attendance.StartSession(settings.LockToOpenTerritory, settings.AreaMode == PresenceAreaMode.FixedPoint, DateTimeOffset.UtcNow);
+            if (UiKit.PrimaryButton(theme, "Start New Opening")) { attendance.StartSession(settings.LockToOpenTerritory, pendingAreaMode, DateTimeOffset.UtcNow); pendingAreaMode = PresenceAreaMode.FollowOperator; }
             var resumable = attendance.GetRecentSessions().FirstOrDefault(x => x.IsResumable);
             ImGui.SameLine();
             if (resumable is null) ImGui.BeginDisabled();
-            if (UiKit.GhostButton(theme, "Resume Latest") && resumable is not null) attendance.ResumeSession(resumable.SessionId, settings.LockToOpenTerritory, settings.AreaMode == PresenceAreaMode.FixedPoint);
+            if (UiKit.GhostButton(theme, "Resume Latest") && resumable is not null) attendance.ResumeSession(resumable.SessionId);
             if (resumable is null) ImGui.EndDisabled();
         }
         if (isActive && attendance.ActiveTerritoryLock is { } territory)
@@ -188,7 +226,7 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
             if (isCurrent) UiKit.StatusBadge(theme, "Current", ToastLevel.Success);
             else if (session.IsResumable)
             {
-                if (UiKit.GhostButton(theme, "Resume", new Vector2(70, 0))) attendance.ResumeSession(session.SessionId, settings.LockToOpenTerritory, settings.AreaMode == PresenceAreaMode.FixedPoint);
+                if (UiKit.GhostButton(theme, "Resume", new Vector2(70, 0))) attendance.ResumeSession(session.SessionId);
                 ImGui.SameLine();
                 if (UiKit.GhostButton(theme, "Close", new Vector2(60, 0))) attendance.CloseSession(session.SessionId, DateTimeOffset.UtcNow);
             }
@@ -333,20 +371,12 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
         if (useDistance)
         {
             ImGui.Spacing();
-            Forms.FieldLabel(theme, "Venue area type");
-            // Labels only — PresenceAreaMode/FollowOperator/FixedPoint (the persisted enum and its stored value)
-            // are unchanged; this is purely clearer user-facing wording for the same two behaviors.
-            var areaIndex = settings.AreaMode == PresenceAreaMode.FixedPoint ? 1 : 0;
-            if (Forms.Segmented(theme, "attendance-area-mode", ["Normal venue area", "Outdoor Event Area (fixed origin)"], ref areaIndex)) SaveSettings(ReadSettings() with { AreaMode = areaIndex == 1 ? PresenceAreaMode.FixedPoint : PresenceAreaMode.FollowOperator });
-            ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary));
-            ImGui.TextWrapped(settings.AreaMode == PresenceAreaMode.FixedPoint
-                ? "Outdoor Event Area: the radius center is captured once, from the operator's position when the session starts — for open-world venues where the operator may move around."
-                : "Normal venue area: the radius always follows the operator's current position — appropriate for a housing instance.");
-            ImGui.PopStyleColor();
-            ImGui.Spacing();
             var radius = (int)settings.RadiusYalms;
             if (Forms.NumericField(theme, "Radius (yalms)", ref radius, 5, 5, 150)) SaveSettings(ReadSettings() with { RadiusYalms = radius });
         }
+        ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary));
+        ImGui.TextWrapped("Venue Area Type (Normal / Outdoor Event Area) is chosen per-opening on the Live screen, immediately above \"Start New Opening\" — not here.");
+        ImGui.PopStyleColor();
         ImGui.Spacing();
         var poll = settings.TrackingPollIntervalSeconds;
         if (Forms.NumericField(theme, "Stats poll interval (seconds)", ref poll, 30, 5, 3600)) SaveSettings(ReadSettings() with { TrackingPollIntervalSeconds = Math.Clamp(poll, 5, 3600) });

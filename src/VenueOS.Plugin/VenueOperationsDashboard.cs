@@ -1,6 +1,7 @@
 using Dalamud.Bindings.ImGui;
 using VenueOS.Core;
 using VenueOS.Modules.Operations;
+using VenueOS.Modules.Operations.Bingo;
 using VenueOS.Modules.Operations.ShoutRunner;
 using VenueOS.Modules.Operations.Trivia;
 using VenueOS.Plugin.Shell;

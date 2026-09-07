@@ -11,7 +11,7 @@ public sealed class OperationsTests
     [Fact] public void Attendance_records_arrival_and_departure()
     {
         var clock = new Clock(); var provider = new Provider(); var presence = new PresenceService(clock, provider); using var db = NewDb(); var venue = Guid.NewGuid();
-        var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, false, clock.UtcNow);
+        var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         provider.Items = [Player("A", "Balmung")]; presence.Tick(new(null, null, null));
         Assert.Single(attendance.Guests); Assert.True(attendance.GetTonightVisitors().Single().IsPresent);
         provider.Items = []; clock.Advance(1); presence.Tick(new(null, null, null));
@@ -21,7 +21,7 @@ public sealed class OperationsTests
     [Fact] public void Attendance_normalizes_identity_case_and_whitespace_so_it_is_not_double_counted()
     {
         var clock = new Clock(); var provider = new Provider(); var presence = new PresenceService(clock, provider); using var db = NewDb(); var venue = Guid.NewGuid();
-        var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, false, clock.UtcNow);
+        var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         provider.Items = [Player("  mair   hatsuki ", "Balmung")]; presence.Tick(new(null, null, null));
         provider.Items = [Player("Mair Hatsuki", "balmung")]; clock.Advance(1); presence.Tick(new(null, null, null));
         Assert.Single(attendance.Guests); Assert.Single(attendance.GetTonightVisitors());
@@ -31,12 +31,160 @@ public sealed class OperationsTests
     {
         var clock = new Clock(); using var db = NewDb(); var presence = new PresenceService(clock, new Provider());
         var attendance = new AttendanceService(presence, db, clock, () => 42u, () => new Vector3(5, 0, 0)); attendance.AttachVenue(Guid.NewGuid());
-        attendance.StartSession(lockToOpenTerritory: true, captureFixedCenter: true, clock.UtcNow);
+        attendance.StartSession(lockToOpenTerritory: true, areaMode: PresenceAreaMode.FixedPoint, clock.UtcNow);
         Assert.Equal(42u, attendance.ActiveTerritoryLock); Assert.Equal(new Vector3(5, 0, 0), attendance.ActiveFixedCenter);
         attendance.CloseSession(clock.UtcNow);
         Assert.Null(attendance.ActiveTerritoryLock); Assert.Null(attendance.ActiveFixedCenter);
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         Assert.Null(attendance.ActiveTerritoryLock); Assert.Null(attendance.ActiveFixedCenter);
+    }
+
+    // ---- Venue Area Type: pre-opening choice, per-opening snapshot, Resume/Close lifecycle -------------------
+
+    [Fact] public void Attendance_settings_no_longer_has_area_mode_but_keeps_other_presence_filtering_fields()
+    {
+        var settings = new AttendanceSettings();
+        Assert.True(settings.LockToOpenTerritory);
+        Assert.True(settings.UseDistanceFilter);
+        Assert.Equal(35f, settings.RadiusYalms);
+    }
+
+    [Fact] public void New_outdoor_opening_stores_outdoor_mode_and_captures_the_fixed_origin()
+    {
+        var clock = new Clock(); using var db = NewDb(); var presence = new PresenceService(clock, new Provider());
+        var attendance = new AttendanceService(presence, db, clock, currentPosition: () => new Vector3(3, 0, 4)); attendance.AttachVenue(Guid.NewGuid());
+        attendance.StartSession(false, PresenceAreaMode.FixedPoint, clock.UtcNow);
+        Assert.Equal(PresenceAreaMode.FixedPoint, attendance.ActiveAreaMode);
+        Assert.Equal(new Vector3(3, 0, 4), attendance.ActiveFixedCenter);
+    }
+
+    [Fact] public void New_normal_opening_stores_normal_mode_with_no_fixed_origin()
+    {
+        var clock = new Clock(); using var db = NewDb(); var presence = new PresenceService(clock, new Provider());
+        var attendance = new AttendanceService(presence, db, clock, currentPosition: () => new Vector3(3, 0, 4)); attendance.AttachVenue(Guid.NewGuid());
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
+        Assert.Equal(PresenceAreaMode.FollowOperator, attendance.ActiveAreaMode);
+        Assert.Null(attendance.ActiveFixedCenter);
+    }
+
+    /// <summary>Mandatory requirement: <see cref="AttendanceService.ActiveAreaMode"/> is a read-only, private-set
+    /// snapshot for the opening's entire lifetime — there is no public API to change it once active (confirmed
+    /// structurally: no such method exists), and nothing else in a normal operating cycle (time passing, other
+    /// session activity) can drift it.</summary>
+    [Fact] public void Active_opening_area_mode_stays_fixed_for_its_lifetime()
+    {
+        var clock = new Clock(); using var db = NewDb(); var presence = new PresenceService(clock, new Provider());
+        var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(Guid.NewGuid());
+        attendance.StartSession(false, PresenceAreaMode.FixedPoint, clock.UtcNow);
+        clock.Advance(3600);
+        Assert.Equal(PresenceAreaMode.FixedPoint, attendance.ActiveAreaMode);
+    }
+
+    /// <summary>Mandatory requirement: resuming — even from a brand-new <see cref="AttendanceService"/> instance
+    /// (simulating a plugin reload/crash) whose "current position" delegate would now report a completely different
+    /// location — restores the opening's ORIGINAL fixed origin from storage, never re-capturing a new one from
+    /// wherever the operator happens to be standing at resume time.</summary>
+    [Fact] public void Resume_restores_outdoor_mode_and_the_original_fixed_origin_not_the_current_position()
+    {
+        var clock = new Clock(); using var db = NewDb(); var venue = Guid.NewGuid(); var presence = new PresenceService(clock, new Provider());
+        var originalPosition = new Vector3(10, 0, 20);
+        var attendance = new AttendanceService(presence, db, clock, currentPosition: () => originalPosition); attendance.AttachVenue(venue); attendance.Attach();
+        attendance.StartSession(false, PresenceAreaMode.FixedPoint, clock.UtcNow);
+        var sessionId = attendance.CurrentSessionId!.Value;
+        Assert.True(attendance.PauseSession(clock.UtcNow.AddMinutes(1)));
+
+        var reloadedAttendance = new AttendanceService(presence, db, clock, currentPosition: () => new Vector3(999, 0, 999));
+        reloadedAttendance.AttachVenue(venue); reloadedAttendance.Attach();
+        Assert.True(reloadedAttendance.ResumeSession(sessionId));
+        Assert.Equal(PresenceAreaMode.FixedPoint, reloadedAttendance.ActiveAreaMode);
+        Assert.Equal(originalPosition, reloadedAttendance.ActiveFixedCenter); // not (999,0,999)
+    }
+
+    [Fact] public void Resume_restores_normal_mode()
+    {
+        var clock = new Clock(); using var db = NewDb(); var venue = Guid.NewGuid(); var presence = new PresenceService(clock, new Provider());
+        var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach();
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
+        var sessionId = attendance.CurrentSessionId!.Value;
+        Assert.True(attendance.PauseSession(clock.UtcNow.AddMinutes(1)));
+        Assert.True(attendance.ResumeSession(sessionId));
+        Assert.Equal(PresenceAreaMode.FollowOperator, attendance.ActiveAreaMode);
+        Assert.Null(attendance.ActiveFixedCenter);
+    }
+
+    [Fact] public void Closing_an_outdoor_opening_preserves_its_historical_area_mode_and_origin()
+    {
+        var clock = new Clock(); using var db = NewDb(); var venue = Guid.NewGuid(); var presence = new PresenceService(clock, new Provider());
+        var origin = new Vector3(5, 0, 5);
+        var attendance = new AttendanceService(presence, db, clock, currentPosition: () => origin); attendance.AttachVenue(venue); attendance.Attach();
+        attendance.StartSession(false, PresenceAreaMode.FixedPoint, clock.UtcNow);
+        var sessionId = attendance.CurrentSessionId!.Value;
+        attendance.CloseSession(clock.UtcNow.AddMinutes(5));
+
+        var historical = db.GetSession(venue, sessionId);
+        Assert.NotNull(historical);
+        Assert.Equal(PresenceAreaMode.FixedPoint, historical!.AreaMode);
+        Assert.Equal(origin, historical.FixedCenter);
+    }
+
+    /// <summary>Mandatory requirement: closing ANY opening — Outdoor or Normal — leaves
+    /// <see cref="AttendanceService.ActiveAreaMode"/> at the safe Normal default for whatever comes next, exactly
+    /// what the Live screen's "next new opening" selector should show afterward.</summary>
+    [Fact] public void Closing_an_outdoor_opening_resets_active_area_mode_to_normal_for_the_next_one()
+    {
+        var clock = new Clock(); using var db = NewDb(); var venue = Guid.NewGuid(); var presence = new PresenceService(clock, new Provider());
+        var attendance = new AttendanceService(presence, db, clock, currentPosition: () => new Vector3(1, 2, 3)); attendance.AttachVenue(venue); attendance.Attach();
+        attendance.StartSession(false, PresenceAreaMode.FixedPoint, clock.UtcNow);
+        attendance.CloseSession(clock.UtcNow.AddMinutes(1));
+        Assert.Equal(PresenceAreaMode.FollowOperator, attendance.ActiveAreaMode);
+        Assert.Null(attendance.ActiveFixedCenter);
+    }
+
+    [Fact] public void Closing_a_normal_opening_also_leaves_active_area_mode_at_normal()
+    {
+        var clock = new Clock(); using var db = NewDb(); var venue = Guid.NewGuid(); var presence = new PresenceService(clock, new Provider());
+        var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach();
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
+        attendance.CloseSession(clock.UtcNow.AddMinutes(1));
+        Assert.Equal(PresenceAreaMode.FollowOperator, attendance.ActiveAreaMode);
+    }
+
+    /// <summary>Mandatory requirement: switching venues away from an active Outdoor opening (which stays open/
+    /// resumable in its own venue's history) must reset only this instance's own runtime state, never touch the
+    /// opening's own persisted record.</summary>
+    [Fact] public void Detaching_from_a_venue_resets_runtime_area_mode_without_corrupting_the_stored_opening()
+    {
+        var clock = new Clock(); using var db = NewDb(); var venue = Guid.NewGuid(); var presence = new PresenceService(clock, new Provider());
+        var origin = new Vector3(7, 0, 7);
+        var attendance = new AttendanceService(presence, db, clock, currentPosition: () => origin); attendance.AttachVenue(venue); attendance.Attach();
+        attendance.StartSession(false, PresenceAreaMode.FixedPoint, clock.UtcNow);
+        var sessionId = attendance.CurrentSessionId!.Value;
+
+        attendance.DetachSession(); // simulates switching to another venue while this opening stays open/resumable
+        Assert.Equal(PresenceAreaMode.FollowOperator, attendance.ActiveAreaMode);
+        Assert.Null(attendance.CurrentSessionId);
+
+        var stored = db.GetSession(venue, sessionId);
+        Assert.NotNull(stored);
+        Assert.Equal(PresenceAreaMode.FixedPoint, stored!.AreaMode);
+        Assert.Equal(origin, stored.FixedCenter);
+    }
+
+    /// <summary>The actual regression this whole feature was built to prevent: <see cref="AttendanceModule.Policy"/>
+    /// must read the ACTIVE OPENING's own snapshotted area mode, never a mutable Settings value (which no longer
+    /// even has one) — before any opening starts it safely reports Normal (the harmless default for the shared
+    /// continuous presence scan), and once one starts it reflects exactly what that opening began with.</summary>
+    [Fact] public void Attendance_module_policy_reflects_the_active_opening_area_mode_not_a_settings_value()
+    {
+        var clock = new Clock(); using var db = NewDb(); var venue = Guid.NewGuid(); var presence = new PresenceService(clock, new Provider());
+        var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach();
+        var profiles = new VenueProfileService(new InMemoryVenueStore(), new ModuleHost());
+        var module = new AttendanceModule(attendance, presence, profiles);
+
+        Assert.Equal(PresenceAreaMode.FollowOperator, module.Policy.AreaMode);
+
+        attendance.StartSession(false, PresenceAreaMode.FixedPoint, clock.UtcNow);
+        Assert.Equal(PresenceAreaMode.FixedPoint, module.Policy.AreaMode);
     }
 
     /// <summary>The confirmed-missing History feature: <see cref="AttendanceService.GetSessionSummary(long)"/> must
@@ -48,7 +196,7 @@ public sealed class OperationsTests
         var clock = new Clock(); var provider = new Provider(); var presence = new PresenceService(clock, provider); using var db = NewDb(); var venue = Guid.NewGuid();
         var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach();
 
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var firstSessionId = attendance.CurrentSessionId!.Value;
         provider.Items = [Player("Mair", "Balmung"), Player("Ada", "Balmung")];
         presence.Tick(new(null, null, null));
@@ -56,7 +204,7 @@ public sealed class OperationsTests
         attendance.CloseSession(clock.UtcNow);
 
         clock.Advance(60);
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var secondSessionId = attendance.CurrentSessionId!.Value;
         provider.Items = [Player("Zeta", "Balmung")];
         presence.Tick(new(null, null, null));
@@ -75,7 +223,7 @@ public sealed class OperationsTests
         var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach();
         provider.Items = [Player("Mair", "Balmung"), Player("Ada", "Balmung")];
         presence.Tick(new(null, null, null)); // both already known-present before any opening exists — the reported bug
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         Assert.Empty(attendance.GetTonightVisitors()); // seeding needs the next scan to actually observe them again
         clock.Advance(1); presence.Tick(new(null, null, null));
         var visitors = attendance.GetTonightVisitors();
@@ -92,7 +240,7 @@ public sealed class OperationsTests
         var clock = new Clock(); var provider = new Provider(); var presence = new PresenceService(clock, provider); using var db = NewDb(); var venue = Guid.NewGuid();
         var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach();
         provider.Items = [Player("Mair", "Balmung")];
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         clock.Advance(1); presence.Tick(new(null, null, null));
         Assert.Equal(1, attendance.GetTonightVisitors().Single().Visits);
 
@@ -100,7 +248,7 @@ public sealed class OperationsTests
         Assert.True(attendance.PauseSession(clock.UtcNow.AddSeconds(2)));
         Assert.False(db.GetSessionVisitors(venue, sessionId).Single().IsPresent);
 
-        Assert.True(attendance.ResumeSession(sessionId, false, false));
+        Assert.True(attendance.ResumeSession(sessionId));
         clock.Advance(1); presence.Tick(new(null, null, null)); // Mair never left — rediscovered as visit #2
         Assert.Equal(2, attendance.GetTonightVisitors().Single().Visits);
     }
@@ -119,7 +267,7 @@ public sealed class OperationsTests
         var presetId = db.SavePreset(venue, null, "DJ", "Welcome <name>!", "", "", "");
         greeter.Configure(new GreeterSettings(ActivePresetId: presetId));
         var attendance = new AttendanceService(presence, db, clock, greeter: greeter); attendanceRef = attendance;
-        attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, false, clock.UtcNow);
+        attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var guest = new GuestIdentity("Mair", "Balmung");
         provider.Items = [Player("Mair", "Balmung")]; presence.Tick(new(null, null, null));
 
@@ -158,7 +306,7 @@ public sealed class OperationsTests
     [Fact] public void Attendance_first_visit_tonight_fires_once_per_night_and_can_drive_greeter_auto_queue()
     {
         var clock = new Clock(); var provider = new Provider(); var presence = new PresenceService(clock, provider); using var db = NewDb(); var venue = Guid.NewGuid();
-        var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, false, clock.UtcNow);
+        var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var (greeter, _, isGreetedFake) = NewGreeterWithPreset(clock, Chat(clock, []), db, venue, "Welcome <name>!", autoGreetEnabled: true);
         var firstVisitCount = 0;
         attendance.FirstVisitTonight += guest => { firstVisitCount++; if (greeter.Settings.AutoGreetEnabled) greeter.QueueGreeting(guest); };
@@ -169,7 +317,7 @@ public sealed class OperationsTests
 
         provider.Items = []; clock.Advance(1); presence.Tick(new(null, null, null));
         attendance.CloseSession(clock.UtcNow);
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         provider.Items = [Player("Mair", "Balmung")]; clock.Advance(1); presence.Tick(new(null, null, null));
         Assert.Equal(1, firstVisitCount);
     }
@@ -177,7 +325,7 @@ public sealed class OperationsTests
     [Fact] public void Attendance_first_visit_tonight_does_not_auto_queue_when_auto_greet_is_disabled()
     {
         var clock = new Clock(); var provider = new Provider(); var presence = new PresenceService(clock, provider); using var db = NewDb(); var venue = Guid.NewGuid();
-        var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, false, clock.UtcNow);
+        var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var (greeter, _, isGreetedFake) = NewGreeterWithPreset(clock, Chat(clock, []), db, venue, "Welcome <name>!", autoGreetEnabled: false);
         attendance.FirstVisitTonight += guest => { if (greeter.Settings.AutoGreetEnabled) greeter.QueueGreeting(guest); };
         provider.Items = [Player("Mair", "Balmung")]; presence.Tick(new(null, null, null));
@@ -547,7 +695,7 @@ public sealed class OperationsTests
     [Fact] public async Task Full_arrival_pipeline_runs_attendance_then_vip_tell_then_greeter_then_vip_public_in_order()
     {
         var clock = new Clock(); var sent = new List<string>(); var provider = new Provider(); var presence = new PresenceService(clock, provider); var chat = Chat(clock, sent); using var db = NewDb(); var venue = Guid.NewGuid();
-        var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, false, clock.UtcNow);
+        var attendance = new AttendanceService(presence, db, clock); attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var (greeter, _, isGreetedFake) = NewGreeterWithPreset(clock, chat, db, venue, "Welcome <name>!");
         var vip = new VipOrchestrationService();
         vip.Configure(new([new("Ada", "Balmung", true, "VIP <name>", "Ada arrived", VipAnnouncementChannel.Yell)]));
@@ -577,7 +725,7 @@ public sealed class OperationsTests
         var presetId = db.SavePreset(venue, null, "DJ", "Welcome <name>!", "", "", "");
         greeter.Configure(new GreeterSettings(ActivePresetId: presetId));
         var attendance = new AttendanceService(presence, db, clock, greeter: greeter); attendanceRef = attendance;
-        attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, false, clock.UtcNow);
+        attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var vip = new VipOrchestrationService();
         vip.Configure(new([new("Ada", "Balmung", true, "VIP <name>", "Ada arrived", VipAnnouncementChannel.Yell)]));
         var coordinator = new GreetingCoordinator(g => attendanceRef!.IsGreeted(g), greeter, vip, chat);
@@ -598,7 +746,7 @@ public sealed class OperationsTests
     {
         var clock = new Clock(); var provider = new Provider(); var presence = new PresenceService(clock, provider); using var db = NewDb(); var venue = Guid.NewGuid();
         var (attendance, _) = NewWiredAttendanceAndGreeter(clock, presence, Chat(clock, []), db, venue);
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var guest = new GuestIdentity("Mair", "Balmung");
         provider.Items = [Player("Mair", "Balmung")]; presence.Tick(new(null, null, null));
 
@@ -613,7 +761,7 @@ public sealed class OperationsTests
     {
         var clock = new Clock(); var provider = new Provider(); var presence = new PresenceService(clock, provider); using var db = NewDb(); var venue = Guid.NewGuid();
         var (attendance, greeter) = NewWiredAttendanceAndGreeter(clock, presence, Chat(clock, []), db, venue);
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var guest = new GuestIdentity("Mair", "Balmung");
         provider.Items = [Player("Mair", "Balmung")]; presence.Tick(new(null, null, null));
 
@@ -630,7 +778,7 @@ public sealed class OperationsTests
         var clock = new Clock(); var sent = new List<string>(); var provider = new Provider(); var presence = new PresenceService(clock, provider); var chat = Chat(clock, sent); using var db = NewDb(); var venue = Guid.NewGuid();
         var present = true;
         var (attendance, greeter) = NewWiredAttendanceAndGreeter(clock, presence, chat, db, venue, isPresent: _ => present);
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var guest = new GuestIdentity("Mair", "Balmung");
         provider.Items = [Player("Mair", "Balmung")]; presence.Tick(new(null, null, null));
 
@@ -652,7 +800,7 @@ public sealed class OperationsTests
         var (attendance, greeter) = NewWiredAttendanceAndGreeter(clock, presence, chat, db, venue);
         var guest = new GuestIdentity("Rabid Squirrel", "Halicarnassus");
 
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         provider.Items = [Player("Rabid Squirrel", "Halicarnassus")]; presence.Tick(new(null, null, null));
         Assert.True(greeter.QueueGreeting(guest));
         greeter.Tick(); await chat.TickAsync();
@@ -660,7 +808,7 @@ public sealed class OperationsTests
         attendance.CloseSession(clock.UtcNow);
 
         clock.Advance(60);
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         Assert.False(attendance.IsGreeted(guest)); // fresh opening, fresh greeted scope
         provider.Items = []; presence.Tick(new(null, null, null));
         clock.Advance(1); provider.Items = [Player("Rabid Squirrel", "Halicarnassus")]; presence.Tick(new(null, null, null));
@@ -674,7 +822,7 @@ public sealed class OperationsTests
     {
         var clock = new Clock(); var sent = new List<string>(); var provider = new Provider(); var presence = new PresenceService(clock, provider); var chat = Chat(clock, sent); using var db = NewDb(); var venue = Guid.NewGuid();
         var (attendance, greeter) = NewWiredAttendanceAndGreeter(clock, presence, chat, db, venue);
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var guest = new GuestIdentity("Mair", "Balmung");
         provider.Items = [Player("Mair", "Balmung")]; presence.Tick(new(null, null, null));
         Assert.True(greeter.QueueGreeting(guest));
@@ -696,7 +844,7 @@ public sealed class OperationsTests
     {
         var clock = new Clock(); var provider = new Provider(); var presence = new PresenceService(clock, provider); using var db = NewDb(); var venue = Guid.NewGuid();
         var (attendance, _) = NewWiredAttendanceAndGreeter(clock, presence, Chat(clock, []), db, venue);
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var guest = new GuestIdentity("Mair", "Balmung");
         provider.Items = [Player("Mair", "Balmung")]; presence.Tick(new(null, null, null));
         attendance.MarkGreeted(guest, true, clock.UtcNow);
@@ -730,7 +878,7 @@ public sealed class OperationsTests
         var eligibleCount = 0;
         attendance.AutomaticGreetingEligible += guest => { eligibleCount++; coordinator.TryGreet(guest, GreetingSource.AutomaticArrival); };
 
-        attendance.StartSession(false, false, clock.UtcNow); // Mair is already standing there before this call
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow); // Mair is already standing there before this call
         presence.Tick(new(null, null, null)); // the seed scan rediscovers her
 
         var guest = new GuestIdentity("Mair", "Balmung");
@@ -766,7 +914,7 @@ public sealed class OperationsTests
         var eligibleCount = 0;
         attendance.AutomaticGreetingEligible += guest => { eligibleCount++; coordinator.TryGreet(guest, GreetingSource.AutomaticArrival); }; // the ONE consolidated automatic trigger, exactly like production
 
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         presence.Tick(new(null, null, null)); // seed scan rediscovers Ada
 
         var guest = new GuestIdentity("Ada", "Balmung");
@@ -799,7 +947,7 @@ public sealed class OperationsTests
         var coordinator = new GreetingCoordinator(g => attendance.IsGreeted(g), greeter, vip, chat);
         attendance.AutomaticGreetingEligible += guest => coordinator.TryGreet(guest, GreetingSource.AutomaticArrival);
 
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         presence.Tick(new(null, null, null)); // seed scan rediscovers Mair
 
         var guest = new GuestIdentity("Mair", "Balmung");
@@ -823,7 +971,7 @@ public sealed class OperationsTests
         var coordinator = new GreetingCoordinator(g => attendance.IsGreeted(g), greeter, vip, chat);
         attendance.AutomaticGreetingEligible += guest => coordinator.TryGreet(guest, GreetingSource.AutomaticArrival);
 
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         presence.Tick(new(null, null, null)); // seed scan rediscovers Mair
 
         var guest = new GuestIdentity("Mair", "Balmung");
@@ -851,7 +999,7 @@ public sealed class OperationsTests
         // decides that internally (see its type-level remark for why a second gating layer out here was the bug).
         attendance.AutomaticGreetingEligible += guest => coordinator.TryGreet(guest, GreetingSource.AutomaticArrival);
 
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         presence.Tick(new(null, null, null)); // seed scan — nobody present at opening start
 
         provider.Items = [Player("Mair", "Balmung")]; clock.Advance(1); presence.Tick(new(null, null, null)); // a genuine post-open arrival
@@ -871,7 +1019,7 @@ public sealed class OperationsTests
         var callCount = 0;
         attendance.AutomaticGreetingEligible += guest => { callCount++; coordinator.TryGreet(guest, GreetingSource.AutomaticArrival); };
 
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         presence.Tick(new(null, null, null)); // seed scan — nobody present
 
         var guest = new GuestIdentity("Mair", "Balmung");
@@ -897,7 +1045,7 @@ public sealed class OperationsTests
         var callCount = 0;
         attendance.AutomaticGreetingEligible += guest => { callCount++; coordinator.TryGreet(guest, GreetingSource.AutomaticArrival); };
 
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         presence.Tick(new(null, null, null)); // seed scan — nobody present
 
         var guest = new GuestIdentity("Ada", "Balmung");
@@ -922,7 +1070,7 @@ public sealed class OperationsTests
         var callCount = 0;
         attendance.AutomaticGreetingEligible += guest => { callCount++; coordinator.TryGreet(guest, GreetingSource.AutomaticArrival); };
 
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         presence.Tick(new(null, null, null)); // seed scan — nobody present
 
         var guest = new GuestIdentity("Ada", "Balmung");
@@ -961,7 +1109,7 @@ public sealed class OperationsTests
         var vip = new VipOrchestrationService();
         var coordinator = new GreetingCoordinator(g => attendance.IsGreeted(g), greeter, vip, chat);
 
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         presence.Tick(new(null, null, null)); // seeded, not auto-greeted
 
         var guest = new GuestIdentity("Mair", "Balmung");
@@ -1028,7 +1176,7 @@ public sealed class OperationsTests
     {
         var clock = new Clock(); var sent = new List<string>(); var provider = new Provider(); var presence = new PresenceService(clock, provider); var chat = Chat(clock, sent); using var db = NewDb(); var venue = Guid.NewGuid();
         var (attendance, greeter) = NewWiredAttendanceAndGreeter(clock, presence, chat, db, venue);
-        attendance.StartSession(false, false, clock.UtcNow);
+        attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var vip = new VipOrchestrationService();
         var coordinator = new GreetingCoordinator(g => attendance.IsGreeted(g), greeter, vip, chat);
         var guest = new GuestIdentity("Mair", "Balmung");
@@ -1056,7 +1204,7 @@ public sealed class OperationsTests
         var presetId = db.SavePreset(venue, null, "DJ", "Welcome <name>!", "", "", "");
         greeter.Configure(new GreeterSettings(ActivePresetId: presetId));
         var attendance = new AttendanceService(presence, db, clock, greeter: greeter); attendanceRef = attendance;
-        attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, false, clock.UtcNow);
+        attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var vip = new VipOrchestrationService();
         vip.Configure(new([new("Ada", "Balmung", true, "VIP <name>", "Ada arrived", VipAnnouncementChannel.Yell)]));
         var coordinator = new GreetingCoordinator(g => attendance.IsGreeted(g), greeter, vip, chat);
@@ -1183,7 +1331,7 @@ public sealed class OperationsTests
         var presetId = db.SavePreset(venue, null, "DJ", "Welcome <name>!", "", "", "");
         greeter.Configure(new GreeterSettings(ActivePresetId: presetId));
         var attendance = new AttendanceService(presence, db, clock, greeter: greeter); attendanceRef = attendance;
-        attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, false, clock.UtcNow);
+        attendance.AttachVenue(venue); attendance.Attach(); attendance.StartSession(false, PresenceAreaMode.FollowOperator, clock.UtcNow);
         var vip = new VipOrchestrationService();
         vip.Configure(new([new("Ada", "Balmung", true, "VIP <name>", "Ada arrived", VipAnnouncementChannel.Yell)]));
         var coordinator = new GreetingCoordinator(g => attendance.IsGreeted(g), greeter, vip, chat);

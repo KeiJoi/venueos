@@ -396,6 +396,40 @@ public sealed class ShoutRunnerServiceTests
         Assert.Contains(service.TerminalEvents, e => e.Text.Contains("SKIPPED") && e.Text.Contains("could not determine"));
     }
 
+    // ----- same-Data-Center vs cross-Data-Center routing (live-verified bug regression) -----
+    // See ShoutRunnerSameDataCenterArrivalTests.cs for the actual arrival-decision bug/fix — these tests only cover
+    // the ORCHESTRATION-level guarantee that a same-Data-Center classification never triggers cross-Data-Center
+    // travel (and vice versa); the automation itself (where the bug lived) has no fake standing in for this specific
+    // internal polling logic, since the fake automation's OnTravel bypasses that logic entirely.
+
+    [Fact] public void Same_data_center_classification_never_triggers_cross_data_center_travel()
+    {
+        var (service, automation, clock, chat, _) = ReadyToStart(destinations: ["A"], dataCenters: ["Aether"]);
+        var crossDataCenterFlags = new List<bool>();
+        automation.OnClassify = (_, _) => Done(ShoutRunnerCrossDataCenterCheck.SameDataCenter);
+        automation.OnTravel = (_, crossDc, _) => { crossDataCenterFlags.Add(crossDc); return Done(ShoutRunnerTransferOutcome.Success()); };
+
+        service.Start();
+        PumpUntilSettled(service, clock, chat);
+
+        Assert.NotEmpty(crossDataCenterFlags);
+        Assert.All(crossDataCenterFlags, Assert.False);
+    }
+
+    [Fact] public void Cross_data_center_classification_is_passed_through_unchanged()
+    {
+        var (service, automation, clock, chat, _) = ReadyToStart(destinations: ["A"], dataCenters: ["Aether"]);
+        var crossDataCenterFlags = new List<bool>();
+        automation.OnClassify = (_, _) => Done(ShoutRunnerCrossDataCenterCheck.CrossDataCenter);
+        automation.OnTravel = (_, crossDc, _) => { crossDataCenterFlags.Add(crossDc); return Done(ShoutRunnerTransferOutcome.Success()); };
+
+        service.Start();
+        PumpUntilSettled(service, clock, chat);
+
+        Assert.NotEmpty(crossDataCenterFlags);
+        Assert.All(crossDataCenterFlags, Assert.True);
+    }
+
     [Fact] public void Run_start_anchored_repeat_schedules_the_next_run_from_when_this_one_started()
     {
         var (service, automation, clock, chat, _) = ReadyToStart(destinations: ["A"], dataCenters: ["Aether"]);
@@ -601,7 +635,7 @@ public sealed class ShoutRunnerServiceTests
         var clock = new Clock();
         var chat = Chat(clock);
         var diagnostics = new DiagnosticsService(host, profiles, clock);
-        var service = new ShoutRunnerService(new FakeAutomation(), chat, profiles, diagnostics, clock);
+        var service = new ShoutRunnerService(new FakeAutomation(), chat, profiles, diagnostics, clock, new NullRecoveryStore());
 
         service.Load(venueA.Id);
         service.UpdateShoutMessage("Venue A message");
@@ -623,7 +657,7 @@ public sealed class ShoutRunnerServiceTests
         var profiles = new VenueProfileService(store, host);
         var venue = profiles.Current;
         var clock = new Clock();
-        var service = new ShoutRunnerService(new FakeAutomation(), Chat(clock), profiles, new DiagnosticsService(host, profiles, clock), clock);
+        var service = new ShoutRunnerService(new FakeAutomation(), Chat(clock), profiles, new DiagnosticsService(host, profiles, clock), clock, new NullRecoveryStore());
         service.Load(venue.Id);
 
         service.UpdateShoutMessage("Reload me");
@@ -634,7 +668,7 @@ public sealed class ShoutRunnerServiceTests
         service.SetInterval(2, 15, 30);
 
         var reloadedProfiles = new VenueProfileService(new InMemoryVenueStore(store.Read()), host);
-        var reloaded = new ShoutRunnerService(new FakeAutomation(), Chat(clock), reloadedProfiles, new DiagnosticsService(host, reloadedProfiles, clock), clock);
+        var reloaded = new ShoutRunnerService(new FakeAutomation(), Chat(clock), reloadedProfiles, new DiagnosticsService(host, reloadedProfiles, clock), clock, new NullRecoveryStore());
         reloaded.Load(venue.Id);
 
         Assert.Equal("Reload me", reloaded.Settings.ShoutMessage);
@@ -657,7 +691,7 @@ public sealed class ShoutRunnerServiceTests
         profiles.SaveModuleConfig(venue.Id, ShoutRunnerService.ModuleId, 1, new { Presets = new[] { new { Name = "Old preset" } } });
 
         var clock = new Clock();
-        var service = new ShoutRunnerService(new FakeAutomation(), Chat(clock), profiles, new DiagnosticsService(host, profiles, clock), clock);
+        var service = new ShoutRunnerService(new FakeAutomation(), Chat(clock), profiles, new DiagnosticsService(host, profiles, clock), clock, new NullRecoveryStore());
         service.Load(venue.Id);
 
         // Field-by-field, not a whole-record Assert.Equal: ShoutRunnerSettings holds List<string> properties, whose
@@ -680,9 +714,19 @@ public sealed class ShoutRunnerServiceTests
         var automation = new FakeAutomation();
         var chat = Chat(clock);
         var diagnostics = new DiagnosticsService(host, profiles, clock);
-        var service = new ShoutRunnerService(automation, chat, profiles, diagnostics, clock);
+        var service = new ShoutRunnerService(automation, chat, profiles, diagnostics, clock, new NullRecoveryStore());
         service.Load(profiles.Current.Id);
         return (service, automation, clock, chat, profiles);
+    }
+
+    /// <summary>A crash-recovery journal that never actually persists anything — used by every test in this file
+    /// that isn't itself about recovery (see <c>ShoutRunnerRecoveryTests</c> for those), so this large, otherwise
+    /// unrelated suite doesn't need to care about the feature at all.</summary>
+    private sealed class NullRecoveryStore : IShoutRunnerRecoveryStore
+    {
+        public ShoutRunnerRecoveryJournal? TryLoad(out bool corrupt) { corrupt = false; return null; }
+        public void Save(ShoutRunnerRecoveryJournal journal) { }
+        public void Delete() { }
     }
 
     private static (ShoutRunnerService Service, FakeAutomation Automation, Clock Clock, ChatCommandService Chat, VenueProfileService Profiles) ReadyToStart(IReadOnlyList<string> destinations, IReadOnlyList<string> dataCenters)

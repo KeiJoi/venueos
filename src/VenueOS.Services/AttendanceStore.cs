@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using Microsoft.Data.Sqlite;
 
 namespace VenueOS.Services;
@@ -11,8 +12,13 @@ public readonly record struct VisitorPresenceChange(bool BecamePresent, bool IsF
 
 /// <summary>One venue "opening" — donor terminology preserved (<c>VenueSessionEntry</c>). <see cref="IsResumable"/>
 /// mirrors the donor's Start New Opening / Pause / Resume Selected / Close Opening lifecycle: pausing never sets
-/// <see cref="ClosedAtUtc"/>, so a paused opening remains selectable from history and resumable; only Close does.</summary>
-public sealed record AttendanceSessionRecord(long SessionId, DateTimeOffset OpenedAtUtc, DateTimeOffset? ClosedAtUtc, DateOnly NightDate)
+/// <see cref="ClosedAtUtc"/>, so a paused opening remains selectable from history and resumable; only Close does.
+/// <see cref="AreaMode"/>/<see cref="TerritoryLock"/>/<see cref="FixedCenter"/> are a live-verified product addition:
+/// the Venue Area Type an opening actually used is snapshotted onto the opening itself at
+/// <see cref="IVenueDatabase.StartSession"/> time, so history keeps the *real* mode a past opening ran under and
+/// <see cref="IVenueDatabase.ResumeSession"/> callers can restore it exactly (including an Outdoor opening's fixed
+/// origin) instead of re-deriving it from whatever the operator's current settings/position happen to be.</summary>
+public sealed record AttendanceSessionRecord(long SessionId, DateTimeOffset OpenedAtUtc, DateTimeOffset? ClosedAtUtc, DateOnly NightDate, PresenceAreaMode AreaMode = PresenceAreaMode.FollowOperator, uint? TerritoryLock = null, Vector3? FixedCenter = null)
 {
     public bool IsResumable => ClosedAtUtc is null;
 }
@@ -56,12 +62,16 @@ public sealed record GreetPresetRecord(long Id, string Name, string Line1, strin
 /// closed and reopened the same night; a "session" is one specific opening, independently pausable/resumable/closable.</summary>
 public interface IVenueDatabase
 {
-    long StartSession(Guid venueId, DateTimeOffset openedAt);
+    long StartSession(Guid venueId, DateTimeOffset openedAt, PresenceAreaMode areaMode, uint? territoryLock, Vector3? fixedCenter);
     bool ResumeSession(Guid venueId, long sessionId);
     bool PauseSession(Guid venueId, long sessionId, DateTimeOffset at);
     bool CloseSession(Guid venueId, long sessionId, DateTimeOffset at);
     bool DeleteSession(Guid venueId, long sessionId);
     IReadOnlyList<AttendanceSessionRecord> GetRecentSessions(Guid venueId, int maxRows = 100);
+    /// <summary>One specific opening's own record, including its snapshotted Venue Area Type/territory lock/fixed
+    /// origin — the lookup Attendance's own <c>ResumeSession</c> uses to restore exactly what that opening started
+    /// with. Null if it doesn't exist for this venue.</summary>
+    AttendanceSessionRecord? GetSession(Guid venueId, long sessionId);
 
     VisitorPresenceChange MarkPresent(Guid venueId, long sessionId, GuestIdentity guest, DateTimeOffset at);
     void MarkAbsent(Guid venueId, long sessionId, GuestIdentity guest, DateTimeOffset at);
@@ -106,6 +116,7 @@ public sealed class SqliteVenueDatabase : IVenueDatabase, IDisposable
         using (var keys = connection.CreateCommand()) { keys.CommandText = "PRAGMA foreign_keys = ON;"; keys.ExecuteNonQuery(); }
         EnsureSchema();
         RepairHotbarSlotsForeignKeyIfStale();
+        MigrateVenueSessionsAddAreaColumns();
     }
 
     public void Dispose() => connection.Dispose();
@@ -149,7 +160,12 @@ public sealed class SqliteVenueDatabase : IVenueDatabase, IDisposable
                 venue_id TEXT NOT NULL,
                 night_id INTEGER NOT NULL REFERENCES venue_nights(id) ON DELETE CASCADE,
                 opened_at_utc TEXT NOT NULL,
-                closed_at_utc TEXT NULL
+                closed_at_utc TEXT NULL,
+                area_mode INTEGER NOT NULL DEFAULT 0,
+                territory_lock INTEGER NULL,
+                fixed_center_x REAL NULL,
+                fixed_center_y REAL NULL,
+                fixed_center_z REAL NULL
             );
             """);
         Exec(transaction, """
@@ -292,18 +308,59 @@ public sealed class SqliteVenueDatabase : IVenueDatabase, IDisposable
         using (var keysOn = connection.CreateCommand()) { keysOn.CommandText = "PRAGMA foreign_keys = ON;"; keysOn.ExecuteNonQuery(); }
     }
 
+    /// <summary>Live-verified product addition: Venue Area Type (and, for Outdoor, the fixed origin) moved from a
+    /// mutable global setting to a value snapshotted per-opening, so <c>venue_sessions</c> needs columns to hold it.
+    /// <c>CREATE TABLE IF NOT EXISTS</c> in <see cref="EnsureSchema"/> already includes them for a brand-new
+    /// database, but is a no-op against an existing table from before this column existed — this idempotently adds
+    /// them via <c>ALTER TABLE ... ADD COLUMN</c> (checked against <c>PRAGMA table_info</c> first, and skipped
+    /// entirely if already present, so it's safe to run unconditionally on every launch) without touching a single
+    /// existing row: every historical opening keeps its actual data, and simply reads back as
+    /// Normal/no-territory-lock/no-fixed-center (the safe default) for this one previously-unrecorded dimension,
+    /// since that's genuinely all that's recoverable for openings that predate this feature.</summary>
+    private void MigrateVenueSessionsAddAreaColumns()
+    {
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (var check = connection.CreateCommand())
+        {
+            check.CommandText = "PRAGMA table_info(venue_sessions);";
+            using var reader = check.ExecuteReader();
+            while (reader.Read()) existing.Add(reader.GetString(1)); // column 1 is "name"
+        }
+        void AddColumnIfMissing(string name, string definition)
+        {
+            if (existing.Contains(name)) return;
+            using var alter = connection.CreateCommand();
+            alter.CommandText = $"ALTER TABLE venue_sessions ADD COLUMN {name} {definition};";
+            alter.ExecuteNonQuery();
+        }
+        AddColumnIfMissing("area_mode", "INTEGER NOT NULL DEFAULT 0");
+        AddColumnIfMissing("territory_lock", "INTEGER NULL");
+        AddColumnIfMissing("fixed_center_x", "REAL NULL");
+        AddColumnIfMissing("fixed_center_y", "REAL NULL");
+        AddColumnIfMissing("fixed_center_z", "REAL NULL");
+    }
+
     // ---- Sessions / nights ----------------------------------------------------------------
 
-    public long StartSession(Guid venueId, DateTimeOffset openedAt)
+    public long StartSession(Guid venueId, DateTimeOffset openedAt, PresenceAreaMode areaMode, uint? territoryLock, Vector3? fixedCenter)
     {
         lock (sync)
         {
             var nightId = EnsureNight(venueId, openedAt);
             using var insert = connection.CreateCommand();
-            insert.CommandText = "INSERT INTO venue_sessions (venue_id, night_id, opened_at_utc) VALUES (@venue, @night, @opened); SELECT last_insert_rowid();";
+            insert.CommandText = """
+                INSERT INTO venue_sessions (venue_id, night_id, opened_at_utc, area_mode, territory_lock, fixed_center_x, fixed_center_y, fixed_center_z)
+                VALUES (@venue, @night, @opened, @areaMode, @territoryLock, @fixedX, @fixedY, @fixedZ);
+                SELECT last_insert_rowid();
+                """;
             insert.Parameters.AddWithValue("@venue", venueId.ToString());
             insert.Parameters.AddWithValue("@night", nightId);
             insert.Parameters.AddWithValue("@opened", Iso(openedAt));
+            insert.Parameters.AddWithValue("@areaMode", (int)areaMode);
+            insert.Parameters.AddWithValue("@territoryLock", (object?)territoryLock ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@fixedX", (object?)fixedCenter?.X ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@fixedY", (object?)fixedCenter?.Y ?? DBNull.Value);
+            insert.Parameters.AddWithValue("@fixedZ", (object?)fixedCenter?.Z ?? DBNull.Value);
             return Convert.ToInt64(insert.ExecuteScalar(), CultureInfo.InvariantCulture);
         }
     }
@@ -359,13 +416,28 @@ public sealed class SqliteVenueDatabase : IVenueDatabase, IDisposable
         }
     }
 
+    private const string SessionRecordColumns = "s.id, s.opened_at_utc, s.closed_at_utc, n.night_date_local, s.area_mode, s.territory_lock, s.fixed_center_x, s.fixed_center_y, s.fixed_center_z";
+
+    private static AttendanceSessionRecord ReadSessionRecord(SqliteDataReader reader)
+    {
+        Vector3? fixedCenter = reader.IsDBNull(6) ? null : new Vector3((float)reader.GetDouble(6), (float)reader.GetDouble(7), (float)reader.GetDouble(8));
+        return new(
+            reader.GetInt64(0),
+            ParseUtc(reader.GetString(1)),
+            reader.IsDBNull(2) ? null : ParseUtc(reader.GetString(2)),
+            ParseDate(reader.GetString(3)),
+            (PresenceAreaMode)reader.GetInt32(4),
+            reader.IsDBNull(5) ? null : (uint)reader.GetInt64(5),
+            fixedCenter);
+    }
+
     public IReadOnlyList<AttendanceSessionRecord> GetRecentSessions(Guid venueId, int maxRows = 100)
     {
         lock (sync)
         {
             using var select = connection.CreateCommand();
-            select.CommandText = """
-                SELECT s.id, s.opened_at_utc, s.closed_at_utc, n.night_date_local
+            select.CommandText = $"""
+                SELECT {SessionRecordColumns}
                 FROM venue_sessions s INNER JOIN venue_nights n ON n.id = s.night_id
                 WHERE s.venue_id = @venue
                 ORDER BY s.opened_at_utc DESC LIMIT @max;
@@ -374,9 +446,25 @@ public sealed class SqliteVenueDatabase : IVenueDatabase, IDisposable
             select.Parameters.AddWithValue("@max", maxRows);
             using var reader = select.ExecuteReader();
             var rows = new List<AttendanceSessionRecord>();
-            while (reader.Read())
-                rows.Add(new(reader.GetInt64(0), ParseUtc(reader.GetString(1)), reader.IsDBNull(2) ? null : ParseUtc(reader.GetString(2)), ParseDate(reader.GetString(3))));
+            while (reader.Read()) rows.Add(ReadSessionRecord(reader));
             return rows;
+        }
+    }
+
+    public AttendanceSessionRecord? GetSession(Guid venueId, long sessionId)
+    {
+        lock (sync)
+        {
+            using var select = connection.CreateCommand();
+            select.CommandText = $"""
+                SELECT {SessionRecordColumns}
+                FROM venue_sessions s INNER JOIN venue_nights n ON n.id = s.night_id
+                WHERE s.venue_id = @venue AND s.id = @id;
+                """;
+            select.Parameters.AddWithValue("@venue", venueId.ToString());
+            select.Parameters.AddWithValue("@id", sessionId);
+            using var reader = select.ExecuteReader();
+            return reader.Read() ? ReadSessionRecord(reader) : null;
         }
     }
 

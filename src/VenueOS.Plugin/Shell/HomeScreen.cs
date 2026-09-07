@@ -34,8 +34,8 @@ internal static class HomeScreen
         var column = 0;
         // A disabled module's tile is omitted entirely, not merely dimmed — this is the documented contract
         // (Settings → Modules' own banner already promises "Disabled modules will not appear on the Home screen")
-        // and is what lets an unfinished, default-disabled module (Raffle/Bingo/TournamentControl) stay invisible
-        // to a fresh install while still being reachable and clearly marked under Settings → Modules.
+        // and is what lets an unfinished, default-disabled module (Raffle/TournamentControl) stay invisible to a
+        // fresh install while still being reachable and clearly marked under Settings → Modules.
         foreach (var module in modules.Modules.Where(x => x.IsEnabled))
         {
             if (column > 0) ImGui.SameLine(0, Spacing);
@@ -45,6 +45,12 @@ internal static class HomeScreen
             column = (column + 1) % columns;
             if (column == 0) ImGui.Dummy(new Vector2(0, Spacing));
         }
+        // User Manual sits immediately before Settings — both are fixed, non-module tiles outside the modules.Modules
+        // loop above, following the same one-off AppTile.Draw pattern Settings itself already uses.
+        if (column > 0) ImGui.SameLine(0, Spacing);
+        if (AppTile.Draw(theme, "__manual__", "book", "User Manual")) shell.SelectManual();
+        column = (column + 1) % columns;
+        if (column == 0) ImGui.Dummy(new Vector2(0, Spacing));
         if (column > 0) ImGui.SameLine(0, Spacing);
         if (AppTile.Draw(theme, "__settings__", "gear", "Settings")) shell.SelectSettings();
     }

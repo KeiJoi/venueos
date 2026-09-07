@@ -1,5 +1,5 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
-  <PropertyGroup><TargetFramework>net10.0-windows</TargetFramework><AssemblyName>VenueOS</AssemblyName><RootNamespace>VenueOS.Plugin</RootNamespace><AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath><Version>0.1.0</Version><AssemblyVersion>0.1.0.0</AssemblyVersion><FileVersion>0.1.0.0</FileVersion><Name>VenueOS</Name><Author>VenueOS</Author><Punchline>Multi-venue operations console.</Punchline><Description>Venue-scoped operations, promotion, and backend-compatible venue games.</Description><ApplicableVersion>any</ApplicableVersion><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup>
+  <PropertyGroup><TargetFramework>net10.0-windows</TargetFramework><AssemblyName>VenueOS</AssemblyName><RootNamespace>VenueOS.Plugin</RootNamespace><AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath><Version>0.2.0</Version><AssemblyVersion>0.2.0.0</AssemblyVersion><FileVersion>0.2.0.0</FileVersion><Name>VenueOS</Name><Author>VenueOS</Author><Punchline>Multi-venue operations console.</Punchline><Description>Venue-scoped operations, promotion, and backend-compatible venue games.</Description><ApplicableVersion>any</ApplicableVersion><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup>
   <ItemGroup><ProjectReference Include="..\VenueOS.Core\VenueOS.Core.csproj" /><ProjectReference Include="..\VenueOS.Venues\VenueOS.Venues.csproj" /><ProjectReference Include="..\VenueOS.Services\VenueOS.Services.csproj" /><ProjectReference Include="..\VenueOS.UI\VenueOS.UI.csproj" /><ProjectReference Include="..\VenueOS.Modules.Operations\VenueOS.Modules.Operations.csproj" /><Reference Include="Dalamud.Bindings.ImGui" Private="false" /><Reference Include="FFXIVClientStructs" Private="false" />
     <!-- Party Finder reconstruction: VenueOS owns its automation engine directly (src/VenueOS.Plugin/PartyFinder/)
          and depends on ECommons the same way the read-only donor reference (venuepartyfinder) does — a third-party
@@ -8,5 +8,11 @@
          a version built against Dalamud API level 15 — see ECOMMONS_UNLOAD_FIX.md for why 3.1.0.19 broke unload. -->
     <PackageReference Include="ECommons" Version="3.2.1.18" />
   </ItemGroup>
-  <ItemGroup><None Update="VenueOS.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></None></ItemGroup>
+  <ItemGroup>
+    <None Update="VenueOS.json"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></None>
+    <!-- docs/USER_MANUAL.md is the single authoritative manual source — this Include+Link copies it into the build
+         output (and therefore the release package) without duplicating its content anywhere in this project. The
+         runtime loader (VenueOS.Services.UserManualLoader) reads it back from beside the running assembly. -->
+    <None Include="..\..\docs\USER_MANUAL.md" Link="USER_MANUAL.md"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></None>
+  </ItemGroup>
 </Project>

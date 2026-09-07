@@ -29,6 +29,7 @@ internal static class AppIcons
             case "palette": DrawPalette(drawList, center, radius, color, thickness); break;
             case "terminal": DrawTerminal(drawList, center, radius, color, thickness); break;
             case "file-pen": DrawFilePen(drawList, center, radius, color, thickness); break;
+            case "book": DrawBook(drawList, center, radius, color, thickness); break;
             default: drawList.AddCircle(center, radius * 0.6f, color, 0, thickness); break;
         }
     }
@@ -206,6 +207,23 @@ internal static class AppIcons
         var extent = r * 0.4f;
         d.AddLine(c + new Vector2(-extent, -extent), c + new Vector2(extent, extent), color, t);
         d.AddLine(c + new Vector2(-extent, extent), c + new Vector2(extent, -extent), color, t);
+    }
+
+    /// <summary>User Manual's glyph — an open book: an outer cover with a center spine and short "text line" marks
+    /// on each page. Distinct from "circle-question" (already Mair's Trivia's icon) and "file-pen" (Mair's Editor's
+    /// icon, which reads as "edit a document" rather than "read a document").</summary>
+    private static void DrawBook(ImDrawListPtr d, Vector2 c, float r, uint color, float t)
+    {
+        var min = c + new Vector2(-r * 0.55f, -r * 0.45f);
+        var max = c + new Vector2(r * 0.55f, r * 0.5f);
+        d.AddRect(min, max, color, r * 0.1f, ImDrawFlags.None, t);
+        d.AddLine(new Vector2(c.X, min.Y + r * 0.08f), new Vector2(c.X, max.Y - r * 0.08f), color, t);
+        foreach (var fraction in new[] { 0.25f, 0.55f })
+        {
+            var y = min.Y + (max.Y - min.Y) * fraction;
+            d.AddLine(new Vector2(min.X + r * 0.12f, y), new Vector2(c.X - r * 0.1f, y), color, t * 0.8f);
+            d.AddLine(new Vector2(c.X + r * 0.1f, y), new Vector2(max.X - r * 0.12f, y), color, t * 0.8f);
+        }
     }
 
     private static void DrawPopout(ImDrawListPtr d, Vector2 c, float r, uint color, float t)

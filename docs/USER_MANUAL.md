@@ -1,12 +1,14 @@
 # VenueOS User Manual
 
-**Current version:** 0.1.0
-**What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, and live host trivia.
+**Current version:** 0.2.0
+**What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, live host trivia, and Bingo.
 **Supported environment:** Windows FFXIV with Dalamud installed (API level 15). VenueOS is unofficial, third-party, and not affiliated with Square Enix or the Dalamud/XIVLauncher project.
 
-**Working modules covered in this manual:** ShoutRunner, Attendance, Greeter, VIP, Party Finder, Mair's Trivia, Mair's Editor.
+**Working modules covered in this manual:** ShoutRunner, Attendance, Greeter, VIP, Party Finder, Mair's Trivia, Mair's Editor, Bingo.
 
-**Included but Under Development (disabled by default):** Bingo, Raffle, TournamentControl. See [Under Development Modules](#under-development-modules) — do not expect these to work yet.
+**Included but Under Development (disabled by default):** Raffle, TournamentControl. See [Under Development Modules](#under-development-modules) — do not expect these to work yet.
+
+You can also read this manual inside VenueOS itself — click the **User Manual** tile on Home (just before Settings), no internet connection required.
 
 This manual describes the current release only. It does not describe planned features, and it does not describe how any donor/standalone plugin VenueOS was built from used to behave where VenueOS now differs.
 
@@ -17,7 +19,7 @@ This manual describes the current release only. It does not describe planned fea
 1. Install VenueOS through Dalamud's Experimental Plugin Repository (see [Installation](#1-installation)).
 2. Open it with `/venueos` (it does not open automatically on login).
 3. Go to **Settings → Venue** and create or select a Venue Profile.
-4. Check **Settings → Modules** — enable/disable modules as needed. Bingo, Raffle, and TournamentControl are off by default and marked "Under Development."
+4. Check **Settings → Modules** — enable/disable modules as needed. Raffle and TournamentControl are off by default and marked "Under Development."
 5. Configure the modules you intend to use, in their own Settings sections.
 6. Launch applications from the **Home** screen.
 7. Use a module's pop-out icon if you want it in its own window instead of embedded in the tablet.
@@ -35,6 +37,7 @@ This manual describes the current release only. It does not describe planned fea
 | Party Finder | Publishes/edits/refreshes a native FFXIV Party Finder recruitment listing | No | Yes | Yes |
 | Mair's Trivia | Live host trivia backed by a remote server | Yes — remote Mair's Trivia backend | Yes (connection settings); the question library it reads from is not | Yes (polling continues; see [Lifecycle / Resume](#lifecycle--resume)) |
 | Mair's Editor | Authors trivia question sets used by Mair's Trivia | No | **No — global, shared library** | N/A (no background process; it's a pure editing surface) |
+| Bingo | Hosts a Bingo room: cards, calling, and payout tracking, backed by a remote server | Yes — remote Bingo backend | Yes | Yes (calling/alerts continue; see its own section) |
 
 ---
 
@@ -82,7 +85,7 @@ VenueOS presents itself as a tablet with one persistent toolbar and a content ar
 
 ## 3. Venue Profiles
 
-A **Venue Profile** represents one venue identity: a name and a theme, plus whichever module settings are stored per-venue (most of them are — see the [Persistence](#13-persistence) table).
+A **Venue Profile** represents one venue identity: a name and a theme, plus whichever module settings are stored per-venue (most of them are — see the [Persistence](#14-persistence) table).
 
 Manage venues under **Settings → Venue**:
 
@@ -97,7 +100,7 @@ You can also switch venues quickly from the toolbar's dropdown, without going in
 
 **Switching away from an active Mair's Trivia game:** if Mair's Trivia has a game running in the venue you're leaving, switching shows a confirmation: *"Mair's Trivia has an active game ("<game name>") running in this venue. Switching venues will end this game for all connected players. This will not end the Series it may belong to."* Confirming ends that game (but never the Series it's part of, which stays resumable). No other module currently has a venue-switch warning.
 
-**Global vs. venue-specific:** module enabled/disabled state, the Auto Pop-Out preference, and the Mair's Editor question library are global (shared across every venue). Everything else module-specific — connection settings, presets, rosters, recruitment criteria — is per-venue. See [Persistence](#13-persistence) for the full breakdown.
+**Global vs. venue-specific:** module enabled/disabled state, the Auto Pop-Out preference, and the Mair's Editor question library are global (shared across every venue). Everything else module-specific — connection settings, presets, rosters, recruitment criteria — is per-venue. See [Persistence](#14-persistence) for the full breakdown.
 
 ---
 
@@ -106,11 +109,11 @@ You can also switch venues quickly from the toolbar's dropdown, without going in
 Found under **Settings → General**:
 
 - **"Open modules in separate windows"** toggle (Auto Pop-Out). Off by default. When on, launching a module from Home opens (or focuses) its own detached window instead of embedding it in the tablet. This applies the same way for every venue and doesn't change when you switch venues. Settings itself is unaffected by this toggle and always opens embedded.
-- An **About VenueOS** card showing a version line and a one-line description of what VenueOS is. Note: this in-app version line currently reads "VenueOS Phase 4" rather than the packaged release number (0.1.0) — it's an internal label that hasn't been updated to match the public release numbering yet, so don't rely on it to confirm which release you have installed; check the Dalamud plugin installer instead.
+- An **About VenueOS** card showing a version line (the actual installed release version, e.g. "VenueOS 0.2.0") and a one-line description of what VenueOS is.
 
 **Settings → Modules** is where you enable/disable modules and jump into each one's own settings — see [Basics](#2-venueos-basics) above and [Under Development Modules](#under-development-modules) below.
 
-**Settings → Diagnostics** shows a filterable log of recent errors and configuration-recovery warnings (filters: **Log Level** — All Levels/Errors/Warnings, **Module**, and a **Search** box), plus **Clear** and **Copy** buttons and small stat tiles (Total Entries, Errors, Warnings, Last Update). Useful for troubleshooting — see [Troubleshooting](#14-troubleshooting).
+**Settings → Diagnostics** shows a filterable log of recent errors and configuration-recovery warnings (filters: **Log Level** — All Levels/Errors/Warnings, **Module**, and a **Search** box), plus **Clear** and **Copy** buttons and small stat tiles (Total Entries, Errors, Warnings, Last Update). Useful for troubleshooting — see [Troubleshooting](#15-troubleshooting).
 
 ---
 
@@ -162,6 +165,24 @@ Moving between Worlds in the same Data Center is a same-Data-Center transfer; mo
 
 A running log organized **RUN → Data Center → World → Destination**, each line timestamped, color-coded by outcome (green = success, red = failure, yellow = warning, accent = in progress). **Copy Terminal** copies the full history as plain text to your clipboard; a **Jump to latest** button appears if you've scrolled up. The terminal is cleared on venue switch and does not survive a plugin/game reload — only your settings (message, timing, Data Centers, destinations) persist.
 
+### Crash Recovery / Resume Run
+
+ShoutRunner saves its progress through an active RUN to disk as it goes, so an unexpected exit — FFXIV crashing, Dalamud/VenueOS being closed, a forced termination — doesn't necessarily lose that run. This has been live-tested against an actual forced FFXIV termination mid-transfer: after restarting the game, VenueOS detected the interrupted run, Resume picked it up correctly, and the route continued — including sending the shout it had been about to send when interrupted.
+
+**What you'll see:** the next time you open ShoutRunner after an interrupted run, an **"Interrupted Run Available"** area appears above the normal Start controls, showing:
+- Which RUN was interrupted and where (Data Center / World).
+- The last destination that successfully completed, if any.
+- The next destination it will pick up from.
+- Any Data Centers that were already being skipped in that run, and why.
+
+Two buttons: **Resume Run** and **Discard Recovery**.
+
+- **Resume Run** continues from exactly where it left off: a destination whose shout already went out is never repeated, but a destination that was interrupted before its shout completed is retried. Any Data Center the run had already skipped (congestion, an unreachable destination Data Center) stays skipped rather than being retried. Resume always uses that run's own original route — Data Centers/destinations you've edited in Settings since the interruption are not picked up until the *next* run.
+- **Discard Recovery** removes just the interrupted-run checkpoint; your saved route/settings are never affected.
+- Starting a fresh run instead (**Start New Run**) asks you to confirm first, since doing so discards the still-resumable interrupted run.
+
+A normal **Stop** is treated as an intentional decision to abandon that run, so it clears the recovery checkpoint too — there's nothing to resume afterward. A RUN that finishes normally also clears its own checkpoint (repeat's next RUN is a fresh start, not a continuation). If the saved recovery data itself can't be read, ShoutRunner tells you plainly ("ShoutRunner recovery data could not be loaded.") and offers only Discard Recovery — it never crashes over it.
+
 ---
 
 ## 6. Attendance
@@ -172,7 +193,14 @@ Guests are detected by presence (a periodic scan of nearby players), not by chat
 
 ### Tabs: Live, Visitors, History, Analytics
 
-**Live** — a session card shows **Open**/**Closed** status:
+**Live** — the Session card, top to bottom:
+
+- **Venue Area Type** — a two-way choice right above the Start/Resume buttons: **"Normal Venue Area"** or **"Outdoor Event Area"**. A line underneath explains whichever one is currently selected:
+  - *Normal Venue Area:* "the radius always follows the operator's current position — appropriate for a housing instance. This is the safe default for every new opening."
+  - *Outdoor Event Area:* "the radius center is captured once when this opening starts and stays fixed — for open-world venues where the operator may move around."
+
+  This choice only matters **before** you start/resume an opening — pick it here, not in Settings. Once an opening is active, this becomes read-only status text ("Venue Area Type: Normal Venue Area" or "...Outdoor Event Area (fixed origin)") for as long as that opening runs; you can't switch modes mid-session. **Resuming** a past opening restores whichever mode it was originally started with. After you close or complete an Outdoor opening, the selector here resets to **Normal Venue Area** for the next one — Outdoor is a deliberate, per-opening choice, never a lingering default.
+- Status badge: **Open**/**Closed**.
 - While open: **Pause Opening** / **Close Opening**.
 - While closed: **Start New Opening** / **Resume Latest** (disabled if nothing is resumable).
 
@@ -193,7 +221,7 @@ Under History → Export: an **"Export folder"** field and an **Export Range to 
 ### Settings
 
 - **Venue Details:** "In-game address" field, "Auto-detect address in-game" toggle, "Detect Now" button.
-- **Presence Filtering:** "Lock to the territory the session starts in" toggle, "Filter by distance" toggle, "Venue area type" (Normal venue area / Outdoor Event Area), "Radius (yalms)" field, "Stats poll interval (seconds)" field.
+- **Presence Filtering:** "Lock to the territory the session starts in" toggle, "Filter by distance" toggle (with a "Radius (yalms)" field when on), and "Stats poll interval (seconds)". Venue Area Type is **not** set here — a pointer note in this card says so — it's chosen per-opening on the Live tab, right above Start New Opening (see above).
 
 ### Relationship with Greeter/VIP
 
@@ -364,7 +392,7 @@ Configured in **Settings → Modules → Mair's Trivia**:
 - **Username**
 - **Password**
 
-All four fields are plain, visible, readable text — none are password-masked. This is a deliberate product decision so venue staff can copy/share connection configuration easily. Treat your VenueOS configuration accordingly (see [Data / Privacy notes](#15-data--privacy--credential-notes)).
+All four fields are plain, visible, readable text — none are password-masked. This is a deliberate product decision so venue staff can copy/share connection configuration easily. Treat your VenueOS configuration accordingly (see [Data / Privacy notes](#16-data--privacy--credential-notes)).
 
 These settings are saved per venue. If you've previously signed in and a stored session token exists, VenueOS reconnects automatically when you switch to that venue — no manual sign-in needed. If your session expires while working, VenueOS tries to silently renew it, and if that fails, quietly falls back to signing in again with your stored username/password. Only if *both* fail do you see an error badge (*"Session expired and automatic sign-in failed."*) — at that point sign in again manually via Settings.
 
@@ -438,7 +466,83 @@ Click **Adjust** next to a player, enter **Points (+/-)** and a **Reason** (requ
 
 ---
 
-## 12. Detached Windows / Auto Pop-Out
+## 12. Bingo
+
+**Purpose:** hosts a live Bingo room — cards, calling, a player-facing browser view, and payout tracking — backed by a remote Bingo server, the same way Mair's Trivia is.
+
+### Initial Setup
+
+Under **Settings → Modules → Bingo** (and near Create Game, for what's specific to one game):
+
+- **Room key** — a per-venue key identifying your room to the backend. Edit it with **Save Room Key**, or generate one with **Generate Random Room Key**. Replacing an existing key (rather than setting one for the first time) asks you to confirm first.
+- **Announce channel** — **Shout**, **Yell**, **Party**, or **None** (sends nothing).
+- **Roll command** — **Random (/random 75)** or **Dice (/dice 75)**. Dice mode carries an on-screen warning that its exact chat output format and party requirement haven't been verified in-game — prefer Random unless you've confirmed Dice works for you.
+- **Game Type** and other default game settings, set here and reused as the starting point for a new game (see below).
+
+### Room listing / resume
+
+A **"This venue's rooms (host handoff / resume)"** list shows this venue's known rooms with a **Refresh room list** button and a per-room **Resume** button — useful for picking a room back up (e.g. after a plugin reload, or handing hosting to another operator). You can also resume a specific room directly by typing its code into **Room code** and clicking **Resume by code**.
+
+### Creating a Game
+
+Near Create Game: **Game Type** (Single Line, Two Lines, Four Corners, or Blackout — see [Game Types](#game-types) below), Cost Per Card, Starting Pot, Prize Percentage, and letters/labels if you're customizing them. The venue name sent to the backend is read automatically from your active Venue Profile — there's no separate field for it.
+
+1. **Create Game** — creates the room (a Draft) with these settings.
+2. **Start Game** — locks in the economics (cost/pot/prize split) and moves the room from Draft to Active. Once started, Game Type is locked for that game — changing the Settings default afterward never retroactively changes a game already in progress.
+
+### Players
+
+- **New player name** field, plus **Use Current Target** to fill it (and their home world) from whatever you have targeted in-game — this never touches the backend by itself.
+- **Paid cards** / **Comp cards** fields (0–16 each) set how many of each a new player gets; **Add Player** creates them. Existing players can be adjusted with **+ Paid** / **- Paid** / **+ Comp** / **- Comp**.
+- **Complimentary cards never increase the pot** — the backend's pot math only counts paid cards; comp cards are display-only for that purpose.
+- Each player gets an automatic short link — VenueOS looks up an existing one first and only mints a new one if none exists yet. The link is shown as a read-only, selectable field on their row, with **Copy Link** and **New Link** buttons (New Link mints an additional working link without invalidating the old one).
+
+### Player Browser
+
+Players open their own short link in a browser to see their cards and daub (mark) called numbers themselves. VenueOS has no way to confirm what happens in a player's own browser across sessions/devices (whether their daubs are still there if they close and reopen the page, or open the link on a different browser) — that's backend/browser behavior outside what the host client can observe. What VenueOS *can* show you is the current server-confirmed state of every card at any time, via the Card Viewer below.
+
+### Calling Numbers
+
+- **Roll & Call** — the same action available both on the main Bingo screen and on the detached **Called Numbers** window; it sends your configured roll command (`/random 75` or `/dice 75`) and records the result once seen.
+- The **Called Numbers** window shows the complete 1–75 board from the very start (not just numbers called so far), and keeps working even if you close the main Bingo window — it's a fully independent detached window.
+- Numbers actually get "called" from the backend's confirmation, not merely from what the dice command printed — this is what keeps the Card Viewer, Called Numbers board, and every player's browser in agreement.
+
+### Card Verification (Card Viewer)
+
+The host Card Viewer shows every card for every player, laid out in a responsive tiled grid that adapts to window width. Each cell is colored to make its state obvious at a glance:
+- **Called, not yet daubed** — a distinct warning color.
+- **Daubed by the player** — a distinct success color.
+- **Free center** — its own neutral color, always "filled" for scoring purposes.
+- **Any cell in a currently-complete winning pattern** — highlighted over everything else.
+
+Hovering a cell explains which state it's in. Card contents themselves are generated by the same proven card-generation algorithm as the player browser, so what you see in the Card Viewer matches what the player sees card-for-card.
+
+### Game Types
+
+- **Single Line**, **Two Lines**, **Four Corners**, **Blackout** — chosen at game creation (see above) and locked for the life of that game.
+
+### Balls to Bingo
+
+Next to each player, a number in parentheses (e.g. "Kei Joi (1)") shows **Balls to Bingo** — the fewest additional numbers that still need to be *called* before that player's best card completes the current Game Type's pattern. This is calculated by the backend from called numbers only, not from whether the player has actually daubed those numbers yet — so it tells you how close a card mathematically is, independent of whether its owner is keeping up with daubing.
+
+### Bingo Calls
+
+When a player's card completes the pattern, a detached **Bingo Call Alert** window pops up on its own — independent of whether the main Bingo window is even open — with a large **"BINGO CALLED!"** heading. From it: **View Cards** (jumps straight to that player's cards in the Card Viewer), **Payout Details** (a compact summary plus a link back into the main Bingo screen), and **Dismiss**. If more than one caller is pending, they're all listed; VenueOS tracks a full caller history, not just the most recent one.
+
+### Payout Ledger
+
+**Sync Payouts** is the only way a payout obligation gets created — VenueOS never lets you manually pick a "winner" to pay. Once synced, each obligation shows who's owed what, how much has been confirmed paid, and how much remains outstanding.
+
+**Automatic payout is an optional, experimental convenience feature — not a fully verified path.** Pressing **Attempt Payout** requires first checking an "I understand this requires live testing" acknowledgment and entering a target (with its own Use Current Target button). A live self-trade test intentionally tried to abuse this: the attempt did **not** falsely report success — it came back **Ambiguous**, and no unintended payout occurred. An ambiguous result is explicitly *not* the same as unpaid — it always needs manual reconciliation, never an automatic retry. Use **Mark Paid** / **Mark Not Paid** (each behind its own confirmation) once you've independently confirmed what actually happened, or simply hand out winnings through a normal in-game trade and reconcile the ledger manually — either is a supported way to run payouts today.
+
+### Leaving / Resuming / Closing
+
+- **Leave Game** — a purely local action: it makes no request to the backend at all. The room keeps running and stays fully resumable; use the room list or Resume by code to come back to it later.
+- **Close Room** — permanently deletes the room and its game state from the backend. It cannot be resumed afterward, and you're asked to confirm first. You can't Close a room you're still actively in — Leave it first.
+
+---
+
+## 13. Detached Windows / Auto Pop-Out
 
 Every module can run either **embedded** (inside the main VenueOS tablet) or **detached** (its own separate window) — the content and behavior are identical either way; it's purely a display choice.
 
@@ -449,25 +553,29 @@ Every module can run either **embedded** (inside the main VenueOS tablet) or **d
 
 ---
 
-## 13. Persistence
+## 14. Persistence
 
 | Scope | Examples |
 |---|---|
 | **Global** (shared by every venue) | Which modules are enabled/disabled, Auto Pop-Out preference, the entire Mair's Editor question library |
-| **Venue-specific** | ShoutRunner settings, Attendance settings and history, Greeter presets/hotbar, VIP roster, Party Finder recruitment criteria, Mair's Trivia connection settings and scoring defaults |
-| **Runtime-only** (does not survive a reload) | ShoutRunner's on-screen terminal history, Mair's Editor's Undo history, Mair's Trivia's reference to "which game is currently open" (though the game itself survives on the backend and can be resumed) |
+| **Venue-specific** | ShoutRunner settings (and its recovery checkpoint for an interrupted run), Attendance settings and history (including each opening's own Venue Area Type), Greeter presets/hotbar, VIP roster, Party Finder recruitment criteria, Mair's Trivia connection settings and scoring defaults, Bingo room key and default game settings |
+| **Runtime-only** (does not survive a reload) | ShoutRunner's on-screen terminal history, Mair's Editor's Undo history, Mair's Trivia's and Bingo's reference to "which game/room is currently open" (though the game/room itself survives on its backend and can be resumed) |
 
 Disabling a module never erases its saved configuration — re-enabling it picks back up exactly where you left off.
 
 ---
 
-## 14. Troubleshooting
+## 15. Troubleshooting
 
 **VenueOS doesn't open by itself.** That's expected — it never opens automatically. Run `/venueos`.
 
-**A module I expect is missing from Applications.** Check **Settings → Modules** — it's probably disabled. Bingo, Raffle, and TournamentControl are disabled by default on a fresh install (see [below](#under-development-modules)).
+**A module I expect is missing from Applications.** Check **Settings → Modules** — it's probably disabled. Raffle and TournamentControl are disabled by default on a fresh install (see [below](#under-development-modules)).
 
 **ShoutRunner won't travel between Worlds.** Confirm Lifestream is installed and working — ShoutRunner depends on it for all world travel but doesn't check for it before letting you press Start. Also check that at least one Data Center and one destination are configured, and check the Run Terminal for the actual failure reason.
+
+**ShoutRunner shows an "Interrupted Run Available" area I don't expect.** A previous run didn't get a chance to finish cleanly (a crash, a forced close). Review the recovery summary and either **Resume Run** to continue it or **Discard Recovery** to clear it — see [ShoutRunner's Crash Recovery section](#5-shoutrunner).
+
+**Bingo's automatic payout came back Ambiguous.** That's the automation being honest that it couldn't confirm the trade completed — it is not the same as unpaid, and never means a payout happened without confirmation. Check in-game whether the trade actually went through, then use **Mark Paid**/**Mark Not Paid** in the Payout Ledger to reconcile it manually.
 
 **Party Finder isn't refreshing.** Check the module's status text and the Compatibility badge; on a slower system, native UI automation may simply need more time. Confirm Auto Refresh is on in Settings if you expect automatic refreshes.
 
@@ -481,16 +589,16 @@ Anything logged as an error or warning also appears in **Settings → Diagnostic
 
 ---
 
-## 15. Data / Privacy / Credential Notes
+## 16. Data / Privacy / Credential Notes
 
 - Mair's Trivia's Server-access password, Username, and Password are stored and displayed **in plain, readable text** by design, so venue staff can easily copy/share connection details. Don't casually share your VenueOS configuration file with people you don't want to see them.
-- Mair's Trivia player/game/Series data lives on that remote backend, not just locally.
+- Mair's Trivia player/game/Series data, and Bingo room/player/payout data, live on their respective remote backends, not just locally.
 - Your local VenueOS configuration otherwise contains operational data — venue names, rosters, presets, recruitment criteria, and similar.
 - This manual makes no telemetry claims; nothing in the source reviewed for this manual indicates VenueOS phones home beyond the Mair's Trivia backend you configure yourself.
 
 ---
 
-## 16. Updates
+## 17. Updates
 
 Once VenueOS is installed from the Experimental Plugin Repository, updates arrive the normal Dalamud way — the Plugin Installer checks configured repositories periodically (or via Settings → Experimental → "Check for Updates") and offers an update when a newer version is published. You should not need to manually replace any files for a normal release.
 
@@ -500,7 +608,7 @@ Once VenueOS is installed from the Experimental Plugin Repository, updates arriv
 
 ## Under Development Modules
 
-**Bingo, Raffle, and TournamentControl** exist in this release but are **not ready for use**:
+**Raffle and TournamentControl** exist in this release but are **not ready for use**:
 
 - They ship **disabled by default** on a fresh install.
 - Because they're disabled, they do **not** appear on the Home/Applications screen.

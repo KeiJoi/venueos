@@ -1,6 +1,15 @@
-# VenueOS 0.1.0 release
+# VenueOS 0.2.0 release
 
-VenueOS uses semantic versioning. `0.1.0` is the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.2.0 highlights
+
+- **Bingo promoted to release-ready** — completed live QA and now ships enabled by default alongside VenueOS's other working modules (module ID `games.bingo` unchanged). Automated payout specifically remains an experimental, conservatively-documented convenience feature — see `BINGO_PAYOUT_AUTOMATION_DEFERRED.md` and the User Manual's Bingo section.
+- **Built-in offline User Manual** — a "User Manual" tile on Home (just before Settings) opens a VenueOS-styled reader for the bundled `docs/USER_MANUAL.md`, no internet connection required. `docs/USER_MANUAL.md` remains the single authoritative manual source; the release package just includes a copy of it.
+- **ShoutRunner crash recovery** — an interrupted RUN (FFXIV/Dalamud/VenueOS exiting unexpectedly mid-route) can now be resumed from where it left off via a "Resume Run" control; live-tested against a forced FFXIV termination mid-transfer.
+- **ShoutRunner same-Data-Center reliability fix** — corrected a false-positive failure when Lifestream performs an intermediate city visit before completing a same-Data-Center World Visit; live-tested (Halicarnassus → Cuchulainn, both Dynamis).
+- **Attendance: Venue Area Type moved to the Live screen** — the Normal/Outdoor Event Area choice is now made per-opening, directly above "Start New Opening," instead of buried in Settings.
+- **About panel now shows the real version** — replaced a stale hard-coded "Phase 4" label with the actual running assembly version.
 
 ## Package
 
@@ -21,11 +30,10 @@ VenueOS never automatically imports, consumes, or overwrites standalone plugin c
 
 ## Deferred capabilities
 
-- Bingo automated trade/payout operations.
-- ShoutRunner travel, world/DC visit, teleport, and Lifestream automation.
+- Bingo automated trade/payout operations remain experimental — see `BINGO_PAYOUT_AUTOMATION_DEFERRED.md` (a live self-trade abuse test confirmed no false-success/unintended payout, but the automation engine's game-facing assumptions are still not fully live-verified).
 - Any addon-memory automation not separately version-gated and in-game validated.
 
-See `BINGO_PAYOUT_AUTOMATION_DEFERRED.md` and `PARTY_FINDER_PHASE_2D.md`.
+ShoutRunner's own travel/World-Visit/teleport/Lifestream automation is no longer deferred as of 0.2.0 (crash recovery and the same-Data-Center reliability fix above were both live-tested). See `PARTY_FINDER_PHASE_2D.md` for Party Finder's own deferred items.
 
 ## First-release validation
 

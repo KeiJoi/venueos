@@ -18,6 +18,7 @@ internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, Venue
     private bool forceScrollToBottom;
     private ShoutRunnerStartResult? lastStartResult;
     private double? copiedAtImGuiTime;
+    private readonly ConfirmDialog confirmDialog = new();
 
     // Settings-only scratch state for the destination editor.
     private string newDestinationBuffer = string.Empty;
@@ -26,6 +27,8 @@ internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, Venue
     {
         var theme = venues.Current.Theme;
         SyncBuffer();
+
+        DrawRecoveryArea(theme);
 
         UiKit.BeginSectionCard("shoutrunner-message", theme, "Shout Message");
         if (Forms.TextField(theme, "Message sent with /shout at each destination", ref shoutMessageBuffer, 500))
@@ -42,6 +45,8 @@ internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, Venue
 
         ImGui.Spacing();
         DrawTerminal(theme);
+
+        confirmDialog.Draw(theme);
     }
 
     public void DrawSettings()
@@ -102,7 +107,23 @@ internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, Venue
         ImGui.Spacing();
         if (service.State is ShoutRunnerState.Stopped or ShoutRunnerState.Faulted)
         {
-            if (UiKit.PrimaryButton(theme, "Start", new Vector2(140, 32))) lastStartResult = service.Start();
+            // Crash-recovery brief "START NEW RUN WITH RECOVERY PRESENT": starting fresh while an interrupted run
+            // could still be resumed requires deliberate confirmation, since Start() unconditionally overwrites the
+            // recovery checkpoint the moment it actually runs.
+            var hasRecovery = service.RecoveredJournal is not null;
+            if (UiKit.PrimaryButton(theme, hasRecovery ? "Start New Run" : "Start Run", new Vector2(160, 32)))
+            {
+                if (hasRecovery)
+                {
+                    confirmDialog.Request("Start a new run?",
+                        "An unfinished ShoutRunner run can still be resumed.\n\nStarting a new run will discard its recovery checkpoint.\n\nStart new run?",
+                        () => lastStartResult = service.Start());
+                }
+                else
+                {
+                    lastStartResult = service.Start();
+                }
+            }
         }
         else
         {
@@ -121,6 +142,70 @@ internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, Venue
                 _ => "ShoutRunner is already running.",
             });
         }
+    }
+
+    /// <summary>Crash-recovery brief "START VS RESUME UI"/"RESUME SUMMARY"/"CORRUPT / INCOMPATIBLE RECOVERY FILE"/
+    /// "VENUE PROFILE SAFETY" — an operational action on ShoutRunner's own main screen, never hidden in Settings.
+    /// Shown only while genuinely idle (<see cref="ShoutRunnerState.Stopped"/>/<see cref="ShoutRunnerState.Faulted"/>);
+    /// an active or already-resumed run's own journal is just its live checkpoint, not a separate "available to
+    /// resume" offer.</summary>
+    private void DrawRecoveryArea(VenueTheme theme)
+    {
+        if (service.State is not (ShoutRunnerState.Stopped or ShoutRunnerState.Faulted)) return;
+
+        if (service.RecoveredJournalIsCorrupt)
+        {
+            UiKit.BeginSectionCard("shoutrunner-recovery", theme, "Interrupted Run");
+            UiKit.ErrorState(theme, "ShoutRunner recovery data could not be loaded.");
+            ImGui.Spacing();
+            if (UiKit.DangerButton(theme, "Discard Recovery", new Vector2(160, 0)))
+                confirmDialog.Request("Discard recovery data?", "This removes the unreadable interrupted-run checkpoint. Your saved route/settings are not affected.", service.DiscardRecovery);
+            UiKit.EndSectionCard();
+            ImGui.Spacing();
+            return;
+        }
+
+        if (service.RecoveredJournal is null) return;
+        var summary = service.RecoveredSummary!;
+
+        UiKit.BeginSectionCard("shoutrunner-recovery", theme, "Interrupted Run Available");
+
+        if (!service.RecoveredJournalBelongsToCurrentVenue)
+        {
+            UiKit.WarningState(theme, $"This interrupted run belongs to venue \"{summary.VenueDisplayName}\". Switch to that venue to resume it.");
+            ImGui.Spacing();
+            if (UiKit.DangerButton(theme, "Discard Recovery", new Vector2(160, 0)))
+                confirmDialog.Request("Discard recovery data?", $"This removes the interrupted run belonging to \"{summary.VenueDisplayName}\". Your saved route/settings are not affected.", service.DiscardRecovery);
+            UiKit.EndSectionCard();
+            ImGui.Spacing();
+            return;
+        }
+
+        ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextPrimary));
+        ImGui.TextUnformatted($"RUN {summary.RunNumber} — {summary.DataCenter ?? "?"} / {summary.World ?? "?"}");
+        ImGui.PopStyleColor();
+        ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary));
+        if (summary.LastCompletedDestination is not null) ImGui.TextUnformatted($"Last completed: {summary.LastCompletedDestination}");
+        ImGui.TextUnformatted($"Next: {summary.NextDestination ?? "will be determined on resume"}");
+        ImGui.PopStyleColor();
+
+        if (summary.SkippedDataCenters.Count > 0)
+        {
+            ImGui.Spacing();
+            ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.Warning));
+            ImGui.TextUnformatted("Skipped this run:");
+            foreach (var skip in summary.SkippedDataCenters) ImGui.TextUnformatted($"  {skip.DataCenter} — {skip.Reason}");
+            ImGui.PopStyleColor();
+        }
+
+        ImGui.Spacing();
+        if (UiKit.PrimaryButton(theme, "Resume Run", new Vector2(140, 0))) service.Resume();
+        ImGui.SameLine();
+        if (UiKit.GhostButton(theme, "Discard Recovery", new Vector2(160, 0)))
+            confirmDialog.Request("Discard recovery data?", "This removes the interrupted-run checkpoint only. Your saved route/settings are not affected.", service.DiscardRecovery);
+
+        UiKit.EndSectionCard();
+        ImGui.Spacing();
     }
 
     /// <summary>Exports the complete retained terminal history — never just the visible/scrolled viewport, the

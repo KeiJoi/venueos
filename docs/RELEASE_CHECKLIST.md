@@ -3,6 +3,11 @@
 Checklist for the first public VenueOS release (Dalamud Experimental Plugin Repository). Work through it top to
 bottom before authorizing a public push/tag/release; nothing here authorizes pushing or publishing by itself.
 
+> **0.2.0 update:** Bingo completed live QA and is now release-ready (enabled by default, no longer "Under
+> Development" — see `BINGO_PAYOUT_AUTOMATION_DEFERRED.md` for the one remaining caveat, automated payout).
+> The module readiness matrix below is updated to match; the rest of this document is otherwise the historical
+> record of the 0.1.0 pass. See `RELEASE.md`'s "0.2.0 highlights" for the full list of what changed.
+
 ## Module readiness matrix
 
 | Module | Stable ID | Display Name | Default enabled (fresh install) | Shown in Applications when disabled | Settings entry | Release status | Live tested? | Notes |
@@ -14,8 +19,8 @@ bottom before authorizing a public push/tag/release; nothing here authorizes pus
 | Party Finder | `promotion.partyfinder` | Party Finder | Yes | — | Yes | Working | Yes | |
 | Mair's Trivia | `games.trivia` | Mair's Trivia | Yes | — | Yes | Working | Yes | |
 | Mair's Editor | `games.mairseditor` | Mair's Editor | Yes | — | Yes | Working | Yes | |
+| Bingo | `games.bingo` | Bingo | Yes | — | Yes | Working (0.2.0) | Yes | Automated payout specifically remains experimental (`BINGO_PAYOUT_AUTOMATION_DEFERRED.md`); manual reconciliation supported |
 | Raffle | `games.raffle` | Raffle | **No** | **No** | Yes, labeled "Under Development" | Unfinished | No | Backend-compatible, not QA'd |
-| Bingo | `games.bingo` | Bingo | **No** | **No** | Yes, labeled "Under Development" | Unfinished | No | Payout automation also deferred (`BINGO_PAYOUT_AUTOMATION_DEFERRED.md`) |
 | TournamentControl | `games.tournament` | TournamentControl | **No** | **No** | Yes, labeled "Under Development" | Unfinished | No | Backend-compatible, not QA'd |
 
 A module never shown in Applications is still fully reachable from Settings → Modules → Configure, and enabling
@@ -40,10 +45,10 @@ there is exactly one ordering to keep correct.
 1. ShoutRunner — 2. Attendance — 3. Greeter — 4. VIP — 5. Party Finder — 6. Mair's Trivia — 7. Mair's Editor —
    8. Bingo — 9. Raffle — 10. TournamentControl.
 
-This is what Settings → Modules shows in full. Fresh-install Home order (Bingo/Raffle/TournamentControl hidden
-while disabled) is the same sequence with those three removed: ShoutRunner, Attendance, Greeter, VIP, Party
-Finder, Mair's Trivia, Mair's Editor. Verified end to end with real production module instances in
-`tests/VenueOS.Services.Tests/ModuleDisplayOrderTests.cs`.
+This is what Settings → Modules shows in full. Fresh-install Home order (0.2.0: Raffle/TournamentControl hidden
+while disabled; Bingo promoted to enabled-by-default) is the same sequence with those two removed: ShoutRunner,
+Attendance, Greeter, VIP, Party Finder, Mair's Trivia, Mair's Editor, Bingo. Verified end to end with real
+production module instances in `tests/VenueOS.Services.Tests/ModuleDisplayOrderTests.cs`.
 
 **To change it later:** set `DisplayOrder` on the module's `ModuleDescriptor` construction (in
 `src/VenueOS.Modules.Operations/Operations.cs` for the modules that live there, or the module's own file for

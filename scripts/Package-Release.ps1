@@ -40,7 +40,10 @@ $requiredFiles = @(
     "ECommons.dll",
     "Microsoft.Data.Sqlite.dll", "SQLitePCLRaw.core.dll", "SQLitePCLRaw.batteries_v2.dll", "SQLitePCLRaw.provider.e_sqlite3.dll",
     "ClosedXML.dll", "ClosedXML.Parser.dll", "DocumentFormat.OpenXml.dll", "DocumentFormat.OpenXml.Framework.dll",
-    "ExcelNumberFormat.dll", "RBush.dll", "SixLabors.Fonts.dll", "System.IO.Packaging.dll"
+    "ExcelNumberFormat.dll", "RBush.dll", "SixLabors.Fonts.dll", "System.IO.Packaging.dll",
+    # The bundled offline manual (single source of truth: docs/USER_MANUAL.md, copied here at build time by
+    # VenueOS.Plugin.csproj's Include+Link content item) - read at runtime by VenueOS.Services.UserManualLoader.
+    "USER_MANUAL.md"
 )
 
 foreach ($file in $requiredFiles) {

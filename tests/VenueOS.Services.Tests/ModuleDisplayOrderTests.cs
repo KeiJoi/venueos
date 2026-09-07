@@ -32,7 +32,7 @@ public sealed class ModuleDisplayOrderTests
 
     private static readonly string[] ExpectedFreshInstallHomeOrder =
     [
-        "ShoutRunner", "Attendance", "Greeter", "VIP", "Party Finder", "Mair's Trivia", "Mair's Editor",
+        "ShoutRunner", "Attendance", "Greeter", "VIP", "Party Finder", "Mair's Trivia", "Mair's Editor", "Bingo",
     ];
 
     [Fact]
@@ -43,12 +43,13 @@ public sealed class ModuleDisplayOrderTests
     }
 
     [Fact]
-    public void Fresh_install_home_order_excludes_the_three_disabled_unfinished_modules_but_keeps_their_relative_order()
+    public void Fresh_install_home_order_excludes_the_two_disabled_unfinished_modules_but_keeps_their_relative_order()
     {
-        // Bingo/Raffle/TournamentControl default IsEnabled = false (fresh install) — HomeScreen filters those out
+        // Raffle/TournamentControl default IsEnabled = false (fresh install) — HomeScreen filters those out
         // entirely (see HomeScreen.DrawGrid's `modules.Modules.Where(x => x.IsEnabled)`), while Settings → Modules
         // shows all ten via the unfiltered ModuleHost.Modules. This proves the two lists agree on order and differ
-        // only by that filter, using the real fresh-install IsEnabled defaults.
+        // only by that filter, using the real fresh-install IsEnabled defaults. Bingo graduated to enabled-by-default
+        // in the 0.2.0 pass, so it's now part of the expected Home-visible list too.
         var host = BuildRealModuleHost();
         var homeVisible = host.Modules.Where(x => x.IsEnabled).Select(x => x.Descriptor.DisplayName);
         Assert.Equal(ExpectedFreshInstallHomeOrder, homeVisible);
@@ -68,12 +69,12 @@ public sealed class ModuleDisplayOrderTests
         var greeterService = new GreeterService(clock, chat, db);
         var vip = new VipOrchestrationService();
         var coordinator = new GreetingCoordinator(_ => false, greeterService, vip, chat);
-        var shoutRunnerService = new ShoutRunnerService(new NoOpShoutRunnerAutomation(), chat, profiles, diagnostics, clock);
+        var shoutRunnerService = new ShoutRunnerService(new NoOpShoutRunnerAutomation(), chat, profiles, diagnostics, clock, new NoOpShoutRunnerRecoveryStore());
         var partyFinderService = new PartyFinderService(new NoOpPartyFinderAutomation(), profiles, clock);
         var library = new FileQuestionSetRepository(Path.Combine(Path.GetTempPath(), "venueos-order-" + Guid.NewGuid()));
         var triviaService = new MairsTriviaService(new MairsTriviaClient(new HttpClient()), profiles, library, diagnostics);
         var raffleService = new VenueRaffleService(new VenueRaffleClient(new HttpClient()), profiles);
-        var bingoService = new VenueBingoService(new VenueBingoClient(new HttpClient()), profiles);
+        var bingoService = new VenueBingoService(new VenueBingoClient(new HttpClient()), profiles, diagnostics, chat);
         var tournamentService = new TournamentControlService(new TournamentControlClient(new HttpClient()), profiles, new TournamentCalloutService(new SchedulerService(clock), chat));
 
         // Registered deliberately out of the expected display order, to prove sorting (not registration order)
@@ -121,5 +122,12 @@ public sealed class ModuleDisplayOrderTests
         public Task<ShoutRunnerTransferOutcome> TravelToWorldAsync(string targetWorld, bool crossDataCenter, CancellationToken token) => Task.FromResult(ShoutRunnerTransferOutcome.Success());
         public Task<string?> TryGetCurrentPlaceNameAsync(CancellationToken token) => Task.FromResult<string?>(null);
         public Task<ShoutRunnerTeleportOutcome> TeleportToDestinationAsync(string destinationName, CancellationToken token) => Task.FromResult(ShoutRunnerTeleportOutcome.Success());
+    }
+
+    private sealed class NoOpShoutRunnerRecoveryStore : IShoutRunnerRecoveryStore
+    {
+        public ShoutRunnerRecoveryJournal? TryLoad(out bool corrupt) { corrupt = false; return null; }
+        public void Save(ShoutRunnerRecoveryJournal journal) { }
+        public void Delete() { }
     }
 }

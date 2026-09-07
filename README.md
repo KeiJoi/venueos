@@ -4,15 +4,15 @@ VenueOS is a [Dalamud](https://dalamud.dev) plugin for Final Fantasy XIV: a sing
 
 ## Modules
 
-**Working, live-tested:** Attendance, Greeter, VIP, ShoutRunner, Party Finder, Mair's Trivia, Mair's Editor.
+**Working, live-tested:** Attendance, Greeter, VIP, ShoutRunner, Party Finder, Mair's Trivia, Mair's Editor, Bingo.
 
-**Under Development — included but disabled by default:** Raffle, Bingo, TournamentControl. These are backend-compatible modules that haven't finished reconstruction or live QA yet. They stay hidden from the Home screen until you explicitly enable them from Settings → Modules, where they're clearly labeled "Under Development."
+**Under Development — included but disabled by default:** Raffle, TournamentControl. These are backend-compatible modules that haven't finished reconstruction or live QA yet. They stay hidden from the Home screen until you explicitly enable them from Settings → Modules, where they're clearly labeled "Under Development." (Bingo's automated payout is a separate, still-experimental convenience feature within an otherwise release-ready module — see the User Manual's Bingo section.)
 
 Each module is a small application inside VenueOS — see [NEW_MODULE_GUIDE.md](NEW_MODULE_GUIDE.md) for the full architecture if you're extending it.
 
 ## User Manual
 
-**[docs/USER_MANUAL.md](docs/USER_MANUAL.md)** — the practical, step-by-step guide for venue operators: installing VenueOS, Venue Profiles, Settings, and full instructions for every working module (ShoutRunner, Attendance, Greeter, VIP, Party Finder, Mair's Trivia, Mair's Editor).
+**[docs/USER_MANUAL.md](docs/USER_MANUAL.md)** — the practical, step-by-step guide for venue operators: installing VenueOS, Venue Profiles, Settings, and full instructions for every working module (ShoutRunner, Attendance, Greeter, VIP, Party Finder, Mair's Trivia, Mair's Editor, Bingo). It's also bundled with the plugin itself and readable offline from VenueOS's Home screen — click the **User Manual** tile, just before Settings.
 
 ## Installing
 

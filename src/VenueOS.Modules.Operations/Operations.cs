@@ -3,7 +3,6 @@ using VenueOS.Services;
 using VenueOS.Venues;
 using VenueOS.Modules.Operations.Raffle;
 using VenueOS.Modules.Operations.Tournament;
-using VenueOS.Modules.Operations.Bingo;
 
 namespace VenueOS.Modules.Operations;
 
@@ -14,11 +13,17 @@ namespace VenueOS.Modules.Operations;
 /// <see cref="VenueAddress"/>/<see cref="AutoDetectVenueAddress"/>/<see cref="TrackingPollIntervalSeconds"/>/
 /// <see cref="ExportDirectory"/>/<see cref="StatsRangeDays"/> restore the donor's Venue Details/tracking/export
 /// configuration that the previous reconstruction pass omitted; venue *identity* is still never duplicated here —
-/// only location/address text and tracking cadence, which the donor kept separate from the venue's name.</summary>
+/// only location/address text and tracking cadence, which the donor kept separate from the venue's name.
+/// <b>Live-verified product correction: Venue Area Type is no longer a field here.</b> It used to be
+/// (<c>AreaMode</c>), a single venue-wide/global toggle edited in Settings — too operationally important to be
+/// buried there, and wrong as a *global* value besides: an operator running one outdoor event must not have that
+/// choice silently apply to every ordinary housing-venue opening afterward. It is now chosen per-opening, right
+/// above "Start New Opening" on Attendance's own Live screen, and snapshotted onto the opening itself
+/// (see <see cref="AttendanceService.ActiveAreaMode"/> and <see cref="IVenueDatabase.StartSession"/>'s persisted
+/// columns) rather than living as a mutable setting at all.</summary>
 public sealed record AttendanceSettings(
     bool LockToOpenTerritory = true,
     bool UseDistanceFilter = true,
-    PresenceAreaMode AreaMode = PresenceAreaMode.FollowOperator,
     float RadiusYalms = 35f,
     int TrackingPollIntervalSeconds = 900,
     string VenueAddress = "",
@@ -50,9 +55,25 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
     public IReadOnlyDictionary<string, PlayerSnapshot> Guests => guests;
     public long? CurrentSessionId { get; private set; }
     /// <summary>Captured when the session starts if the corresponding <see cref="AttendanceSettings"/> toggle asks
-    /// for it — a runtime value, not a saved setting (see the type-level remark above).</summary>
+    /// for it — a runtime value, not a saved setting (see the type-level remark above), but (live-verified
+    /// correction) persisted onto the opening itself in <see cref="IVenueDatabase"/> so <see cref="ResumeSession"/>
+    /// restores the exact value the opening actually started with, rather than re-capturing a fresh one from
+    /// wherever the operator happens to be standing at resume time.</summary>
     public uint? ActiveTerritoryLock { get; private set; }
+    /// <summary>The fixed origin an Outdoor-mode opening's radius stays centered on for its entire lifetime —
+    /// persisted (see <see cref="ActiveTerritoryLock"/>'s remark) so a plugin reload/crash followed by
+    /// <see cref="ResumeSession"/> restores the *original* origin, never a new one from the operator's current,
+    /// possibly different, position.</summary>
     public System.Numerics.Vector3? ActiveFixedCenter { get; private set; }
+    /// <summary>Live-verified product correction: which area mode the *currently active opening* is actually using
+    /// — chosen once when it started (see <see cref="StartSession"/>) or restored from storage on
+    /// <see cref="ResumeSession"/>, snapshotted for that opening's entire lifetime. This is deliberately not a
+    /// <see cref="AttendanceSettings"/> field any more (a single global/venue-wide value was the actual product bug:
+    /// an operator's one-off outdoor event must never silently leak into the next ordinary housing-venue opening).
+    /// Defaults to <see cref="PresenceAreaMode.FollowOperator"/> ("Normal") whenever no opening is active — the safe
+    /// value for the shared continuous presence scan (VIP still needs guest detection with no session open) and for
+    /// what the *next* opening will use unless the operator explicitly picks Outdoor before starting it.</summary>
+    public PresenceAreaMode ActiveAreaMode { get; private set; } = PresenceAreaMode.FollowOperator;
     public event Action<GuestIdentity>? GuestArrived;
     public event Action<GuestIdentity>? GuestDeparted;
     /// <summary>Fires once per calendar night per guest, backed by <see cref="IVenueDatabase.MarkPresent"/>'s
@@ -107,7 +128,7 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
     /// stays open/resumable in its own venue's history until the operator explicitly returns and resumes it.</summary>
     public void DetachSession()
     {
-        CurrentSessionId = null; ActiveTerritoryLock = null; ActiveFixedCenter = null; guests.Clear();
+        CurrentSessionId = null; ActiveTerritoryLock = null; ActiveFixedCenter = null; ActiveAreaMode = PresenceAreaMode.FollowOperator; guests.Clear();
         nextSampleAt = DateTimeOffset.MinValue; lastSampleBucket = DateTimeOffset.MinValue;
         autoGreetEligibilityConsumed.Clear();
     }
@@ -124,23 +145,36 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
     /// VIP recognition is decided entirely inside <see cref="GreetingCoordinator.TryGreet"/>, reached only through
     /// <see cref="AutomaticGreetingEligible"/>, so it is covered by the same exclusion, not a separate one. Only a
     /// genuine arrival after the opening is already active can automatically enter the greeting pipeline; a seeded
-    /// occupant remains reachable only through the operator's manual Greet/Mark Greeted actions.</summary>
-    public void StartSession(bool lockToOpenTerritory, bool captureFixedCenter, DateTimeOffset now)
+    /// occupant remains reachable only through the operator's manual Greet/Mark Greeted actions.
+    /// <paramref name="areaMode"/> is the Venue Area Type the operator picked on the Live screen immediately before
+    /// pressing Start — it is snapshotted for this opening's entire lifetime (see <see cref="ActiveAreaMode"/>) and
+    /// persisted onto the opening itself, along with the resulting fixed origin if applicable, so
+    /// <see cref="ResumeSession"/> can restore exactly this, never the *next* opening's own default.</summary>
+    public void StartSession(bool lockToOpenTerritory, PresenceAreaMode areaMode, DateTimeOffset now)
     {
-        CurrentSessionId = database.StartSession(venueId, now);
-        ActiveTerritoryLock = lockToOpenTerritory ? currentTerritory?.Invoke() : null;
-        ActiveFixedCenter = captureFixedCenter ? currentPosition?.Invoke() : null;
+        var territoryLock = lockToOpenTerritory ? currentTerritory?.Invoke() : null;
+        var fixedCenter = areaMode == PresenceAreaMode.FixedPoint ? currentPosition?.Invoke() : null;
+        CurrentSessionId = database.StartSession(venueId, now, areaMode, territoryLock, fixedCenter);
+        ActiveTerritoryLock = territoryLock;
+        ActiveFixedCenter = fixedCenter;
+        ActiveAreaMode = areaMode;
         guests.Clear(); nextSampleAt = DateTimeOffset.MinValue; lastSampleBucket = DateTimeOffset.MinValue;
         autoGreetEligibilityConsumed.Clear();
         presence.ResetKnownPresence(); SessionOpened?.Invoke();
     }
 
-    public bool ResumeSession(long sessionId, bool lockToOpenTerritory, bool captureFixedCenter)
+    /// <summary>Restores the opening exactly as it was — its saved <see cref="ActiveAreaMode"/>, territory lock, and
+    /// (for Outdoor) fixed origin all come from what <see cref="StartSession"/> persisted for this specific opening,
+    /// never re-captured from wherever the operator happens to be standing right now. There is deliberately no
+    /// "area mode"/"lock to territory" parameter here any more — resuming is not a second place to choose those.</summary>
+    public bool ResumeSession(long sessionId)
     {
-        if (!database.ResumeSession(venueId, sessionId)) return false;
+        var record = database.GetSession(venueId, sessionId);
+        if (record is null || !database.ResumeSession(venueId, sessionId)) return false;
         CurrentSessionId = sessionId;
-        ActiveTerritoryLock = lockToOpenTerritory ? currentTerritory?.Invoke() : null;
-        ActiveFixedCenter = captureFixedCenter ? currentPosition?.Invoke() : null;
+        ActiveAreaMode = record.AreaMode;
+        ActiveTerritoryLock = record.TerritoryLock;
+        ActiveFixedCenter = record.FixedCenter;
         guests.Clear();
         autoGreetEligibilityConsumed.Clear();
         presence.ResetKnownPresence(); SessionOpened?.Invoke();
@@ -150,7 +184,7 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
     public bool PauseSession(DateTimeOffset now)
     {
         if (CurrentSessionId is not long id || !database.PauseSession(venueId, id, now)) return false;
-        CurrentSessionId = null; ActiveTerritoryLock = null; ActiveFixedCenter = null; guests.Clear();
+        CurrentSessionId = null; ActiveTerritoryLock = null; ActiveFixedCenter = null; ActiveAreaMode = PresenceAreaMode.FollowOperator; guests.Clear();
         return true;
     }
 
@@ -159,7 +193,7 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
     public bool CloseSession(long sessionId, DateTimeOffset now)
     {
         if (!database.CloseSession(venueId, sessionId, now)) return false;
-        if (CurrentSessionId == sessionId) { CurrentSessionId = null; ActiveTerritoryLock = null; ActiveFixedCenter = null; guests.Clear(); }
+        if (CurrentSessionId == sessionId) { CurrentSessionId = null; ActiveTerritoryLock = null; ActiveFixedCenter = null; ActiveAreaMode = PresenceAreaMode.FollowOperator; guests.Clear(); }
         return true;
     }
 
@@ -594,7 +628,7 @@ public sealed class AttendanceModule(AttendanceService attendance, PresenceServi
     public bool IsEnabled { get; set; } = true;
     private AttendanceSettings settings = new();
     public AttendanceSettings Settings => settings;
-    public PresencePolicy Policy => new(attendance.ActiveTerritoryLock, attendance.ActiveFixedCenter, settings.UseDistanceFilter ? settings.RadiusYalms : null, settings.AreaMode);
+    public PresencePolicy Policy => new(attendance.ActiveTerritoryLock, attendance.ActiveFixedCenter, settings.UseDistanceFilter ? settings.RadiusYalms : null, attendance.ActiveAreaMode);
     public Task InitializeAsync(ModuleContext c, CancellationToken t) { attendance.Attach(); return Task.CompletedTask; }
     public Task OnVenueChangedAsync(VenueContext c, CancellationToken t)
     {
@@ -719,24 +753,6 @@ public sealed class TournamentControlService(TournamentControlClient client, Ven
 public sealed class TournamentControlModule(TournamentControlService tournament, Action? draw = null) : IVenueModule
 { public ModuleDescriptor Descriptor { get; } = new("games.tournament", "TournamentControl", "Backend-compatible tournament bracket operations.", "trophy", UnderDevelopment: true, DisplayOrder: 10); public bool IsEnabled { get; set; } = false; public Task InitializeAsync(ModuleContext c, CancellationToken t) => Task.CompletedTask; public Task OnVenueChangedAsync(VenueContext c, CancellationToken t) { tournament.Load(c.VenueId); return Task.CompletedTask; } public void Tick(DateTimeOffset now) { } public void Draw() => draw?.Invoke(); public void DrawSettings() => draw?.Invoke(); public ValueTask DisposeAsync() { tournament.Load(Guid.Empty); return ValueTask.CompletedTask; } }
 
-public sealed record VenueBingoSettings(BingoConnectionSettings Connection, string RoomCode, string VenueName, string GameType, string Letters, int CostPerCard, int StartingPot, double PrizePercentage, BingoColors Colors, int PollSeconds = 5)
-{ public static VenueBingoSettings Default() => new(new(), "", "", "Single Line", "BINGO", 0, 0, 100, new()); }
-public sealed record BingoDashboard(bool IsConfigured, bool IsConnected, bool IsGameActive, int PlayerCount, int NumbersCalled, string? RoomCode, string? Status);
-public sealed class VenueBingoService(VenueBingoClient client, VenueProfileService profiles)
-{
-    private CancellationTokenSource contextCancellation = new(); private Guid venueId; private DateTimeOffset nextPoll; private bool polling;
-    public VenueBingoSettings Settings { get; private set; } = VenueBingoSettings.Default(); public BingoRoomState? RoomState { get; private set; } public string? Status { get; private set; }
-    public BingoDashboard Dashboard => new(!string.IsNullOrWhiteSpace(Settings.Connection.ServerUrl) && !string.IsNullOrWhiteSpace(Settings.RoomCode), RoomState is not null, RoomState?.CalledNumbers.Count > 0, RoomState?.Players.Count ?? 0, RoomState?.CalledNumbers.Count ?? 0, Settings.RoomCode, Status);
-    public void Load(Guid nextVenue) { contextCancellation.Cancel(); contextCancellation.Dispose(); contextCancellation = new(); venueId = nextVenue; RoomState = null; Status = null; polling = false; Settings = profiles.GetModuleConfig(venueId, "games.bingo", 1, VenueBingoSettings.Default); }
-    public void Configure(VenueBingoSettings settings) { Settings = settings; Save(); }
-    public async Task<BingoResult<BingoRoomState>> PollAsync() { var result = await client.GetRoomStateAsync(Settings.Connection, Settings.RoomCode, contextCancellation.Token).ConfigureAwait(false); if (result.Success) { RoomState = result.Value; Status = "Connected"; } else Status = result.Error; return result; }
-    public async Task<BingoResult<BingoHostSyncResponse>> SyncAsync(bool clearBingoState = false)
-    {
-        var state = RoomState; var request = new BingoHostSyncRequest(Settings.RoomCode, Settings.Connection.RoomKey ?? "", clearBingoState, state?.CalledNumbers ?? [], state?.AllowedCards ?? [], state?.Players ?? [], Settings.CostPerCard, Settings.StartingPot, Settings.PrizePercentage, Settings.GameType, null, Settings.Letters, Settings.VenueName, Settings.Colors.Bg, Settings.Colors.Card, Settings.Colors.Header, Settings.Colors.Text, Settings.Colors.Daub, Settings.Colors.Ball); var result = await client.HostSyncAsync(Settings.Connection, request, contextCancellation.Token).ConfigureAwait(false); Status = result.Success ? "Host sync complete" : result.Error; return result;
-    }
-    public async Task<BingoResult<BingoCallNumberResponse>> CallNumberAsync(int number) { var result = await client.CallNumberAsync(Settings.Connection, Settings.RoomCode, number, contextCancellation.Token).ConfigureAwait(false); if (result.Success && RoomState is not null) RoomState = RoomState with { CalledNumbers = result.Value!.CalledNumbers }; Status = result.Success ? $"Called {number}" : result.Error; return result; }
-    public void Tick(DateTimeOffset now) { if (polling || string.IsNullOrWhiteSpace(Settings.RoomCode) || now < nextPoll) return; nextPoll = now.AddSeconds(Math.Clamp(Settings.PollSeconds, 2, 60)); polling = true; _ = PollAsync().ContinueWith(_ => polling = false, TaskScheduler.Default); }
-    private void Save() => profiles.SaveModuleConfig(venueId, "games.bingo", 1, Settings);
-}
-public sealed class VenueBingoModule(VenueBingoService bingo, Action? draw = null) : IVenueModule
-{ public ModuleDescriptor Descriptor { get; } = new("games.bingo", "Bingo", "Backend-compatible Bingo host operations; payout automation deferred.", "grid", UnderDevelopment: true, DisplayOrder: 8); public bool IsEnabled { get; set; } = false; public Task InitializeAsync(ModuleContext c, CancellationToken t) => Task.CompletedTask; public Task OnVenueChangedAsync(VenueContext c, CancellationToken t) { bingo.Load(c.VenueId); return Task.CompletedTask; } public void Tick(DateTimeOffset now) => bingo.Tick(now); public void Draw() => draw?.Invoke(); public void DrawSettings() => draw?.Invoke(); public ValueTask DisposeAsync() { bingo.Load(Guid.Empty); return ValueTask.CompletedTask; } }
+// VenueBingoSettings/VenueBingoService/VenueBingoModule/BingoDashboard moved to
+// VenueOS.Modules.Operations.Bingo.VenueBingoService.cs — Bingo, like Party Finder/Trivia/Tournament, gets its own
+// file/folder rather than growing this shared file further (NEW_MODULE_GUIDE.md §21).
