@@ -1,6 +1,17 @@
-# VenueOS 0.2.0 release
+# VenueOS 0.2.1 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.2.1 hotfix
+
+The built-in User Manual failed to load on a live installed plugin ("User Manual could not be loaded.") even
+though `USER_MANUAL.md` was genuinely inside the 0.2.0 release ZIP. Root cause: `typeof(Plugin).Assembly.Location`
+is not reliable for a Dalamud-installed plugin — Dalamud does not necessarily load the plugin assembly the way a
+normal `Assembly.LoadFrom(path)` would, so that property can be empty or point somewhere other than the real
+installed plugin folder. Fixed by resolving the manual's directory from
+`IDalamudPluginInterface.AssemblyLocation` first (Dalamud's own officially-documented, tracked DLL path), with the
+reflection-based path kept only as a last-resort fallback. See `UserManualLoader.cs`'s doc comment for the full
+reasoning. No packaging change was needed — `USER_MANUAL.md` was already at the correct flat path in the ZIP.
 
 ## 0.2.0 highlights
 

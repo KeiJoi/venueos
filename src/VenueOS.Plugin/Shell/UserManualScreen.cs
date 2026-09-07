@@ -18,8 +18,10 @@ namespace VenueOS.Plugin.Shell;
 /// used elsewhere in VenueOS (ShoutRunner's Copy Terminal, Party Finder's Copy Link).</summary>
 internal sealed class UserManualScreen
 {
-    private readonly bool loaded;
-    private readonly IReadOnlyList<MarkdownBlock> blocks;
+    private readonly Func<UserManualLoadResult> load;
+    private readonly DiagnosticsService diagnostics;
+    private bool loaded;
+    private IReadOnlyList<MarkdownBlock> blocks = [];
     private readonly List<(string Title, int BlockIndex)> toc = [];
     private readonly Dictionary<string, int> slugToBlockIndex = new(StringComparer.OrdinalIgnoreCase);
 
@@ -30,10 +32,23 @@ internal sealed class UserManualScreen
     private string? copiedLinkStatus;
     private double copiedLinkStatusUntil;
 
-    public UserManualScreen(string? markdown)
+    /// <summary><paramref name="load"/> is called once here and again only when the operator explicitly presses
+    /// "Reload Manual" — never from <see cref="Draw"/>'s per-frame path — so a load failure is recorded to
+    /// Diagnostics exactly once per attempt, not spammed every frame.</summary>
+    public UserManualScreen(Func<UserManualLoadResult> load, DiagnosticsService diagnostics)
     {
-        loaded = markdown is not null;
-        blocks = ManualMarkdown.Parse(markdown);
+        this.load = load;
+        this.diagnostics = diagnostics;
+        Reload();
+    }
+
+    private void Reload()
+    {
+        var result = load();
+        loaded = result.Markdown is not null;
+        blocks = ManualMarkdown.Parse(result.Markdown);
+        toc.Clear();
+        slugToBlockIndex.Clear();
         for (var i = 0; i < blocks.Count; i++)
         {
             var block = blocks[i];
@@ -41,11 +56,26 @@ internal sealed class UserManualScreen
             slugToBlockIndex.TryAdd(ManualMarkdown.Slugify(block.PlainText), i);
             if (block.HeadingLevel == 2) toc.Add((block.PlainText, i));
         }
+        if (!loaded)
+        {
+            var detail = string.Join(" | ", result.Candidates.Select(c => $"{c.Directory} ({(c.FailureReason ?? "unknown")})"));
+            diagnostics.RecordFailure($"manual: User Manual could not be loaded. Checked: {detail}");
+        }
     }
 
     public void Draw(VenueTheme theme)
     {
-        if (!loaded || blocks.Count == 0) { UiKit.WarningState(theme, "User Manual could not be loaded."); return; }
+        if (!loaded || blocks.Count == 0)
+        {
+            UiKit.WarningState(theme, "User Manual could not be loaded.");
+            ImGui.Spacing();
+            if (UiKit.GhostButton(theme, "Reload Manual")) Reload();
+            ImGui.Spacing();
+            ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary));
+            ImGui.TextWrapped("Check Settings → Diagnostics for exactly which location(s) were checked.");
+            ImGui.PopStyleColor();
+            return;
+        }
 
         DrawToolbar(theme);
         ImGui.Spacing();

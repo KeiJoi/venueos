@@ -85,8 +85,19 @@ public sealed class Plugin : IDalamudPlugin
         // it from this assembly's own AssemblyVersion means it can never drift from what was actually built/shipped.
         var venueOsVersion = typeof(Plugin).Assembly.GetName().Version?.ToString(3) ?? "unknown";
         diagnostics = new DiagnosticsService(modules, venues, clock, venueOsVersion);
-        var pluginDirectory = System.IO.Path.GetDirectoryName(typeof(Plugin).Assembly.Location);
-        manualScreen = new Shell.UserManualScreen(pluginDirectory is null ? null : VenueOS.Services.UserManualLoader.Load(pluginDirectory));
+        // USER_MANUAL.md is copied next to VenueOS.dll (see VenueOS.Plugin.csproj's Include+Link content item and
+        // scripts/Package-Release.ps1), so it lives wherever that DLL actually is on disk. Live-verified bug:
+        // typeof(Plugin).Assembly.Location is NOT reliable for a Dalamud-installed plugin — Dalamud does not
+        // necessarily load the plugin assembly the way a normal LoadFrom(path) would, so that property can be
+        // empty or point somewhere other than the real installed plugin folder. IDalamudPluginInterface.
+        // AssemblyLocation is Dalamud's own officially-documented answer to exactly this problem (it's backed by
+        // the DllFile path Dalamud itself tracked when it loaded the plugin), so it's tried first; the reflection-
+        // based path is kept only as a last-resort fallback for a context where AssemblyLocation is somehow unset.
+        // Both are single, specific, justified directories — never a filesystem search.
+        var candidateDirectories = new List<string?> { PluginInterface.AssemblyLocation.DirectoryName };
+        var reflectionDirectory = System.IO.Path.GetDirectoryName(typeof(Plugin).Assembly.Location);
+        if (!string.Equals(reflectionDirectory, candidateDirectories[0], StringComparison.OrdinalIgnoreCase)) candidateDirectories.Add(reflectionDirectory);
+        manualScreen = new Shell.UserManualScreen(() => VenueOS.Services.UserManualLoader.Load(candidateDirectories), diagnostics);
         // Attendance is the single authoritative source of greeted state (see AttendanceService.IsGreeted/MarkGreeted's
         // doc comments) — Greeter only queries it and reports completions back to it, never deciding or storing the
         // boolean itself. AttendanceService already takes an optional GreeterService reference (constructed second,
