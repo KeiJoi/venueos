@@ -1,6 +1,19 @@
-# VenueOS 0.2.1 release
+# VenueOS 0.2.2 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.2.2 hotfix
+
+Live QA on 0.2.1 found the built-in User Manual reader (now loading correctly) didn't word-wrap: long prose,
+table cells, and list/blockquote text ran off the right edge of the pane instead of wrapping. Root cause: the
+wrap decision read `ImGui.GetCursorPosX()` to track "how far along the current line is", but every ImGui item —
+including the `Dummy` calls used to place each word — resets the cursor to the window's left margin on the next
+line regardless of whether that item was itself placed via `SameLine()`. That made the wrap check compare "left
+margin + one word's width" against the right edge, which is almost always false, so every word kept chaining
+onto one ever-widening line via `SameLine()` (which uses ImGui's own internal previous-line tracking, unrelated
+to `GetCursorPosX()`). Fixed by extracting a pure, ImGui-free word-wrap algorithm (`ManualTextLayout`) that
+tracks line width itself instead of trusting ImGui cursor state — the renderer now just draws whatever line/piece
+layout that produces. See `ManualTextLayout.cs`'s doc comment for the full reasoning.
 
 ## 0.2.1 hotfix
 

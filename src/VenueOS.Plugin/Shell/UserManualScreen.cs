@@ -240,29 +240,34 @@ internal sealed class UserManualScreen
     /// <summary>The one inline-content word-wrap renderer every block kind (paragraphs, list items, table cells,
     /// blockquotes) funnels through. Manually flows word-by-word rather than relying on <c>ImGui.TextWrapped</c>
     /// because a single wrapped line here can mix plain/bold/code/link runs, which ImGui's own text wrapping has no
-    /// concept of.</summary>
+    /// concept of. The wrap decision itself is delegated entirely to <see cref="ManualTextLayout"/> (pure, no ImGui
+    /// cursor state) — this method only draws whatever line/piece layout that produces. See
+    /// <see cref="ManualTextLayout"/>'s doc comment for why the previous version, which tried to track "how far
+    /// along the line am I" via <c>ImGui.GetCursorPosX()</c>, never actually wrapped.</summary>
     private void DrawRuns(VenueTheme theme, IReadOnlyList<MarkdownInlineRun> runs, float? maxWidth = null)
     {
         var avail = maxWidth ?? ImGui.GetContentRegionAvail().X;
         var startX = ImGui.GetCursorPosX();
         var spaceWidth = ImGui.CalcTextSize(" ").X;
-        var firstOnLine = true;
-        foreach (var run in runs)
+
+        var words = new List<(string Text, int RunIndex)>();
+        for (var i = 0; i < runs.Count; i++)
+            foreach (var word in runs[i].Text.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                words.Add((word, i));
+
+        var lines = ManualTextLayout.Layout(words, avail, spaceWidth, w => ImGui.CalcTextSize(w).X);
+        if (lines.Count == 0) { ImGui.NewLine(); return; } // a blank line/paragraph still consumes vertical space
+
+        foreach (var line in lines)
         {
-            if (run.Text.Length == 0) continue;
-            foreach (var word in run.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            ImGui.SetCursorPosX(startX);
+            for (var i = 0; i < line.Pieces.Count; i++)
             {
-                var size = ImGui.CalcTextSize(word);
-                if (!firstOnLine)
-                {
-                    if (ImGui.GetCursorPosX() + spaceWidth + size.X > startX + avail) { ImGui.NewLine(); ImGui.SetCursorPosX(startX); firstOnLine = true; }
-                    else ImGui.SameLine(0, spaceWidth);
-                }
-                DrawWord(theme, word, run);
-                firstOnLine = false;
+                if (i > 0) ImGui.SameLine(0, spaceWidth);
+                var piece = line.Pieces[i];
+                DrawWord(theme, piece.Text, runs[piece.RunIndex]);
             }
         }
-        ImGui.NewLine();
     }
 
     private void DrawWord(VenueTheme theme, string word, MarkdownInlineRun run)
