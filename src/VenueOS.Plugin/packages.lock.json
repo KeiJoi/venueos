@@ -124,6 +124,7 @@
       "venueos.modules.operations": {
         "type": "Project",
         "dependencies": {
+          "ClosedXML": "[0.105.1, )",
           "VenueOS.Core": "[1.0.0, )",
           "VenueOS.Services": "[1.0.0, )",
           "VenueOS.Venues": "[1.0.0, )"

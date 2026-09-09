@@ -25,4 +25,4 @@ public sealed class ExampleModule(VenueProfileService profiles) : IVenueModule {
 }
 ```
 
-The module owns its DTO, defaulting, validation and schema migration. Use `PresenceService`, `ChatCommandService`, `SchedulerService`, `NotificationService` and `VenueHttpClientFactory` rather than creating competing queues/scanners. Backend modules should add typed protocol clients next to their module, never a generic backend abstraction.
+The module owns its DTO, defaulting, validation and schema migration. Use `PresenceService`, `ChatCommandService`, and `SchedulerService` rather than creating competing queues/scanners (`NotificationService` still exists but has no renderer — see `NEW_MODULE_GUIDE.md` §21/§36 for operator-visible feedback instead). Backend modules should add typed protocol clients next to their module, never a generic backend abstraction — construct `HttpClient` directly, matching every current backend module; `VenueHttpClientFactory` has no callers anywhere in the codebase (see the note above).

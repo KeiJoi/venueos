@@ -8,6 +8,13 @@ bottom before authorizing a public push/tag/release; nothing here authorizes pus
 > The module readiness matrix below is updated to match; the rest of this document is otherwise the historical
 > record of the 0.1.0 pass. See `RELEASE.md`'s "0.2.0 highlights" for the full list of what changed.
 
+> **0.3.0 update:** Raffle and Brackets (formerly TournamentControl) completed reconstruction and live QA and are
+> now release-ready (enabled by default, no longer "Under Development"); Block Letters, Giveaways, and Macro are
+> three new production modules added in this release. **Every module VenueOS ships is now release-ready and
+> enabled by default** — the module readiness matrix below is historical (it reflects the 0.2.0 state) and is not
+> updated line-by-line for this release; see `docs/RELEASE_PREPARATION.md` for the current, authoritative
+> per-module status and `RELEASE.md`'s "0.3.0 highlights" for what changed.
+
 ## Module readiness matrix
 
 | Module | Stable ID | Display Name | Default enabled (fresh install) | Shown in Applications when disabled | Settings entry | Release status | Live tested? | Notes |

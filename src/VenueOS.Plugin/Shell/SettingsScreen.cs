@@ -35,7 +35,7 @@ internal sealed class SettingsScreen
     {
         venuePage = new VenueSettingsPage(venues, switchCoordinator);
         appearancePage = new AppearanceSettingsPage(venues);
-        modulesPage = new ModulesSettingsPage(modules, diagnostics, globalSettings);
+        modulesPage = new ModulesSettingsPage(modules, diagnostics, globalSettings, venues);
         generalPage = new GeneralSettingsPage(diagnostics, globalSettings);
         diagnosticsPage = new DiagnosticsSettingsPage(modules, diagnostics);
     }

@@ -18,13 +18,19 @@ using VenueOS.Services;
 using VenueOS.UI;
 using VenueOS.Venues;
 using VenueOS.Modules.Operations;
+using VenueOS.Modules.Operations.BlockLetters;
+using VenueOS.Plugin.BlockLetters;
 using VenueOS.Modules.Operations.MairsEditor;
 using VenueOS.Modules.Operations.PartyFinder;
 using VenueOS.Modules.Operations.QuestionLibrary;
 using VenueOS.Modules.Operations.Raffle;
+using VenueOS.Plugin.Raffle;
 using VenueOS.Modules.Operations.Trivia;
 using VenueOS.Modules.Operations.Tournament;
 using VenueOS.Modules.Operations.Bingo;
+using VenueOS.Modules.Operations.Giveaways;
+using VenueOS.Modules.Operations.Macro;
+using VenueOS.Plugin.Macro;
 using VenueOS.Modules.Operations.ShoutRunner;
 using VenueOS.Plugin.Shell;
 
@@ -44,9 +50,16 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] private static IDataManager DataManager { get; set; } = null!;
     [PluginService] private static IPluginLog Log { get; set; } = null!;
     [PluginService] private static Dalamud.Plugin.Services.ICondition Condition { get; set; } = null!;
+    [PluginService] private static Dalamud.Plugin.Services.ITextureProvider TextureProvider { get; set; } = null!;
     private const string CommandName = "/venueos";
     private readonly ModuleHost modules = new(); private readonly VenueProfileService venues; private readonly VenueShell shell; private readonly NotificationService notifications; private readonly SchedulerService scheduler;
     private readonly PresenceService presence; private readonly ChatCommandService chat; private readonly AttendanceModule attendance; private readonly VenueOperationsDashboard dashboard; private readonly DiagnosticsService diagnostics; private readonly SettingsScreen settingsScreen; private readonly ModuleWindowManager windowManager; private readonly GlobalSettingsService globalSettings; private readonly SqliteVenueDatabase venueDatabase; private readonly VenueOS.Plugin.PartyFinder.PartyFinderAutomationService partyFinderAutomation; private readonly VenueOS.Plugin.ShoutRunner.ShoutRunnerAutomationService shoutRunnerAutomation; private readonly VenueOS.Plugin.Bingo.BingoPayoutAutomationService bingoPayoutAutomation; private readonly Shell.VenueSwitchCoordinator switchCoordinator;
+    // Live-QA correction: Block Letters' palette must render the actual FFXIV glyph, not its hex codepoint — this is
+    // the game's own AXIS font (auto-translate/symbol glyphs are part of it, same font FFXIV itself uses to display
+    // this text), accessed through Dalamud's own font-atlas API rather than any bundled/custom font asset. One
+    // handle is created here and shared by every palette button; disposed once in Dispose() like every other
+    // long-lived resource this class owns.
+    private readonly Dalamud.Interface.ManagedFontAtlas.IFontHandle blockLettersGlyphFont;
     // Live-QA correction (detached-window lifecycle): drawn directly from this class's own Draw() below, gated
     // only on bingoModule.IsEnabled — NOT nested inside VenueBingoOperatorPanel.Draw() any more, so they survive
     // the main Bingo window/tablet being closed or navigated away from. See VenueBingoOperatorPanel's doc comment.
@@ -54,6 +67,18 @@ public sealed class Plugin : IDalamudPlugin
     private readonly VenueOS.Plugin.Bingo.BingoPlayerCardViewerWindow bingoPlayerCardViewerWindow;
     private readonly VenueOS.Plugin.Bingo.BingoCallAlertWindow bingoCallAlertWindow;
     private readonly VenueOS.Modules.Operations.Bingo.VenueBingoModule bingoModule;
+    // Giveaways: a purely local module (no backend), following the same "own detached tracker window survives the
+    // main panel closing" precedent as Bingo's auxiliary windows above — see Plugin.Draw for how it's kept rendering
+    // independently of the main Giveaways window/tablet being open.
+    private readonly VenueOS.Modules.Operations.Giveaways.GiveawaysModule giveawaysModule;
+    private readonly VenueOS.Plugin.Giveaways.GiveawaysOperatorPanel giveawaysPanel;
+    private readonly VenueOS.Plugin.Giveaways.GiveawaysRollChatAdapter giveawaysRollChatAdapter;
+    // Macro: purely local (no backend — NEW_MODULE_GUIDE.md §34a). The faux hotbars are HUD overlays, NOT detached
+    // module windows — rendered directly from Plugin.Draw, gated only on macroModule.IsEnabled, independently of
+    // the main tablet/Macro screen being open, mirroring Bingo's/Giveaways' own auxiliary-window precedent.
+    private readonly VenueOS.Modules.Operations.Macro.MacroService macroService;
+    private readonly VenueOS.Modules.Operations.Macro.MacroModule macroModule;
+    private readonly VenueOS.Plugin.Macro.MacroHotbarRenderer macroHotbarRenderer;
     // The built-in offline manual — reads the bundled USER_MANUAL.md copy (see UserManualLoader's doc comment for
     // why that file, not this class, is the single source of truth) once at construction; a missing/unreadable file
     // renders a plain warning inside the screen itself rather than failing plugin construction.
@@ -121,13 +146,19 @@ public sealed class Plugin : IDalamudPlugin
         // atomic-write guarantee (same temp-file-then-move pattern already proven by FileQuestionSetRepository).
         var shoutRunnerRecoveryStore = new FileShoutRunnerRecoveryStore(PluginInterface.ConfigDirectory.FullName);
         var shoutRunnerService = new ShoutRunnerService(shoutRunnerAutomation, chat, venues, diagnostics, clock, shoutRunnerRecoveryStore);
-        var raffleService = new VenueRaffleService(new VenueRaffleClient(new HttpClient { Timeout = TimeSpan.FromSeconds(15) }), venues);
+        var raffleService = new VenueRaffleService(new VenueRaffleClient(new HttpClient { Timeout = TimeSpan.FromSeconds(15) }), venues, diagnostics);
         // The canonical question library is VenueOS-wide (not per-venue) and independent of either Trivia's or
         // Editor's enabled state — constructed once here, exactly like venueDatabase above.
         var questionLibrary = new FileQuestionSetRepository(System.IO.Path.Combine(PluginInterface.ConfigDirectory.FullName, "VenueOS", "question-sets"));
         var triviaService = new MairsTriviaService(new MairsTriviaClient(new HttpClient { Timeout = TimeSpan.FromSeconds(15) }), venues, questionLibrary, diagnostics);
         var editorService = new MairsEditorService(questionLibrary, id => triviaService.ActiveSourceSetIds.Contains(id));
-        var tournamentService = new TournamentControlService(new TournamentControlClient(new HttpClient { Timeout = TimeSpan.FromSeconds(10) }), venues, new TournamentCalloutService(scheduler, chat));
+        var tournamentService = new TournamentControlService(new TournamentControlClient(new HttpClient { Timeout = TimeSpan.FromSeconds(10) }), venues, new TournamentCalloutService(scheduler, chat), diagnostics);
+        // Block Letters: a purely local utility (no backend, no game-state reads) — its only state is the per-venue
+        // default destination (NEW_MODULE_GUIDE.md §34a), so it needs nothing beyond VenueProfileService.
+        var blockLettersService = new BlockLettersService(venues);
+        // Axis18 — legible at the palette's button size; the same family FFXIV itself renders chat/UI text in, so
+        // it carries the auto-translate/symbol Private Use Area glyphs this module's whole catalog lives in.
+        blockLettersGlyphFont = PluginInterface.UiBuilder.FontAtlas.NewGameFontHandle(new Dalamud.Interface.GameFonts.GameFontStyle(Dalamud.Interface.GameFonts.GameFontFamilyAndSize.Axis18));
         // Bingo: VenueOS-owned client + service (Modules.Operations/Bingo, per NEW_MODULE_GUIDE.md §21/§33) and the
         // unsafe in-game payout-trade automation engine (VenueOS.Plugin.Bingo.BingoPayoutAutomationService),
         // mirroring exactly how Party Finder's automation is wired above — see that engine's own doc comment for
@@ -137,6 +168,19 @@ public sealed class Plugin : IDalamudPlugin
         // engine (VenueOS.Plugin.PartyFinder.PartyFinderAutomationService) depends only on VenueOS's own Dalamud
         // service instances and DiagnosticsService — never the donor's static Service locator or PluginConfiguration.
         partyFinderAutomation = new VenueOS.Plugin.PartyFinder.PartyFinderAutomationService(ClientState, Log, diagnostics); var partyFinderService = new PartyFinderService(partyFinderAutomation, venues, clock);
+        // Giveaways: purely local (no backend, no shared/other-module state — NEW_MODULE_GUIDE.md §34a), so it needs
+        // nothing beyond the shared SchedulerService/ChatCommandService/VenueProfileService every other timed-
+        // announcement module already uses (mirrors TournamentCalloutService's own Scheduler+Chat composition).
+        var giveawayService = new GiveawayService(scheduler, chat, venues, clock);
+        // Macro: purely local (no backend, no shared/other-module state — NEW_MODULE_GUIDE.md §34a). The
+        // action-readiness probe is the one unsafe/FFXIVClientStructs boundary this module has (NEW_MODULE_GUIDE.md
+        // §30) — see DalamudActionReadyProbe's doc comment for the exact researched game-state signals it reads.
+        var macroActionReadyProbe = new VenueOS.Plugin.Macro.DalamudActionReadyProbe(ObjectTable, Condition);
+        macroService = new VenueOS.Modules.Operations.Macro.MacroService(scheduler, chat, venues, macroActionReadyProbe, diagnostics);
+        var macroIconPicker = new VenueOS.Plugin.Macro.MacroIconPicker(TextureProvider, DataManager);
+        macroHotbarRenderer = new VenueOS.Plugin.Macro.MacroHotbarRenderer(macroService, TextureProvider);
+        var macroPanel = new VenueOS.Plugin.Macro.MacroOperatorPanel(macroService, venues, macroIconPicker, macroHotbarRenderer, TextureProvider);
+        macroModule = new VenueOS.Modules.Operations.Macro.MacroModule(macroService, macroPanel.Draw, macroPanel.DrawSettings);
         // The ONE automatic-arrival trigger — for VIP and non-VIP guests alike. A dual-path design (this event plus
         // a second, independent GreetingCoordinator subscription to PresenceService.Arrived for VIP arrivals) used
         // to exist here and was a live-verified bug this consolidation fixed: the two event chains raced, and a
@@ -163,7 +207,7 @@ public sealed class Plugin : IDalamudPlugin
         // and AutomaticGreetingEligible (see PresenceService.ResetKnownPresence's doc comment), so no further reset
         // is needed here now that GreetingCoordinator has no arrival-idempotence state of its own.
         attendanceService.SessionOpened += () => presence.ResetKnownPresence();
-        var attendancePanel = new AttendanceOperatorPanel(attendanceService, venues, exportService, coordinator, addressProvider, TryTargetVisitor); var greeterPanel = new GreeterOperatorPanel(greeterService, venues, attendanceService); var vipPanel = new VipOperatorPanel(vipService, venues, targetedPlayerProvider); var shoutRunnerPanel = new ShoutRunnerOperatorPanel(shoutRunnerService, venues); var rafflePanel = new RaffleOperatorPanel(raffleService, venues); var triviaPanel = new MairsTriviaOperatorPanel(triviaService, venues, questionLibrary); var editorPanel = new MairsEditorOperatorPanel(editorService, venues); var tournamentPanel = new TournamentControlOperatorPanel(tournamentService, venues); var bingoPanel = new VenueBingoOperatorPanel(bingoService, bingoPayoutOrchestrator, bingoPayoutAutomation, venues, targetedPlayerProvider, () => { RequestOpenAndFocusTablet(); shell.SelectSettings(); settingsScreen!.FocusModuleConfiguration("games.bingo"); }, () => { RequestOpenAndFocusTablet(); shell.SelectModule("games.bingo"); }); var partyFinderPanel = new PartyFinderOperatorPanel(partyFinderService, VenueOS.Plugin.PartyFinder.PartyFinderDutyLoader.Build(DataManager), venues); attendance = new AttendanceModule(attendanceService, presence, venues, attendancePanel.Draw, attendancePanel.DrawSettings); modules.Register(attendance); modules.Register(new GreeterModule(greeterService, venues, greeterPanel.Draw, greeterPanel.DrawSettings)); modules.Register(new VipModule(vipService, coordinator, venues, vipPanel.Draw, vipPanel.DrawSettings)); modules.Register(new ShoutRunnerModule(shoutRunnerService, shoutRunnerPanel.Draw, shoutRunnerPanel.DrawSettings)); modules.Register(new PartyFinderModule(partyFinderService, partyFinderPanel.Draw, partyFinderPanel.DrawSettings)); modules.Register(new VenueRaffleModule(raffleService, rafflePanel.Draw)); modules.Register(new MairsTriviaModule(triviaService, triviaPanel.Draw, triviaPanel.DrawSettings)); modules.Register(new MairsEditorModule(editorPanel.Draw)); modules.Register(new TournamentControlModule(tournamentService, tournamentPanel.Draw)); bingoModule = new VenueBingoModule(bingoService, bingoPanel.Draw, bingoPanel.DrawSettings); modules.Register(bingoModule); bingoCalledNumbersWindow = bingoPanel.CalledNumbersWindow; bingoPlayerCardViewerWindow = bingoPanel.PlayerCardViewerWindow; bingoCallAlertWindow = bingoPanel.CallAlertWindow; ChatGui.ChatMessage += message => partyFinderService.HandleChatText(message.Message.TextValue); _ = new VenueOS.Plugin.Bingo.BingoRollChatAdapter(ChatGui, ObjectTable, bingoService.HandleRollObservation, msg => { Log.Debug($"[Bingo] {msg}"); bingoService.RecordAdapterDiagnostic(msg); }, () => bingoService.IsAwaitingRoll, bingoService.DescribePendingRoll); dashboard = new VenueOperationsDashboard(venues, modules, attendanceService, greeterService, vipService, shoutRunnerService, raffleService, triviaService, tournamentService, bingoService, diagnostics); var switchCoordinator = new VenueSwitchCoordinator(venues, [new TriviaVenueSwitchGuard(triviaService)]); settingsScreen = new SettingsScreen(venues, modules, diagnostics, globalSettings, switchCoordinator); windowManager = new ModuleWindowManager(diagnostics, shell, settingsScreen, RequestOpenAndFocusTablet); this.switchCoordinator = switchCoordinator;
+        var attendancePanel = new AttendanceOperatorPanel(attendanceService, venues, exportService, coordinator, addressProvider, TryTargetVisitor); var greeterPanel = new GreeterOperatorPanel(greeterService, venues, attendanceService); var vipPanel = new VipOperatorPanel(vipService, venues, targetedPlayerProvider); var shoutRunnerPanel = new ShoutRunnerOperatorPanel(shoutRunnerService, venues); var rafflePanel = new RaffleOperatorPanel(raffleService, venues, targetedPlayerProvider); var triviaPanel = new MairsTriviaOperatorPanel(triviaService, venues, questionLibrary); var editorPanel = new MairsEditorOperatorPanel(editorService, venues); var tournamentPanel = new TournamentControlOperatorPanel(tournamentService, venues); var bingoPanel = new VenueBingoOperatorPanel(bingoService, bingoPayoutOrchestrator, bingoPayoutAutomation, venues, targetedPlayerProvider, () => { RequestOpenAndFocusTablet(); shell.SelectSettings(); settingsScreen!.FocusModuleConfiguration("games.bingo"); }, () => { RequestOpenAndFocusTablet(); shell.SelectModule("games.bingo"); }); var partyFinderPanel = new PartyFinderOperatorPanel(partyFinderService, VenueOS.Plugin.PartyFinder.PartyFinderDutyLoader.Build(DataManager), venues); var blockLettersPanel = new BlockLettersOperatorPanel(blockLettersService, venues, blockLettersGlyphFont); giveawaysPanel = new VenueOS.Plugin.Giveaways.GiveawaysOperatorPanel(giveawayService, venues, () => { RequestOpenAndFocusTablet(); shell.SelectSettings(); settingsScreen!.FocusModuleConfiguration("events.giveaways"); }); attendance = new AttendanceModule(attendanceService, presence, venues, attendancePanel.Draw, attendancePanel.DrawSettings); modules.Register(attendance); modules.Register(new GreeterModule(greeterService, venues, greeterPanel.Draw, greeterPanel.DrawSettings)); modules.Register(new VipModule(vipService, coordinator, venues, vipPanel.Draw, vipPanel.DrawSettings)); modules.Register(new ShoutRunnerModule(shoutRunnerService, shoutRunnerPanel.Draw, shoutRunnerPanel.DrawSettings)); modules.Register(new PartyFinderModule(partyFinderService, partyFinderPanel.Draw, partyFinderPanel.DrawSettings)); modules.Register(new VenueRaffleModule(raffleService, rafflePanel.Draw, rafflePanel.DrawSettings)); modules.Register(new MairsTriviaModule(triviaService, triviaPanel.Draw, triviaPanel.DrawSettings)); modules.Register(new MairsEditorModule(editorPanel.Draw)); modules.Register(new TournamentControlModule(tournamentService, tournamentPanel.Draw, tournamentPanel.DrawSettings)); modules.Register(new BlockLettersModule(blockLettersService, blockLettersPanel.Draw, blockLettersPanel.DrawSettings)); modules.Register(macroModule); giveawaysModule = new GiveawaysModule(giveawayService, giveawaysPanel.Draw, giveawaysPanel.DrawSettings); modules.Register(giveawaysModule); bingoModule = new VenueBingoModule(bingoService, bingoPanel.Draw, bingoPanel.DrawSettings); modules.Register(bingoModule); bingoCalledNumbersWindow = bingoPanel.CalledNumbersWindow; bingoPlayerCardViewerWindow = bingoPanel.PlayerCardViewerWindow; bingoCallAlertWindow = bingoPanel.CallAlertWindow; ChatGui.ChatMessage += message => partyFinderService.HandleChatText(message.Message.TextValue); _ = new VenueOS.Plugin.Bingo.BingoRollChatAdapter(ChatGui, ObjectTable, bingoService.HandleRollObservation, msg => { Log.Debug($"[Bingo] {msg}"); bingoService.RecordAdapterDiagnostic(msg); }, () => bingoService.IsAwaitingRoll, bingoService.DescribePendingRoll); giveawaysRollChatAdapter = new VenueOS.Plugin.Giveaways.GiveawaysRollChatAdapter(ChatGui, ObjectTable, roll => giveawayService.HandleRollObservation(roll), () => giveawayService.IsAcceptingRolls, msg => Log.Debug($"[Giveaways] {msg}")); dashboard = new VenueOperationsDashboard(venues, modules, attendanceService, greeterService, vipService, shoutRunnerService, raffleService, triviaService, tournamentService, bingoService, diagnostics); var switchCoordinator = new VenueSwitchCoordinator(venues, [new TriviaVenueSwitchGuard(triviaService)]); settingsScreen = new SettingsScreen(venues, modules, diagnostics, globalSettings, switchCoordinator); windowManager = new ModuleWindowManager(diagnostics, shell, settingsScreen, RequestOpenAndFocusTablet); this.switchCoordinator = switchCoordinator;
         modules.ModuleFailed += (message, exception) => { diagnostics.RecordFailure(exception is null ? message : $"{message} {exception.Message}"); notifications.Push(exception is null ? message : $"{message} {exception.Message}", ToastLevel.Error); }; venues.ConfigurationRecovered += warning => notifications.Push(warning, ToastLevel.Warning);
         // Applies the operator's own persisted Settings → Modules toggle over each module's code-level default —
         // a module with no override here has never been explicitly toggled, so it keeps whatever its own IsEnabled
@@ -176,8 +220,36 @@ public sealed class Plugin : IDalamudPlugin
         modules.InitializeAsync().GetAwaiter().GetResult(); venues.InitializeAsync().GetAwaiter().GetResult(); PluginInterface.UiBuilder.Draw += Draw; Framework.Update += Update;
         CommandManager.AddHandler(CommandName, new CommandInfo(OnVenueOsCommand) { HelpMessage = "Open the VenueOS tablet.", ShowInHelp = true });
     }
-    public void Dispose() { CommandManager.RemoveHandler(CommandName); PluginInterface.UiBuilder.Draw -= Draw; Framework.Update -= Update; modules.DisposeAsync().AsTask().GetAwaiter().GetResult(); partyFinderAutomation.Dispose(); shoutRunnerAutomation.Dispose(); bingoPayoutAutomation.Dispose(); venueDatabase.Dispose(); ECommonsMain.Dispose(); }
-    private void OnVenueOsCommand(string command, string args) => RequestOpenAndFocusTablet();
+    public void Dispose() { CommandManager.RemoveHandler(CommandName); PluginInterface.UiBuilder.Draw -= Draw; Framework.Update -= Update; giveawaysRollChatAdapter.Unsubscribe(ChatGui); modules.DisposeAsync().AsTask().GetAwaiter().GetResult(); partyFinderAutomation.Dispose(); shoutRunnerAutomation.Dispose(); bingoPayoutAutomation.Dispose(); blockLettersGlyphFont.Dispose(); venueDatabase.Dispose(); ECommonsMain.Dispose(); }
+    /// <summary>Extends `/venueos` with `/venueos macro "Macro Name"` (MACRO spec §11/§43), which must work with the
+    /// tablet/Macro window open or closed, and from inside an ordinary FFXIV built-in macro — both are already true
+    /// here since this handler is the same <c>ICommandManager</c> handler <c>/venueos</c> always used, entirely
+    /// independent of whether the tablet UI is currently drawn. Any other/blank argument preserves the pre-existing
+    /// behavior (open/focus the tablet) rather than silently doing nothing, so this extension can never regress the
+    /// plain `/venueos` case.</summary>
+    private void OnVenueOsCommand(string command, string args)
+    {
+        var trimmed = (args ?? "").Trim();
+        if (trimmed.Length > 0)
+        {
+            var macroMatch = VenueOsMacroCommandPattern.Match(trimmed);
+            if (macroMatch.Success) { HandleVenueOsMacroCommand(macroMatch.Groups[1].Value); return; }
+        }
+        RequestOpenAndFocusTablet();
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex VenueOsMacroCommandPattern = new(
+        "^macro\\s+\"([^\"]+)\"\\s*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>MACRO spec §11: if the Macro module is disabled, this must not run it silently — it returns an
+    /// understandable chat message instead, matching the general "the operational UI must never fail silently"
+    /// requirement (NEW_MODULE_GUIDE.md §36) extended to a chat-invoked command.</summary>
+    private void HandleVenueOsMacroCommand(string macroName)
+    {
+        if (!macroModule.IsEnabled) { ChatGui.Print("[VenueOS] The Macro module is disabled — enable it in Settings → Modules → Macro to use /venueos macro."); return; }
+        var result = macroService.LaunchByName(macroName);
+        if (!result.Success) ChatGui.Print($"[VenueOS] {result.Error}");
+    }
     /// <summary>Opens the main tablet if it's closed and focuses it either way — the same behavior `/venueos`
     /// provides, reused by a detached module window's Settings gear so it never opens a second tablet.</summary>
     private void RequestOpenAndFocusTablet() { open = true; focusRequested = true; }
@@ -253,6 +325,11 @@ public sealed class Plugin : IDalamudPlugin
         // bingoModule.IsEnabled — matching ModuleWindowManager's own convention — so a disabled Bingo module still
         // correctly stops showing its detached UI, per the module-disable/plugin-unload lifecycle requirement.
         if (bingoModule.IsEnabled) { bingoCalledNumbersWindow.Draw(venueTheme); bingoPlayerCardViewerWindow.Draw(venueTheme); bingoCallAlertWindow.Draw(venueTheme); }
+        if (giveawaysModule.IsEnabled) giveawaysPanel.TrackerWindow.Draw(venueTheme, giveawaysPanel);
+        // Faux Macro hotbars are HUD overlays, not detached module windows (MACRO spec §24/§37) — they render
+        // regardless of the main tablet's open/closed state, gated only on the module being enabled, same pattern
+        // as every other auxiliary window above.
+        if (macroModule.IsEnabled) macroHotbarRenderer.DrawAll();
         if (!open) return;
 
         UiKit.PushWindowTheme(venueTheme);

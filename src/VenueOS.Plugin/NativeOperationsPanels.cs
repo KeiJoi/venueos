@@ -692,31 +692,6 @@ internal sealed class VipEditDialog
     }
 }
 
-internal sealed class RaffleOperatorPanel(VenueRaffleService raffle, VenueProfileService venues)
-{
-    private string name = "";
-
-    public void Draw()
-    {
-        var theme = venues.Current.Theme;
-        UiKit.BeginSectionCard("raffle-create", theme, "Raffle");
-        Forms.TextField(theme, "New raffle name", ref name, 128, "e.g. Weekend giveaway");
-        ImGui.Spacing();
-        if (UiKit.PrimaryButton(theme, "Create raffle") && !string.IsNullOrWhiteSpace(name)) { raffle.Create(name); name = ""; }
-        UiKit.EndSectionCard();
-
-        ImGui.Spacing();
-        UiKit.BeginSectionCard("raffle-list", theme, $"Raffles ({raffle.Dashboard.RaffleCount})");
-        if (raffle.Settings.Raffles.Count == 0) UiKit.EmptyState(theme, "No raffles yet", "Create a raffle above to get started.");
-        foreach (var item in raffle.Settings.Raffles)
-        {
-            ImGui.PushID(item.Id);
-            ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextPrimary)); ImGui.TextUnformatted(item.Name); ImGui.PopStyleColor();
-            ImGui.SameLine();
-            ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary)); ImGui.TextUnformatted($"· {item.TotalTickets} ticket(s)"); ImGui.PopStyleColor();
-            if (!string.IsNullOrWhiteSpace(item.WinnerName)) { ImGui.SameLine(); UiKit.StatusBadge(theme, $"Winner: {item.WinnerName}", ToastLevel.Success); }
-            ImGui.PopID();
-        }
-        UiKit.EndSectionCard();
-    }
-}
+// RaffleOperatorPanel moved to VenueOS.Plugin.Raffle.RaffleOperatorPanel (src/VenueOS.Plugin/Raffle/) as part of
+// the full Raffle reconstruction (see docs/RAFFLE_RECONSTRUCTION.md) — a backend-backed module with this much
+// surface gets its own file per NEW_MODULE_GUIDE.md §21.

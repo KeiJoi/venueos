@@ -5,9 +5,10 @@ using VenueOS.Venues;
 
 namespace VenueOS.Services.Tests;
 
-/// <summary>Bingo completed live QA in the 0.2.0 pass and graduated out of <see cref="UnfinishedModuleDefaultsTests"/>
-/// (which now covers only the still-unfinished Raffle/TournamentControl) — this asserts the inverse of what that
-/// class used to check for Bingo: enabled by default on a fresh install, and no longer flagged
+/// <summary>Bingo completed live QA in the 0.2.0 pass and graduated out of the old <c>UnfinishedModuleDefaultsTests</c>
+/// (since renamed/inverted into <see cref="RaffleAndBracketsReleaseStatusTests"/> when those two modules were
+/// promoted in turn) — this asserts the inverse of what that class used to check for Bingo: enabled by default on
+/// a fresh install, and no longer flagged
 /// <see cref="ModuleDescriptor.UnderDevelopment"/>. Automated payout specifically remains an experimental,
 /// conservatively-documented convenience feature (see BINGO_PAYOUT_AUTOMATION_DEFERRED.md and the User Manual's
 /// Bingo section) — that caveat is a documentation/UX concern, not a reason to keep the whole module gated.</summary>

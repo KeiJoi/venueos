@@ -4,7 +4,13 @@ The authoritative, current-implementation guide for adding a new module to Venue
 
 This document is written for a developer or an AI coding agent picking up a "build module X" task with no other context. Read it fully before writing code. If anything below turns out not to match the repository by the time you're reading it, trust the repository and treat this file as needing an update, not the other way around.
 
-Donor/reference repositories — `venuepartyfinder`, `venuestatusandgreet`, `shoutrunner`, `ffxivraffle4all`, `mairstrivia`, `tournamentcontrol`, `ffxivbingo4all` — are **read-only**. They are the functional/protocol reference when reconstructing a backend-compatible module; never edit, format, or otherwise modify them.
+Donor/reference repositories — `venuepartyfinder`, `venuestatusandgreet`, `shoutrunner`, `ffxivraffle4all`, `mairstrivia`, `tournamentcontrol`, `ffxivbingo4all` — are **read-only**. They are the functional/protocol reference *when reconstructing a backend-compatible module from a donor*; never edit, format, or otherwise modify them, and never commit/push/tag/release inside them without explicit authorization for that specific task. **For a greenfield module with no donor** (e.g. Giveaways, Block Letters, Macro), this entire donor-authority concept simply does not apply — there is no donor behavior to preserve or "simplify away from," and the current VenueOS scaffold/architecture described in this guide *is* the specification.
+
+**Normative language.** This guide uses **MUST**/**MUST NOT** for hard requirements — a module that violates one is not done, regardless of how well it otherwise works. **SHOULD**/**SHOULD NOT** are strong defaults with a real but narrow exception space — deviating requires a documented reason, not just convenience. **MAY** marks a genuine option. Plain descriptive sentences (no modal verb) are simply explaining how the current system works, not imposing a new rule. Where a rule is explicitly a VenueOS *product* decision rather than a general engineering principle (e.g. §9a's plain-text credential policy), it's called out as such — don't "fix" it toward a more conventional-looking pattern.
+
+**No self-authorized deferrals.** If this guide, or the task that sent you to it, defines something as required, **you may not silently relabel it** "future enhancement," "Phase 2," "optional," "out of scope," "TODO," or "follow-up" merely because it's inconvenient to implement right now. If a genuine technical blocker prevents a required feature, **stop and report the blocker** — the user decides whether something is deferred, not the implementing agent. This applies to every MUST in this document.
+
+**Proportionate, not ceremonial.** VenueOS modules range from a simple local utility to a backend-integrated multiplayer game. Do not make every subsystem in this guide mandatory for every module — a Block Letters-style utility does not need WebSockets, backend authentication, `GuestIdentity`, or an archive/delete/reset lifecycle unless its actual design calls for them. Sections below say "where applicable" or "if the module has one" for exactly this reason; read those qualifiers as real, not decorative. The goal is consistent engineering, not maximum surface area.
 
 ---
 
@@ -126,7 +132,7 @@ UiKit.SafeDraw(theme, diagnostics, module.Descriptor.Id, module.DrawSettings);
 
 **`ModulesSettingsPage` has zero field-level knowledge of any module's configuration.** A module contributes its Settings surface purely by implementing `IVenueModule.DrawSettings()` — there is no separate "Settings page class" to write or register anywhere. `SettingsScreen.FocusModuleConfiguration(moduleId)` (called by a detached window's Settings gear, §19) jumps straight to this same view via `ModulesSettingsPage.OpenConfigure(moduleId)`.
 
-**Known current gap, not a pattern to copy:** every existing module's `DrawSettings()` currently just calls the same `draw` delegate as `Draw()` — none of them yet separate persistent configuration from live operation in their Settings view. A new module should do better: `DrawSettings()` should render only the module's persistent configuration (server URL, credentials, defaults — §9), while `Draw()` renders live operational state and controls.
+**Known legacy gap, MUST NOT be copied by a new module:** most existing modules' `DrawSettings()` just calls the same `draw` delegate as `Draw()` — they don't separate persistent configuration from live operation in their Settings view. This predates §9 being written down as a rule and is legacy debt, not precedent. **A new module's `DrawSettings()` MUST render only its persistent configuration** (server URL, credentials, defaults — §9), while `Draw()` renders live operational state and controls. `promotion.partyfinder` is the current reference example of doing this correctly (§21) — its `DrawSettings()` holds only Auto Refresh/Warning Message Override, with every recruitment-criteria field living in `Draw()`. If you find yourself about to write `DrawSettings() => Draw();`, stop and identify what in the module is actually persistent, rarely-changed configuration — nearly every module has *something* that qualifies (at minimum, whatever backend/credential fields it has). The only acceptable exception is a module that genuinely has zero persistent configuration to expose (rare) — document that reasoning inline rather than defaulting to the shortcut silently.
 
 ## 9. Settings vs. operational UI — the core rule
 
@@ -142,6 +148,16 @@ UiKit.SafeDraw(theme, diagnostics, module.Descriptor.Id, module.DrawSettings);
 | | Active raffle, active trivia game, tournament bracket state, current Bingo game |
 
 If the operator changes it routinely *during* live venue operation, it's operational, not a setting, no matter how "configurable" it looks. The VIP roster is the clearest existing precedent: it lives entirely inside the VIP app (add/edit/remove/enable, search — see `VipOperatorPanel` in `NativeOperationsPanels.cs`), not in Settings, even though every field in it is "editable persistent data." Only VIP's rarely-changed general behavior (a recognition-message template, say) would belong in Settings.
+
+## 9a. Credential fields — plain text, MUST NOT be masked
+
+This is a deliberate **VenueOS product convention**, not a security oversight — do not "fix" it toward the more conventional masked-password pattern.
+
+Persistent credential fields — API keys, access keys, room keys, admin keys, server passwords — **MUST** remain visible as **plain, selectable, copyable, pasteable text** in Settings (`Forms.TextField` with the default `password: false`), and **MUST NOT** use `ImGuiInputTextFlags.Password` or any other masking. `Forms.TextField` accepts a `password` parameter for exactly this flag; no current call site sets it `true`, and a new module shouldn't be the first. `RaffleOperatorPanel.cs` documents the rationale inline, and it applies universally: the operator must be able to read, copy, and hand the key to whoever deploys/administers the backend — masking a value the operator is expected to recover and communicate defeats its purpose. These fields **MUST** persist across reload/restart like any other setting (§13).
+
+This visible-configuration-UI rule is entirely separate from **redacted diagnostic output** (§26): a credential MUST be readable in Settings and simultaneously MUST NEVER appear in Diagnostics, logs, exception messages, status text, telemetry, or copied debug information. Route anything that might embed a secret through `DiagnosticsService.Redact` (or sanitize it before it ever reaches `RecordFailure`) — see §26 for why a generic `token=`-style regex is not sufficient on its own.
+
+Unless a future product decision explicitly changes this convention, treat "credentials are plain-text in Settings, redacted everywhere else" as fixed VenueOS UX, not an open design choice per module.
 
 ## 10. Active Venue Profile is authoritative
 
@@ -171,6 +187,41 @@ Loading happens in `IVenueModule.OnVenueChangedAsync(VenueContext, CancellationT
 ## 12. Global vs. per-venue — how to decide
 
 Default to **per-venue** whenever a setting could reasonably differ between venues (backend credentials, greeting text, game defaults, a venue's external display colors). Use **global** only for a preference about how the VenueOS *application itself* behaves, independent of which venue is active — the only current example is Auto Pop-Out Modules (§7). If you're unsure, per-venue is almost always the right default; a wrongly-global setting leaks behavior across venues the operator runs, which is a real, hard-to-diagnose bug.
+
+## 12a. Venue-switch isolation checklist
+
+Switching the active venue **MUST NOT** leak any of the following from the old venue into the new one:
+
+- Settings / configuration values
+- Active operation state (current game, current round, current session)
+- Participants / roster / guest lists
+- Backend credentials or tokens
+- Timers, schedules, or in-flight countdowns
+- Realtime/WebSocket subscriptions (a socket connected under the old venue's credentials MUST be stopped before the new venue's are used — §34b)
+- Cached data (a previous fetch's response, a computed summary)
+- Detached-window operational context (a detached window keeps rendering the *same* `Draw()`, which reads `venues.Current` fresh every call — §20 — so this is usually automatic, but verify for any module-local cache)
+
+The reference pattern is `Load(Guid nextVenueId)` (see `VenueRaffleService.Load`, `TournamentControlService.Load`, `MairsTriviaService.Load`): stop realtime/cancel in-flight requests first, reset in-memory state, *then* load the new venue's config and credentials — never the reverse order, and never partially. Call this from `OnVenueChangedAsync` (§11, §23). Test this explicitly (§31, §32): create two venues with different configuration for the module and confirm switching between them shows no trace of the other.
+
+## 13a. Persistence contract — UI fields are not storage
+
+**If the operator can edit a value and would reasonably expect it to survive a reload, it MUST be persisted** — through `GetModuleConfig`/`SaveModuleConfig` (§11) for settings-shaped data, or the module's own durable store for bulk content (§42a). This covers, where applicable: module settings, backend URLs, credentials, presets, reusable messages/templates, participant collections intended to survive, archived local objects, and module-specific defaults.
+
+**The service/config model is authoritative — an ImGui field is not storage.** A real bug class found during reconstruction: UI code directly mutates a list or settings object held in memory, the UI *looks* correct because it's reading the same in-memory object back, but no code path ever actually called `SaveModuleConfig`. **Whenever a UI action changes persistent data, it MUST go through a method that actually saves it** — follow the pattern in `VenueRaffleService.AddNote`/`ImportRaffle`-style methods (mutate the settings record, then call `Save()`/`profiles.SaveModuleConfig(...)` in the same method), never mutate `Settings` (or an equivalent field) directly from an operator panel.
+
+**"It survived closing and reopening the panel" is not proof of persistence** — that only proves the in-memory object wasn't replaced. The only tests that actually prove persistence are ones that destroy and reconstruct the owning service/store from a serialized representation (§30), and the only live check that proves it is a full module disable/re-enable or plugin reload (§32) — not merely closing a window.
+
+If a piece of state is intentionally ephemeral (current timer countdown, a transient "connecting..." flag), document that it's deliberately not persisted rather than leaving it ambiguous whether it's a bug.
+
+## 13b. Local lifecycle: Archive vs. Delete vs. Reset
+
+Where a module maintains reusable/local operational objects (a saved raffle, a saved preset, a saved game), these three words mean different things and **MUST NOT** be used interchangeably. `games.raffle`'s `VenueRaffleService` is the current reference implementation of all three together:
+
+- **Archive** (`Archive(id)`/`Unarchive(id)`) — nondestructive, reversible, no confirmation needed, no network call. Hides the object from the normal active list while preserving every field.
+- **Reset** (`Reset(id)`) — clears an object's *operational contents* (participants, winner, published state) without deleting the object itself. Confirmed, since it destroys in-progress data, but explicitly does **not** delete the containing record — say so in the confirmation text (§37).
+- **Delete** (`DeleteAsync(id)`) — permanent local removal, always confirmed, states plainly that it cannot be undone. For a backend-published object, delete is best-effort cascading cleanup of the remote copy (log/report failure via Diagnostics, but never let a failed remote cleanup block the already-confirmed local deletion).
+
+Not every module needs all three — a module with no reusable local objects (most simple utilities) doesn't need any of this concept. Where a module does have save/reuse semantics, decide upfront (§39) which of these three actually apply and name the operations accordingly rather than inventing a fourth meaning for "clear."
 
 ## 13. Config versioning, defaults, and recovery
 
@@ -238,8 +289,8 @@ Per the task's documentation-first instruction, these are noted rather than sile
 - Every current module's `DrawSettings()` currently mirrors `Draw()` exactly (§8) — none yet separates persistent config from live operation in its Settings contribution, **except `promotion.partyfinder`** (reconstructed — see `PARTY_FINDER_RECONSTRUCTION.md`), whose `DrawSettings()` holds only Auto Refresh/Warning Message Override while every recruitment-criteria field lives in `Draw()`. Use it as the reference example for a new module doing this correctly from the start.
 - `src/VenueOS.Services/SharedServices.cs` defines `GameContextService` and `VenueHttpClientFactory`, but neither has any caller anywhere in the codebase today — they are unused scaffolding, not an active convention. Backend modules construct `HttpClient` directly (`new HttpClient { Timeout = ... }`) rather than through `VenueHttpClientFactory`.
 - `NotificationService`/`VenueUi` (`src/VenueOS.UI/VenueUi.cs`) still exist and `NotificationService.Push` is still called on module failure/recovery, but nothing renders `NotificationService.Toasts` anywhere anymore (the raw toast-line UI was deliberately removed from the main window during shell cleanup) — pushing a toast today has no visible effect. Prefer `DiagnosticsService.RecordFailure` for anything that should actually be visible to the operator (see §25).
-- Attendance, Greeter, VIP, ShoutRunner, and Raffle's operator-panel classes are all grouped in one file, `src/VenueOS.Plugin/NativeOperationsPanels.cs`, for historical reasons. Party Finder, Mair's Trivia, TournamentControl, and Bingo each have their own file. **A new module should use its own file** (e.g. `src/VenueOS.Plugin/GuestNotesOperatorPanel.cs`), matching the newer precedent, not extend `NativeOperationsPanels.cs`.
-- Similarly, the four core modules' service/wrapper classes (Attendance/Greeter/VIP/ShoutRunner) all live in one file, `src/VenueOS.Modules.Operations/Operations.cs` (along with the four backend modules' service+module wrapper classes — their protocol clients get their own subfolder, e.g. `Modules.Operations/Bingo/VenueBingoClient.cs`). **A new module should use its own file/folder** under `VenueOS.Modules.Operations/`, not grow `Operations.cs` further.
+- Attendance, Greeter, VIP, ShoutRunner, and Raffle's operator-panel classes are all grouped in one file, `src/VenueOS.Plugin/NativeOperationsPanels.cs`, for historical reasons. Party Finder, Mair's Trivia, TournamentControl, and Bingo each have their own file/folder. **A new module MUST NOT be added to `NativeOperationsPanels.cs`** merely because older modules live there — it MUST get its own file (e.g. `src/VenueOS.Plugin/GuestNotesOperatorPanel.cs`) or, for a non-trivial module, its own folder (e.g. `src/VenueOS.Plugin/Raffle/`), matching the newer precedent.
+- Similarly, the four core modules' service/wrapper classes (Attendance/Greeter/VIP/ShoutRunner) all live in one file, `src/VenueOS.Modules.Operations/Operations.cs`. Every backend module already gets its own subfolder (`Modules.Operations/Bingo/`, `Modules.Operations/Raffle/`, `Modules.Operations/Tournament/`). **A new module MUST NOT be added to `Operations.cs`** — it MUST use its own file/folder under `VenueOS.Modules.Operations/`, per the canonical structure in §33.
 
 ## 22. Enable/disable
 
@@ -249,6 +300,12 @@ Per the task's documentation-first instruction, these are noted rather than sile
 - Excludes it from `ModuleHost.Tick`/lifecycle notification loops (`ModuleHost.Ordered().Where(x => x.IsEnabled)`).
 - Closes its detached window if one is open (`ModuleWindowManager.DrawAll` checks `module.IsEnabled` every frame and removes a disabled module from the open set).
 - **Does not** touch its saved per-venue config — `GetModuleConfig`/`SaveModuleConfig` are keyed by module ID regardless of enabled state, so re-enabling restores exactly where it left off.
+
+## 22a. `UnderDevelopment` and promotion
+
+`ModuleDescriptor` has a real, currently-used `bool UnderDevelopment = false` field. A module built with it (`new ModuleDescriptor(..., UnderDevelopment: true, ...)`) automatically gets a generic "Under Development" `StatusBadge` in Settings → Modules and an `InfoBanner` warning in its Configure view — no extra code needed, the same way icon/display-name propagation is generic (§4–§6). `games.raffle` and `games.tournament` are the current live examples: both are `UnderDevelopment: true` with `IsEnabled { get; set; } = false` by default.
+
+**A new module SHOULD start `UnderDevelopment: true` with `IsEnabled = false` by default** while it's being built, and stay that way through automated testing and Debug/Release builds — those do not promote it. **Promotion (flipping `UnderDevelopment` to `false` and/or `IsEnabled` to `true` by default) is an explicit product/release decision the user makes after live acceptance in Dalamud**, never something an implementing agent does on its own merely because its own tests passed (§21 — no self-authorized deferrals cuts both ways: don't defer required work, and don't self-promote unfinished work either).
 
 ## 23. Module lifecycle
 
@@ -273,6 +330,14 @@ public interface IVenueModule : IAsyncDisposable
 
 `DisposeAsync()` runs in reverse registration order on plugin unload (`ModuleHost.DisposeAsync`), isolated per-module the same way init is. A module must clean up everything it owns here (or in `OnVenueChangedAsync`/`ResetForVenue`-style methods when switching venues mid-session): event subscriptions to shared services (`PresenceService.Arrived`/`Departed`, `GreeterService.GreetingReadyToFinalize`, etc.), `CancellationTokenSource`s (cancel-and-dispose-and-recreate on every venue switch is the existing pattern — see `GreeterService.ResetForVenue`), scheduler jobs (`SchedulerService.Cancel(id)`), open HTTP/WebSocket state. No module's background work should continue after it's disabled or the plugin unloads, unless that work is genuinely owned by a shared service instead (e.g. `PresenceService`'s single object-table scan keeps running for whichever modules are still enabled — that's shared infrastructure, not per-module state).
 
+## 24a. Stale async / stale realtime guard — hard requirement
+
+Every module with asynchronous work **MUST** own an explicit `CancellationTokenSource` and know exactly when it gets cancelled-and-recreated: at minimum on venue change, module disable, and plugin disposal; also on operation cancellation or a selected-object/session change where the module has one (switching which raffle/game/tournament is "active" mid-session). Cancel-and-dispose-and-recreate on every relevant transition is the existing pattern (`GreeterService.ResetForVenue`, the realtime clients' `Load`/`Stop`).
+
+**A stale callback MUST NEVER mutate current state.** A response that started under venue A must not land on venue B after a switch; a response for a previously-active raffle/game/session must not overwrite a newly-selected one, even if it arrives after the switch. Guard this either by cancelling the token before the switch (preferred — the awaited call throws `OperationCanceledException` and never reaches the mutation) or, if that's not possible, by checking "is this response still for the currently-selected context" immediately before mutating state. An expected cancellation from a normal venue switch or operation cancel is not a scary user-facing failure — don't route `OperationCanceledException` from an intentional cancel through `DiagnosticsService.RecordFailure` as if it were an error.
+
+Avoid casual fire-and-forget `Task.Run`; if a task must run detached (the realtime clients' `RunAsync` is the current precedent), it still needs the token above and a `Stop()`/disposal path that actually waits for or cancels it. Never mutate ImGui/UI state directly from a background thread — a realtime client's receive loop drains into a thread-safe queue (`ConcurrentQueue`, §34b) that the module's `Tick()` (which runs on the framework/UI thread) consumes, rather than applying frames from the socket thread directly.
+
 ## 25. Diagnostics — hard requirement
 
 `DiagnosticsService` (`src/VenueOS.Services/DiagnosticsService.cs`):
@@ -295,6 +360,8 @@ public sealed class DiagnosticsService(ModuleHost modules, VenueProfileService v
 
 `DiagnosticsService.Redact` strips everything from a secret-looking marker (`token=`, `accessToken`, `refreshToken`, `AdminKey`, `RoomKey`, `password`, case-insensitive) onward, replacing it with `[redacted]`. It runs automatically on every `RecordFailure` call and on `RecoveryWarnings`. If a module's own failure messages might embed a credential under a different name than these markers, either route the message through `DiagnosticsService.Redact` explicitly or avoid interpolating raw secret values into failure messages in the first place — don't rely on a marker the redaction list doesn't already cover.
 
+**A `key=value`-shaped marker list does not catch every secret shape.** A capability/access token embedded as a bare URL *path segment* (`https://host/room/{token}/join`, not `?token=...`) will not match any `key=value` marker — a real gap found during Raffle's audit. Before wiring a new backend client's failure messages into Diagnostics, check where its secrets actually live: query parameters, headers, *and* path segments are all fair game, and none of them are safe to assume a generic regex already covers. Backend clients **SHOULD** sanitize/strip a request URL themselves before ever handing it to an exception message or `RecordFailure`, rather than relying solely on the shared redactor to catch it downstream. The browser/display-client side of a backend module (if any) should also never receive an organizer/admin-level secret it doesn't need — a viewer-facing URL should carry only viewer-scoped credentials.
+
 ## 27. Shared services — check before writing your own
 
 `src/VenueOS.Services/SharedServices.cs` and `DiagnosticsService.cs`:
@@ -313,6 +380,30 @@ public sealed class DiagnosticsService(ModuleHost modules, VenueProfileService v
 
 Guest/venue-participant identity is `GuestIdentity(Name, HomeWorld)` (`SharedServices.cs`) — normalized (whitespace-collapsed, upper-invariant) into a `Key` of the form `"NAME@WORLD"`. This is what `PresenceService`, `AttendanceService`, `GreeterService`, and `VipOrchestrationService` all key on. Don't introduce account-level/content-ID guest tracking; Character Name + Home World is the established identity model throughout the codebase.
 
+**Character Name alone is never assumed unique.** Reconstruction work on Raffle found real merge/mismatch bugs from treating name-only matching as safe — never strip or normalize away a `HomeWorld` suffix to make two records "match." Legacy Name-only data (predating `HomeWorld` being tracked) may remain valid as-is; don't invent a `HomeWorld` value for it. If a legacy Name-only record must be compared against a Name+HomeWorld one, treat it as ambiguous rather than silently merging.
+
+## 28a. Target capture pattern
+
+When a module needs "the player currently targeted in-game" as a `GuestIdentity`, use the existing `ITargetedPlayerProvider` abstraction (`src/VenueOS.Services/SharedServices.cs`) rather than reading `ITargetManager`/`IPlayerCharacter` directly in a module:
+
+```csharp
+public sealed record TargetedPlayerLookup(bool Success, string Name, string HomeWorld, string? Error);
+public interface ITargetedPlayerProvider { TargetedPlayerLookup GetTargetedPlayer(); }
+```
+
+The production implementation, `DalamudTargetedPlayerProvider` (`Plugin.cs`), validates the current target is an `IPlayerCharacter` (not an NPC/nothing selected) and reads `Name`/`HomeWorld` off it, falling back to `CurrentWorld` only if `HomeWorld` isn't resolvable. Construct it once at the composition root and inject it into any operator panel that needs a "Use Current Target" button — see `VipOperatorPanel`, `RaffleOperatorPanel`, and `VenueBingoOperatorPanel` for the current call-site pattern:
+
+```csharp
+if (UiKit.GhostButton(theme, "Use Current Target"))
+{
+    var result = targetProvider.GetTargetedPlayer();
+    if (result.Success) { name = result.Name; world = result.HomeWorld; }
+    else targetFillError = result.Error; // shown as a WarningState/ErrorState, never silently dropped
+}
+```
+
+Manual identity entry (a plain text field for Name/HomeWorld) should populate the same `GuestIdentity(Name, HomeWorld)` shape so both paths converge on one model. Never bypass `ITargetManager` with unsafe/direct memory access to read target info.
+
 ## 29. Chat/command infrastructure
 
 Covered in §27 (`ChatCommandService`). It enforces a minimum interval between dispatched commands (default 1s) and runs dispatch through an `IFrameworkDispatcher` (the production one, `InlineFrameworkDispatcher`, just invokes synchronously — the abstraction exists for testability). A module should never call `ICommandManager.ProcessCommand` or send a chat message directly; always go through `ChatCommandService.Enqueue`.
@@ -326,6 +417,12 @@ Reasonable things to cover: config default/round-trip serialization, per-venue c
 **A module whose core function is inherently unsafe/FFXIVClientStructs/ECommons-dependent** (game addon manipulation, not an HTTP backend) — precedent: `promotion.partyfinder`'s reconstruction (`PARTY_FINDER_RECONSTRUCTION.md`) — should still separate as much as possible from that boundary: put the plain data model and orchestration/persistence logic in `VenueOS.Modules.Operations/<ModuleName>/` behind a small interface (e.g. `IPartyFinderAutomation`) that the unsafe engine implements; put only the actual unsafe/addon/ECommons code in `VenueOS.Plugin/<ModuleName>/`, implementing that interface. This keeps the orchestration layer (per-venue settings, guard conditions, chat-text parsing, etc.) unit-testable with a fake implementation of the interface standing in for the real game-dependent engine, even though the engine itself can only ever be verified in-game.
 
 **State surviving a window close is not proof of persistence.** A module's config staying correct while its window is closed and reopened only proves the in-memory object didn't get replaced — it says nothing about whether `SaveModuleConfig` was ever actually called, or whether the save reaches durable storage correctly. The only test that actually exercises persistence is one that destroys and reconstructs the owning service/store from a serialized representation of what was saved (see `PartyFinderServiceTests.Every_preset_field_survives_a_full_serialize_deserialize_boundary` for the pattern: serialize the venue snapshot to a JSON string, deserialize it back into a brand new store/service, and assert every field). The equivalent live check is a full Dalamud plugin disable/re-enable (or a game restart), not merely closing and reopening a module's window — a module isn't done until it's been verified across that actual boundary, not the illusion of it.
+
+**A realtime module's client (§34b) is tested through a fake transport**, not a real socket — implement the same transport interface the production `WebSocketXRealtimeTransport` implements (see `IRaffleRealtimeTransport`) with a controllable fake that can simulate connect, disconnect, malformed frames, and a delayed reconnect, and assert the client's backoff/reconnect/reconciliation behavior deterministically. A backend module's HTTP client is tested the same way — a controllable `HttpMessageHandler`/fake handler, never a real network call.
+
+**Random behavior is tested for invariants, not exact output.** A raffle winner draw, a bracket seed shuffle, etc. should be tested for properties that must always hold (the winner is always a member of the eligible pool, every seed appears exactly once) — never for a specific "lucky" output that would make the test flaky or meaningless.
+
+**Automated tests do not prove:** rendered ImGui layout, actual Dalamud runtime behavior, real FFXIV target/teleport/game interaction, or browser-side visual behavior for a module with a web display component. Those require the manual in-game QA pass (§32) and, for anything visual, the Visual Definition of Done (§41a) — don't report a module as "tested" in a way that implies those were covered by the automated suite.
 
 ## 31. Auto Pop-Out testing
 
@@ -354,15 +451,23 @@ For any new detachable module, verify both settings states manually (this is UI-
 
 ## 33. File/project structure for a new module
 
+A new module **MUST** get coherent ownership of its own files — never expand `Operations.cs` or `NativeOperationsPanels.cs` (§21). This is a rule about ownership, not about mandatory fragmentation: a small module can keep everything in one `<ModuleName>.cs`/one `<ModuleName>OperatorPanel.cs`; a complex one splits by concern the way Raffle and TournamentControl actually do today:
+
 ```text
 src/VenueOS.Modules.Operations/
-  <ModuleName>/                       (new folder — only needed if backend-backed or the service is non-trivial)
-    <ModuleName>Client.cs             (backend modules only: typed client + wire/protocol records)
-  Operations.cs                       (existing core modules live here — do NOT add a new module's classes to
-                                        this file; give your module its own file, e.g. GuestNotes.cs, per §21)
+  <ModuleName>/                       (own folder — once the module has more than one file's worth of concerns)
+    <ModuleName>Service.cs            (business logic, config DTO, IVenueModule wrapper — the module's core)
+    <ModuleName>Client.cs             (backend modules only: typed HTTP client + wire/protocol records — §34)
+    <ModuleName>RealtimeClient.cs     (backend modules with a push channel only — §34b)
+    <ModuleName>Storage.cs            (only if the module owns bulk content outside GetModuleConfig — §42a)
+    <ModuleName>Models.cs             (only if the data-model surface is large enough to warrant its own file)
+  <ModuleName>.cs                     (a simple, non-backend module: everything above collapsed into one file — see
+                                        the Guest Notes example in §41)
 
 src/VenueOS.Plugin/
-  <ModuleName>OperatorPanel.cs        (the Draw()/DrawSettings() content — its own file, per §21)
+  <ModuleName>/                                    (own folder if the panel has more than one file's worth of UI —
+    <ModuleName>OperatorPanel.cs                    e.g. Raffle/RaffleOperatorPanel.cs)
+  <ModuleName>OperatorPanel.cs                     (a simple module: single file, no subfolder needed)
   Plugin.cs                           (composition root: construct the service, construct the panel, wrap in an
                                         IVenueModule, modules.Register(...) — nothing else needs editing for Home,
                                         embedded rendering, detached rendering, or Settings)
@@ -371,7 +476,7 @@ tests/VenueOS.Services.Tests/         (or VenueOS.Core.Tests/VenueOS.Venues.Test
   <ModuleName>Tests.cs
 ```
 
-No project file changes are needed to add a module — `VenueOS.Modules.Operations` and `VenueOS.Plugin` already reference everything required.
+Raffle (`Modules.Operations/Raffle/`: `VenueRaffleService.cs`, `VenueRaffleClient.cs`, `RaffleRealtimeClient.cs`, `RaffleXlsx.cs`) and TournamentControl (`Modules.Operations/Tournament/`: `TournamentControlService.cs`, `TournamentControlClient.cs`, `TournamentRealtimeClient.cs`) are the current reference examples of this split for a complex backend module. No project file changes are needed to add a module — `VenueOS.Modules.Operations` and `VenueOS.Plugin` already reference everything required.
 
 ## 34. Backend-backed modules
 
@@ -384,17 +489,68 @@ For a module that talks to an external backend (matching the pattern of Raffle/T
 - Route backend failures through `DiagnosticsService.RecordFailure` (§25); never surface a raw exception as the primary operational UI.
 - If a module needs a distinct *player/browser-facing* display theme (Bingo's `BingoColors`: Bg/Card/Header/Text/Daub/Ball, on `VenueBingoSettings.Colors`), keep it as its own config field, separate from `VenueTheme` — the tablet theme and a module's external/web display theme are different concepts and must stay independently configurable, never merged. Bingo's split into "Server" and "Web Display" concerns is the existing precedent for how a complex module's Settings should be organized (currently, this split lives entirely inside the module's own `DrawSettings()`/operator panel — there's no separate Settings sub-navigation to build; a `Forms.Segmented` sub-tab inside the module's own settings content, matching how `SettingsScreen`'s own top-level categories are built, is the natural way to present it).
 
+## 34a. State authority model — write it down before implementing
+
+For every stateful module, identify **which single layer owns each piece of state** before writing the service class. Possible authorities: VenueOS local persistent config, VenueOS active operational (in-memory) state, FFXIV/game state, the backend server, or a browser/display client. **Two layers MUST NOT silently become competing authorities over the same piece of state** — pick one owner per concept and make every other layer either read-only or explicitly reconciled against it.
+
+The codebase currently has two opposite, both-valid authority models, and a new backend module should explicitly say which one it follows:
+
+- **Raffle (local-authoritative):** `VenueRaffleService`'s local per-venue config (`Settings.Raffles`) is the durable, authoritative store — full participant/ticket/winner data lives in VenueOS. The backend only mirrors a *published* copy for the live browser wheel; a raffle can exist, be edited, and be deleted purely locally without ever touching the backend. Because two independent stores (local + published) exist and are never auto-reconciled, the operator needs a visible "unpublished changes" indicator — don't silently let local edits drift from what's already published.
+- **TournamentControl (backend-authoritative):** the backend's store is the sole source of truth for bracket state; `TournamentControlService` holds only per-venue connection/credential settings plus the *last-fetched* snapshot — never a competing local notion of bracket state. All mutations go through `TournamentControlClient`; the realtime client is purely a signal to re-fetch, never a second write path.
+
+For a simple, purely local module with no backend, this can be a one-sentence statement ("this module's local per-venue config is the only state, full stop") — the point is to have made the decision explicitly, not to produce a diagram for a Block Letters-style utility.
+
+## 34b. Realtime / WebSocket module contract
+
+Only add a realtime channel if the module genuinely needs live push updates from a backend it doesn't otherwise poll — don't add WebSockets to a module that doesn't need them, and don't aggressively poll as a substitute for a realtime protocol that already exists. `RaffleRealtimeClient` and `TournamentRealtimeClient` (`Modules.Operations/Raffle/`, `Modules.Operations/Tournament/`) are the current reference implementations and are structurally identical — follow their shape for a new realtime-backed module:
+
+- **Separate transport from application logic.** Define a small transport interface (`IRaffleRealtimeTransport`-style) wrapping the actual `ClientWebSocket`; the realtime client itself depends only on that interface, which is what makes it fake-transport-testable (§30).
+- **`Start(uri, sessionId, token)` / `Stop()`** — `Start` calls `Stop()` first (idempotent), creates a fresh `CancellationTokenSource`, and fires an unawaited `RunAsync` loop. `Stop()` cancels and disposes that token and drains the inbox.
+- **Join as a read-only viewer**, never requesting write/host capability merely because the protocol allows it — this structurally prevents the VenueOS client from becoming an unintended second writer (ties to §34a: the backend stays authoritative for anything the realtime channel observes).
+- **Backoff:** the current pattern is a simple **linear** backoff capped at a small multiple of a base unit (`retryBackoffUnit * min(10, attempt)`, default unit ~1s → capped at ~10s), retried indefinitely until explicitly cancelled — not exponential, and not a fixed max-attempt count. Match this unless a specific backend's behavior demands otherwise.
+- **Drain into a queue, never mutate state from the socket thread.** The receive loop pushes parsed messages into a `ConcurrentQueue<TMessage>`; the module's `Tick()` (framework/UI thread) drains and applies them — see §24a.
+- **Reconcile via REST after every reconnect, not just the first connect.** `ConsumeReconnectSignal()` returns `true` exactly once per successful *reconnect* (never the initial connect) and tells the owning service's `Tick` to re-fetch authoritative state over REST — this is what recovers correctly from frames the socket missed while disconnected. An optimistic client-side mutation made during a disconnect window must be safely overwritten (not merely appended-past) by this reconciliation.
+- **Stopped on venue switch** via the module's `Load(nextVenueId)`, before the new venue's settings are loaded (§12a).
+- Also consider on top of the above where relevant: server restart, malformed/unexpected frames (don't crash the receive loop on one bad frame), and never putting a secret in a connection URL/frame that a non-privileged viewer shouldn't see (§26).
+
+## 34c. Import / export
+
+Where a module supports import/export (Raffle's XLSX round-trip, Mair's Editor's `.fftrivia` question-set import are the current examples — `RaffleXlsx.cs`, `FileQuestionSetRepository.cs`):
+
+- **Import MUST mint fresh local identity** — a new local ID, and any external/backend linkage (published URL, host/viewer tokens, live session ID) cleared rather than inherited — unless the format is explicitly a backup/restore of a previously-exported VenueOS object rather than a content import. `RaffleXlsxImporter.Import` is the reference: it always returns a raffle with `ExternalId`/`HostUrl`/`ViewerUrl` forced null even if the source file recorded one.
+- **Import must actually persist**, through the same `SaveModuleConfig`-backed path as any other mutation (§13a) — whether the importer itself calls `Save()` (Mair's Editor's `ImportReplacing`/`ImportAsNew`) or leaves persistence to an explicit caller method (`VenueRaffleService.ImportRaffle`), pick one pattern per module and be consistent about which layer is responsible.
+- **A collision (importing over something that already exists) needs an explicit operator decision** — confirm-replace vs. import-as-new (§37), never a silent overwrite.
+- **A legacy export format predating a newly added field** (e.g. `HomeWorld` added after a file format already existed) must import as null/absent for that field, never an invented or guessed value.
+- Export/import should round-trip every user-authored field needed for a useful restore; consider backward compatibility for previously-exported files when evolving the format.
+
 ## 35. Responsive layout and the no-overlap rule
 
 **No user-facing control may overlap another at any supported window size.** The pattern proven across the main toolbar, the Diagnostics toolbar, and the detached header is the same every time: reserve the region for critical controls first (compute their fixed total width, position them at an absolute screen coordinate derived only from the container's width — never from what secondary content happens to render), then give whatever's left to flexible/secondary content, and reflow or truncate the secondary content rather than letting it push into reserved space. Avoid chaining `ImGui.SameLine()` (no-argument) after a component that draws more than one line internally (e.g. `Forms.ComboField`'s label-then-field) — position the next column from a captured shared row-top instead. Use `ImGui.CalcTextSize` (with a `wrapWidth` argument for pre-wrap height estimation) to make layout decisions before drawing, and `ImGui.GetItemRectMax()` after drawing to get an item's *actual* rendered extent when you need it for placing what comes next.
 
-## 36. Empty, loading, and error states
+## 36. Empty, loading, error, warning, and status states
 
-Use `UiKit.EmptyState` ("no data yet"), `UiKit.LoadingState`, `UiKit.WarningState`/`ErrorState` for concise, theme-colored operational messages — not a raw exception message, not silence. A "not configured" backend module should say so plainly (see `MairsTriviaOperatorPanel`'s "Create a game by supplying a validated .fftrivia question set..." empty state) rather than showing broken/blank controls.
+Every operational module **MUST** deliberately handle its visible states rather than leaving any of them to silence or a raw exception message. Consider all of the following where applicable — a module without a backend won't have "disconnected," but every module has at least an empty state and (if it can fail at all) an error state:
 
-## 37. Destructive actions
+| State | Example | Component |
+|---|---|---|
+| Empty | "No raffle selected." / "No participants yet." | `UiKit.EmptyState` |
+| Loading / busy | "Publishing…" / "Connecting…" / "Waiting for game state…" | `UiKit.LoadingState` |
+| Success / current status | "Published." / "Connected." / "Running." / "Winner selected." | `UiKit.StatusBadge`/`ConnectionBadge` |
+| Warning | "Unpublished changes." / "Backend unavailable, local state preserved." | `UiKit.WarningState` |
+| Error | "Authentication failed." / "Import invalid." | `UiKit.ErrorState` |
+| Disconnected / degraded | networked modules only — socket down but REST still reachable, etc. | `UiKit.ConnectionBadge`/`WarningState` |
 
-Use `ConfirmDialog` (`UiKit`) for anything that destroys persistent data or state the operator can't trivially redo (deleting a venue, deleting a VIP record — both existing examples). Don't over-confirm harmless, reversible actions (toggling a switch, running a preset).
+A "not configured" backend module should say so plainly (see `MairsTriviaOperatorPanel`'s "Create a game by supplying a validated .fftrivia question set..." empty state) rather than showing broken/blank controls.
+
+**MUST NOT rely on:** a disabled button with no explanation of *why* it's disabled; silent failure; `DiagnosticsService` as the operator's only feedback (Diagnostics is for diagnostic *detail* — the operational screen still needs an immediately understandable state, per §25); or `NotificationService` for anything the operator needs to actually see, since nothing currently renders its toasts (§21) — a push to `NotificationService` today has no visible effect.
+
+## 37. Destructive actions and confirmations
+
+Use `ConfirmDialog` (`UiKit`, via `confirmDialog.Request(title, body, action)` — instantiate one `private readonly ConfirmDialog confirmDialog = new();` per panel, matching every current operator panel) for anything that destroys persistent data or state the operator can't trivially redo: permanent delete, reset (§13b), cancelling an active event/game where state is lost, redrawing a winner that replaces an existing one, clearing participant state, overwriting imported data. Don't over-confirm harmless, reversible actions (toggling a switch, running a preset, archiving — §13b).
+
+**Confirmation text MUST state what will actually happen**, not a generic "Are you sure?" — a short interrogative title (`"Delete X?"`) plus a body sentence naming exactly what's affected. **Irreversible actions end with a plain statement that it cannot be undone** (`"…will be permanently deleted from VenueOS, and its published copy on the backend will also be deleted if it exists. This cannot be undone."`, `RaffleOperatorPanel`'s delete-raffle dialog). **Reversible-but-still-confirmed actions should say what is *not* affected** — Raffle's Reset dialog explicitly notes "It does NOT delete the raffle itself." Scale the dialog's severity to the actual consequence: if an action would additionally destroy already-completed downstream state (e.g. clearing a bracket that has completed matches), compute that client-side using the same rule the backend independently enforces, and only show the stronger "cannot be undone" framing when it's genuinely true — don't show the scary version of the dialog for a mild action or vice versa.
+
+**A client-side confirmation dialog is a courtesy, not the safety mechanism.** The actual guard against an accidental or malicious destructive call MUST be enforced authoritatively wherever the state actually lives (the service/backend), regardless of what the client sent — never assume a confirmed UI click is itself sufficient authorization server-side.
 
 ## 38. Common mistakes to avoid
 
@@ -415,7 +571,9 @@ Use `ConfirmDialog` (`UiKit`) for anything that destroys persistent data or stat
 - A native ImGui title bar on a detached window (must be `NoTitleBar`).
 - A fixed-pixel-offset layout that overlaps at another window size instead of a reserved-region layout (§35).
 
-## 39. New module planning template
+## 39. New module planning template — complete this before writing code
+
+Answer every line below before writing any code — this is the pre-flight check that prevents architecture from being discovered accidentally mid-implementation. Leaving a line blank should mean "genuinely not applicable to this module," not "hadn't thought about it yet."
 
 ```text
 Module Name:
@@ -423,18 +581,28 @@ Stable Module ID:
 Purpose:
 Display Name:
 Icon:
-Operational Workflow:
-Persistent Settings (Settings → Modules):
+Per-Venue?: (per-venue is the default — §12; justify if this module is a rare exception)
+Operational Workflow: (what stays visible, what's one-click, what's setup-once)
+Persistent Settings (Settings → Modules, §9):
+Ephemeral / live-only state (never persisted — §13a):
 Per-Venue Settings:
-Global Settings (rare — justify if any):
-Shared Services Used:
+Global Settings (rare — justify if any, §12):
+Uses FFXIV player identity / GuestIdentity(Name, HomeWorld)?: (§28; if yes, does it need target capture — §28a?)
 Backend (if any):
-Detached Support: (yes by default; note if genuinely not possible and why)
-Auto Pop-Out Compatibility: (generic — confirm no special-casing was added)
-Diagnostics: (what failures get reported, how)
+State authority model: (§34a — which layer owns what; one sentence is fine for a simple local module)
+Realtime/WebSocket needed?: (§34b; justify — don't default to yes)
+What cancels on venue switch?: (§12a, §24a)
+Destructive actions and their confirmations: (§37)
+Import/export?: (§34c)
+Archive/Delete/Reset semantics, if the module has reusable local objects: (§13b)
+Detached Support: (yes by default; note if genuinely not possible and why — §19)
+Auto Pop-Out Compatibility: (generic — confirm no special-casing was added — §7)
+Empty / loading / success / warning / error / disconnected states: (§36)
+Diagnostics: (what failures get reported, how — §25, §26)
+UnderDevelopment at launch?: (yes by default for a new module — §22a)
 Special Risks:
-Automated Tests:
-Manual QA:
+Automated Tests required: (§30)
+Behaviors requiring live QA: (§32, §41a)
 ```
 
 ## 40. Backend module planning template (in addition to the above)
@@ -493,7 +661,10 @@ public sealed class GuestNotesModule(GuestNotesService service, Action? draw = n
     public Task OnVenueChangedAsync(VenueContext c, CancellationToken t) { service.Load(c.VenueId); return Task.CompletedTask; }
     public void Tick(DateTimeOffset now) { }
     public void Draw() => draw?.Invoke();
-    public void DrawSettings() => draw?.Invoke(); // TODO for a real module: separate persistent config here (§8)
+    public void DrawSettings() => draw?.Invoke(); // Guest Notes has no persistent config to separate — the notes ARE
+                                                   // the operational content, not settings. This is the documented
+                                                   // exception §8/§9 allow, not the default: a module with any real
+                                                   // settings (a backend URL, a template) MUST split DrawSettings().
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 ```
@@ -551,51 +722,95 @@ modules.Register(new GuestNotesModule(guestNotesService, guestNotesPanel.Draw));
 - **Embedded rendering:** `AppFrame.DrawModule` wraps `GuestNotesModule.Draw()` automatically once it's selected.
 - **Detached rendering:** the pop-out button on the embedded frame and `ModuleWindowManager` both call the same `GuestNotesModule.Draw()` — no separate detached implementation exists or is needed.
 - **Auto Pop-Out:** `HomeScreen.LaunchModule` routes this module exactly like every other one — nothing module-specific to add.
-- **Settings → Modules:** the module appears in the table automatically; "Configure" calls `GuestNotesModule.DrawSettings()`, which here just re-renders the same content as a placeholder (a real module should split this, per §8's noted gap).
+- **Settings → Modules:** the module appears in the table automatically; "Configure" calls `GuestNotesModule.DrawSettings()`, which here re-renders the same content only because this module genuinely has no persistent configuration to separate (§8/§9's documented exception, not the default — a module with actual settings MUST split them out).
 - **Diagnostics:** none wired in this minimal example since it can't fail (no backend, no external state); a real module with a failure mode would take a `DiagnosticsService` constructor parameter and call `diagnostics.RecordFailure(...)` from `GuestNotesService` on any recoverable error, e.g. `diagnostics.RecordFailure($"tools.guestnotes: failed to save note ({ex.Message})");`.
 - **Disposal:** `DisposeAsync() => ValueTask.CompletedTask` is correct here since the service owns no subscriptions, timers, or connections to release.
 
+## 41a. Visual Definition of Done
+
+A module is not visually complete merely because every control exists and the tests pass. **Automated tests cannot satisfy this checklist — it requires looking at the module rendered live in Dalamud** (§32). Before calling a module ready for live acceptance, check:
+
+- [ ] The primary action is visually obvious (not competing for attention with secondary controls)
+- [ ] Destructive actions are visually differentiated (`DangerButton`, not a `PrimaryButton`/`GhostButton` indistinguishable from a safe action)
+- [ ] Settings and live operation read as genuinely separate (§9), not the same content twice
+- [ ] Sections have coherent grouping — related controls are visually grouped, unrelated ones aren't crammed together
+- [ ] Labels are understandable without reading the source
+- [ ] Fields have enough width for realistic content (a server URL, a long guest name)
+- [ ] Current status is visible at a glance, not buried
+- [ ] The empty state is an intentional message, not a blank/broken-looking area
+- [ ] Errors are visible in the operational UI itself, not only in Diagnostics
+- [ ] Warnings explain *why* an action is blocked, not just that it is
+- [ ] Confirmation dialogs use the shared `ConfirmDialog`, not a raw ImGui modal
+- [ ] Scrolling works and long content doesn't overlap (§35)
+- [ ] Tables/lists remain usable at the minimum supported window size
+- [ ] The detached view works correctly if the module supports it (§19–§20)
+- [ ] All four themes (Dark, Light, Neon, Midnight) are respected — no hard-coded colors breaking the visual language (§16, §17)
+- [ ] No important control is clipped at any supported window size
+- [ ] Nothing uses raw/default ImGui presentation where a `UiKit`/`Forms` equivalent exists (§15)
+
+**This checklist establishes the bar for a new module now.** It is not the global interface-cleanup pass — do not use it as license to go back and re-polish spacing/typography/layout on existing shipped modules (Attendance, Greeter, VIP, ShoutRunner, Party Finder, Raffle, Mair's Trivia/Editor, TournamentControl, Bingo); that dedicated pass happens later, after Giveaways/Block Letters/Macro, and this guide will get one final sync pass after it to reflect whatever shared UI conventions come out of it.
+
 ## 42. Definition of Done
 
-**Identity**
+**Architecture**
+- [ ] Module has its own dedicated file(s)/folder — not added to `Operations.cs`/`NativeOperationsPanels.cs` (§21, §33)
 - [ ] Stable module ID assigned, namespaced, never reused from another module
 - [ ] Display name defined and correct everywhere it's read from (there's only one place — §4)
 - [ ] Icon key registered in `AppIcons`, distinct from every other module's key
-
-**Registration**
+- [ ] State authority model stated (§34a) — which layer owns each piece of state
 - [ ] `modules.Register(...)` added in `Plugin.cs`
 - [ ] Home tile appears with correct icon/name
 - [ ] Enable/disable toggle in Settings → Modules works and disables the tile/detached window correctly
 
-**Configuration**
-- [ ] `DrawSettings()` exists and (ideally) shows persistent configuration distinct from `Draw()`'s live operation
+**Venue**
+- [ ] `venues.Current` used for venue identity — no module-specific "Venue Name" field (§10)
 - [ ] Per-venue config isolated via `GetModuleConfig`/`SaveModuleConfig`, keyed by this module's own ID
-- [ ] No module-specific "Venue Name" field — reads `venues.Current.DisplayName`
+- [ ] Venue switch tested with two venues holding different config for this module (§12a, §32)
+- [ ] No stale state (settings, operation state, participants, credentials, timers, realtime subscriptions, cached data) crosses venues (§12a)
+
+**Settings**
+- [ ] `DrawSettings()` shows only persistent configuration, distinct from `Draw()`'s live operation (§9) — unless a documented exception applies
+- [ ] Every editable persistent field actually gets saved (§13a) — not just held in an in-memory object
+- [ ] Credentials persist as plain, unmasked, copyable text where applicable (§9a)
 - [ ] A global setting was added only if it's genuinely venue-independent (§12)
 - [ ] Schema version set; recoverable-payload path doesn't silently discard user data (§13)
+
+**Lifecycle**
+- [ ] Cancellation ownership defined — a `CancellationTokenSource` cancelled/recreated on every relevant transition (§24a)
+- [ ] Enable/disable preserves config; disable behavior matches §22
+- [ ] Venue switching reloads config and resets in-memory state correctly (§11, §12a)
+- [ ] Disposal releases every subscription/timer/connection the module owns (§24)
+- [ ] Stale async callbacks and stale realtime frames are guarded against (§24a)
+- [ ] Realtime channel (if any) is disposed and reconciled correctly on venue switch/reconnect (§34b)
 
 **UI**
 - [ ] `UiKit`/`Forms` components used; no raw `ImGui.Button`/`InputText`/`Checkbox`/`Combo` for user-facing controls
 - [ ] Only semantic theme tokens used, no hard-coded colors
+- [ ] `ConfirmDialog` used for destructive actions, with consequence-stating text (§37)
+- [ ] Empty, loading, success/status, warning, error, and disconnected states all handled where applicable (§36)
+- [ ] Destructive actions are visually differentiated from safe ones (`DangerButton`)
 - [ ] Embedded view works via `AppFrame.DrawModule`
-- [ ] Detached view works via `ModuleWindowManager`, identical content to embedded
-- [ ] Detached header shows only icon/name (left) and Settings/Close (right) — no global controls
-- [ ] Detached Settings gear routes to Settings → Modules → this module
-- [ ] Detached Close only closes the detached window
+- [ ] Detached view works via `ModuleWindowManager`, identical content to embedded, header shows only icon/name and Settings/Close (§19–§20)
 - [ ] Auto Pop-Out off → embedded; on → detached, main tablet stays on Home, re-click focuses not duplicates
-- [ ] Resizing works, no overlap at wide/normal/minimum sizes
-- [ ] Dark, Light, Neon, Midnight all tested
+- [ ] Resizing works, no overlap at wide/normal/minimum sizes (§35)
+- [ ] Dark, Light, Neon, Midnight all tested (§17)
+- [ ] Full Visual Definition of Done walked (§41a)
 
-**Lifecycle**
-- [ ] Enable/disable preserves config
-- [ ] Venue switching reloads config and resets in-memory state correctly
-- [ ] Disposal releases every subscription/timer/connection the module owns
-- [ ] Background work cancels on venue switch/disable/disposal as appropriate
+**Security**
+- [ ] No credential logged or shown outside Settings' plain-text UI (§9a, §26)
+- [ ] Secret-bearing URLs sanitized before reaching Diagnostics/exceptions — checked for query params, headers, *and* path segments, not just a `key=value` marker (§26)
+- [ ] Backend authorization enforced server-side, not only via client-side confirmation (§37)
+- [ ] A browser/viewer-facing client (if any) never receives an organizer/admin-level secret it doesn't need (§26)
 
-**Diagnostics**
-- [ ] Recoverable failures reported via `DiagnosticsService.RecordFailure`, attributable to this module
-- [ ] Operational screen shows a concise state, not a raw exception
-- [ ] No secret value appears in a diagnostic message outside `Redact`'s coverage
+**Guest Identity (where applicable)**
+- [ ] `GuestIdentity(Name, HomeWorld)` used for FFXIV player/guest identity, not Name alone (§28)
+- [ ] Target capture (if any) goes through `ITargetedPlayerProvider` (§28a)
+- [ ] Legacy Name-only data (if any) is handled as an intentional, documented case, not silently merged (§28)
+
+**Data**
+- [ ] Persistence verified across an actual reload boundary (disable/re-enable or serialize/deserialize), not just a window close/reopen (§13a, §30)
+- [ ] Import/export verified if applicable — fresh identity on import, collision handling explicit (§34c)
+- [ ] Archive/Delete/Reset semantics verified if applicable, and kept distinct (§13b)
 
 **Backend (if applicable)**
 - [ ] Typed client, protocol models separate from UI
@@ -603,13 +818,27 @@ modules.Register(new GuestNotesModule(guestNotesService, guestNotesPanel.Draw));
 - [ ] Credentials are per-venue
 - [ ] Venue switch cancels/tears down the old backend context before using the new one's credentials
 - [ ] In-flight requests are cancellable
+- [ ] Realtime reconnect reconciles against REST, not just resumes the socket (§34b)
 
 **Testing**
 - [ ] Automated tests added for whatever is pure logic, in the appropriate `tests/VenueOS.*.Tests` project
 - [ ] Per-venue isolation tested
+- [ ] Error paths tested, not just the happy path
+- [ ] Realtime/backend client tests use a fake transport/handler, not a real network call (§30)
+- [ ] Import/export tests included if applicable
 - [ ] Global config behavior tested if a global setting was added
-- [ ] `dotnet build VenueOS.sln` succeeds (Debug and Release)
-- [ ] Manual in-game QA (§32) completed
+- [ ] `dotnet build VenueOS.sln` succeeds (Debug and Release); full existing test suite still passes
+- [ ] Warnings reviewed, not silently ignored
+
+**Live QA** — cannot be satisfied by automated tests; requires the user actually running the module in Dalamud (§32, §41a)
+- [ ] Rendered ImGui behavior verified live
+- [ ] Real FFXIV integration verified where applicable (target capture, presence, chat commands)
+- [ ] Browser/web display verified where applicable
+- [ ] User acceptance actually obtained — do not report a module as "live-tested" unless the user performed it
+
+**Promotion**
+- [ ] `UnderDevelopment: true`, disabled by default, until the user explicitly promotes it (§22a)
+- [ ] No self-authorized promotion/release merely because automated tests and builds passed (§22a, and the "no self-authorized deferrals" rule at the top of this document — deferring required work and self-promoting unfinished work are the same mistake in opposite directions)
 
 **Documentation**
 - [ ] Anything genuinely new about the shared architecture (a new UI-kit component, a new shared service) is reflected here or in `UI_STATUS.md`
@@ -634,17 +863,36 @@ Some content is neither per-venue config nor a single module's operational state
 
 ## 43. Instructions for an AI coding agent
 
+This guide remains a general engineering document usable by humans too — the rules above apply regardless of who's implementing. This section is the compact checklist specifically for an AI session picking up a "build module X" task.
+
+**Before implementation:**
+
 1. Read this entire document before writing any code.
 2. Inspect the actual current source for anything you're about to touch or extend — this guide is a snapshot, not a substitute for reading `Plugin.cs`, `ModuleHost`, `VenueProfileService`, and the UI kit files directly.
-3. Reuse existing shared infrastructure (§27) rather than building a parallel version of it.
-4. Never modify a donor/reference repository (listed at the top of this document) unless the user has explicitly authorized it for that specific task.
-5. Implement both embedded and detached rendering as one shared `Draw()` — never two implementations.
-6. Verify Auto Pop-Out works correctly in both states without any module-specific branching.
-7. Give the module a real Settings contribution, distinct from its operational UI where the content genuinely differs (§9).
-8. Read venue identity from `VenueProfileService.Current`, never a module-local field.
-9. Build (`dotnet build VenueOS.sln`, Debug and Release) and run the existing test suite before considering the task done; add tests for new pure logic.
-10. Walk the Definition of Done (§42) explicitly and report which items are satisfied.
-11. If something in this guide doesn't match what you find in the repository, or a requirement genuinely can't be met (e.g., a module that truly cannot support detaching), say so explicitly rather than silently deviating or forcing a fit.
+3. If the module is based on a donor/reference project, inspect the donor's actual behavior before "simplifying" it — donor behavior is authoritative unless the user explicitly overrides it, and the current VenueOS scaffold is not automatically a complete specification on its own. For a greenfield module (no donor), this step doesn't apply — see the intro's Normative language/donor note.
+4. Complete the pre-flight planning template (§39) — establish the authority/persistence/lifecycle model in writing before coding, not while coding.
+
+**During implementation:**
+
+5. **No self-authorized deferrals** (see the top of this document) — do not silently relabel required work as future/optional/Phase 2/TODO because it's inconvenient. If genuinely blocked, stop and report the blocker; the user decides on deferral, not you.
+6. Reuse existing shared infrastructure (§27) rather than building a parallel version of it.
+7. Never modify a donor/reference repository (listed at the top of this document) unless the user has explicitly authorized it for that specific task; never commit/push/tag/release inside one.
+8. Do not modify unrelated modules or silently change product decisions while implementing this one.
+9. Implement both embedded and detached rendering as one shared `Draw()` — never two implementations.
+10. Verify Auto Pop-Out works correctly in both states without any module-specific branching.
+11. Give the module a real Settings contribution, distinct from its operational UI where the content genuinely differs (§9).
+12. Read venue identity from `VenueProfileService.Current`, never a module-local field.
+13. Keep persistence real (§13a) — every editable field that should survive a reload goes through an actual save call, verified across a real reload boundary, not just a window close/reopen.
+14. Use shared UI components (§15) rather than raw ImGui or one-off visual conventions for ordinary confirm/warn/error/empty states.
+15. Test incrementally as you go, not only at the end.
+
+**After implementation:**
+
+16. Build (`dotnet build VenueOS.sln`, Debug and Release) and run the existing full test suite before considering the task done; add tests for new pure logic (§30).
+17. Walk the Definition of Done (§42) explicitly and report which items are satisfied — including the Visual and Live QA categories, which you cannot personally satisfy from a terminal session.
+18. If the task requests a written completion report, write it to disk and report its exact path — don't paste the whole thing into chat only.
+19. **Do not claim live QA, manual in-game testing, or user acceptance was performed unless the user actually performed it.** Reporting "tested and working" for something only unit tests covered is a real class of mistake this guide exists partly to prevent (§30, §41a).
+20. If something in this guide doesn't match what you find in the repository, or a requirement genuinely can't be met (e.g., a module that truly cannot support detaching), say so explicitly rather than silently deviating or forcing a fit.
 
 ## 44. Relationship to `MODULE_DEVELOPMENT.md`
 

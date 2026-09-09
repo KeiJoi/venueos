@@ -14,25 +14,26 @@ using VenueOS.Venues;
 namespace VenueOS.Services.Tests;
 
 /// <summary>Verifies the final, user-selected module display order (ShoutRunner, Attendance, Greeter, VIP, Party
-/// Finder, Mair's Trivia, Mair's Editor, Bingo, Raffle, TournamentControl) end to end, using the real production
+/// Finder, Mair's Trivia, Mair's Editor, Bingo, Raffle, Brackets) end to end, using the real production
 /// <see cref="IVenueModule"/> wrapper classes and their real <see cref="ModuleDescriptor.DisplayOrder"/> values —
 /// not a synthetic stand-in — so a future accidental change to any module's <c>DisplayOrder</c> argument breaks
 /// this test, not just a generic-mechanism test. Both Home and Settings → Modules iterate the same
 /// <see cref="ModuleHost.Modules"/> property this test reads, so there is exactly one ordering to get right.
 /// ShoutRunner and Party Finder need their unsafe automation engines only through the small interfaces
 /// (<see cref="IShoutRunnerAutomation"/>/<see cref="IPartyFinderAutomation"/>) NEW_MODULE_GUIDE.md §30 designed
-/// specifically so tests never need a live Dalamud/game context — the no-op fakes below stand in for them.</summary>
+/// specifically so tests never need a live Dalamud/game context — the no-op fakes below stand in for them.
+/// Raffle and Brackets were promoted out of UnderDevelopment in the release-preparation pass (see
+/// <see cref="RaffleAndBracketsReleaseStatusTests"/>) and are now enabled by default like every other module this
+/// test registers. Block Letters, Giveaways, and Macro are also production modules as of this release, but are
+/// covered by their own dedicated descriptor/default tests (<c>BlockLettersServiceTests</c>,
+/// <c>GiveawayServiceTests</c>, <c>MacroServiceTests</c>) rather than this comprehensive cross-module ordering
+/// fixture, which predates them.</summary>
 public sealed class ModuleDisplayOrderTests
 {
     private static readonly string[] ExpectedDisplayNamesInOrder =
     [
         "ShoutRunner", "Attendance", "Greeter", "VIP", "Party Finder", "Mair's Trivia", "Mair's Editor",
-        "Bingo", "Raffle", "TournamentControl",
-    ];
-
-    private static readonly string[] ExpectedFreshInstallHomeOrder =
-    [
-        "ShoutRunner", "Attendance", "Greeter", "VIP", "Party Finder", "Mair's Trivia", "Mair's Editor", "Bingo",
+        "Bingo", "Raffle", "Brackets",
     ];
 
     [Fact]
@@ -43,17 +44,15 @@ public sealed class ModuleDisplayOrderTests
     }
 
     [Fact]
-    public void Fresh_install_home_order_excludes_the_two_disabled_unfinished_modules_but_keeps_their_relative_order()
+    public void Fresh_install_home_order_includes_every_module_now_that_all_ten_are_enabled_by_default()
     {
-        // Raffle/TournamentControl default IsEnabled = false (fresh install) — HomeScreen filters those out
-        // entirely (see HomeScreen.DrawGrid's `modules.Modules.Where(x => x.IsEnabled)`), while Settings → Modules
-        // shows all ten via the unfiltered ModuleHost.Modules. This proves the two lists agree on order and differ
-        // only by that filter, using the real fresh-install IsEnabled defaults. Bingo graduated to enabled-by-default
-        // in the 0.2.0 pass, so it's now part of the expected Home-visible list too.
+        // Every module registered in this fixture — including the now-promoted Raffle/Brackets — defaults to
+        // IsEnabled = true on a fresh install, so HomeScreen's `modules.Modules.Where(x => x.IsEnabled)` filter
+        // (see HomeScreen.DrawGrid) is a no-op here and the Home-visible order matches the full authoritative order.
         var host = BuildRealModuleHost();
         var homeVisible = host.Modules.Where(x => x.IsEnabled).Select(x => x.Descriptor.DisplayName);
-        Assert.Equal(ExpectedFreshInstallHomeOrder, homeVisible);
-        Assert.All(host.Modules.Where(x => x.Descriptor.UnderDevelopment), m => Assert.False(m.IsEnabled));
+        Assert.Equal(ExpectedDisplayNamesInOrder, homeVisible);
+        Assert.All(host.Modules, m => Assert.False(m.Descriptor.UnderDevelopment));
     }
 
     private static ModuleHost BuildRealModuleHost()
@@ -73,9 +72,9 @@ public sealed class ModuleDisplayOrderTests
         var partyFinderService = new PartyFinderService(new NoOpPartyFinderAutomation(), profiles, clock);
         var library = new FileQuestionSetRepository(Path.Combine(Path.GetTempPath(), "venueos-order-" + Guid.NewGuid()));
         var triviaService = new MairsTriviaService(new MairsTriviaClient(new HttpClient()), profiles, library, diagnostics);
-        var raffleService = new VenueRaffleService(new VenueRaffleClient(new HttpClient()), profiles);
+        var raffleService = new VenueRaffleService(new VenueRaffleClient(new HttpClient()), profiles, diagnostics);
         var bingoService = new VenueBingoService(new VenueBingoClient(new HttpClient()), profiles, diagnostics, chat);
-        var tournamentService = new TournamentControlService(new TournamentControlClient(new HttpClient()), profiles, new TournamentCalloutService(new SchedulerService(clock), chat));
+        var tournamentService = new TournamentControlService(new TournamentControlClient(new HttpClient()), profiles, new TournamentCalloutService(new SchedulerService(clock), chat), diagnostics);
 
         // Registered deliberately out of the expected display order, to prove sorting (not registration order)
         // decides the outcome.

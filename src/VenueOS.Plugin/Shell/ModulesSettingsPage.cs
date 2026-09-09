@@ -10,7 +10,7 @@ namespace VenueOS.Plugin.Shell;
 /// zero module-specific field knowledge — "Configure" just calls the selected module's own
 /// <see cref="IVenueModule.DrawSettings"/>, so a module can grow its settings surface without this file changing.
 /// Settings owns navigation/layout/frame; the module owns its configuration content (§27 of the Phase 3D brief).</summary>
-internal sealed class ModulesSettingsPage(ModuleHost modules, DiagnosticsService diagnostics, GlobalSettingsService globalSettings)
+internal sealed class ModulesSettingsPage(ModuleHost modules, DiagnosticsService diagnostics, GlobalSettingsService globalSettings, VenueProfileService venues)
 {
     private string? configuringModuleId;
 
@@ -88,13 +88,52 @@ internal sealed class ModulesSettingsPage(ModuleHost modules, DiagnosticsService
 
         ImGui.SetCursorScreenPos(rowStart + new Vector2(width - 250, 6));
         var enabled = module.IsEnabled;
-        if (UiKit.Toggle(theme, "##enabled", ref enabled)) { module.IsEnabled = enabled; globalSettings.SetModuleEnabled(module.Descriptor.Id, enabled); }
+        if (UiKit.Toggle(theme, "##enabled", ref enabled))
+        {
+            var wasEnabled = module.IsEnabled;
+            module.IsEnabled = enabled;
+            globalSettings.SetModuleEnabled(module.Descriptor.Id, enabled);
+            if (enabled && !wasEnabled) ActivateNewlyEnabledModule(module);
+        }
 
         ImGui.SetCursorScreenPos(rowStart + new Vector2(width - 120, 6));
         if (UiKit.GhostButton(theme, "Configure", new Vector2(100, 0))) configuringModuleId = module.Descriptor.Id;
 
         var rowHeight = MathF.Max(module.Descriptor.UnderDevelopment ? 64 : 46, 18 + descriptionHeight + 10);
         ImGui.SetCursorScreenPos(rowStart + new Vector2(0, rowHeight));
+    }
+
+    /// <summary>MACRO LIVE QA FIX — release-blocking persistence root cause: a module's own <c>OnVenueChangedAsync</c>
+    /// (which every current local module uses to resolve the active venue id and load its per-venue config — see
+    /// <c>MacroService.Load</c>/<c>GiveawayService.Load</c>/<c>BlockLettersService.Load</c>) is invoked by
+    /// <c>ModuleHost</c> from exactly two places: <c>VenueProfileService.InitializeAsync</c>'s one startup pass, and
+    /// <c>SwitchAsync</c> on every venue switch — both gated by <c>ModuleHost.IsolateAsync</c>'s
+    /// <c>if (!module.IsEnabled) return;</c> check (NEW_MODULE_GUIDE.md §23). A module that ships
+    /// <c>UnderDevelopment: true</c>/disabled-by-default (§22a — every current local module) therefore never
+    /// receives that first call at plugin startup. Before this fix, toggling it on right here only ever flipped
+    /// <see cref="IVenueModule.IsEnabled"/> with no further effect: the module's own service never learned the
+    /// active venue id, so its private venue-id field stayed at its default value and every config it saved before
+    /// the NEXT full plugin restart was written under the WRONG per-venue key — live-verified as total data loss
+    /// for Macro (macros "worked" for the rest of that session because <c>Draw()</c> reads the same in-memory
+    /// <c>Settings</c> object being mutated, but reloading the plugin loaded the REAL venue id's — empty — config).
+    /// Giveaways happened not to exhibit this in its own live QA pass purely because it was already enabled (and
+    /// therefore already correctly loaded) from a PRIOR session by the time its presets were authored — the
+    /// underlying gap is identical in every module using this same, otherwise-correct pattern; this fix closes it
+    /// centrally, once, without touching any individual module's own file. Re-invoking <c>OnVenueChangedAsync</c> is
+    /// safe by construction — it is specifically designed to be safely re-called on every ordinary venue switch
+    /// already (reset in-memory state, reload config for the given venue id) — so this is a pure bug fix, not new
+    /// module-specific behavior, and every module's own file is untouched.</summary>
+    private void ActivateNewlyEnabledModule(IVenueModule module)
+    {
+        try
+        {
+            var current = venues.Current;
+            module.OnVenueChangedAsync(new VenueContext(current.Id, current.DisplayName, current.Theme), CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            diagnostics.RecordFailure($"Activation failed in {module.Descriptor.Id}: {ex.Message}");
+        }
     }
 
     private void DrawConfigureDetail(VenueTheme theme, IVenueModule module)

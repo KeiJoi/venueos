@@ -41,6 +41,17 @@ internal static class Forms
         return changed;
     }
 
+    public static bool FloatField(VenueTheme theme, string label, ref float value, float step = 1f, float min = float.NegativeInfinity, float max = float.PositiveInfinity, string format = "%.2f")
+    {
+        FieldLabel(theme, label);
+        ImGui.SetNextItemWidth(-1);
+        PushFieldStyle(theme);
+        var changed = ImGui.InputFloat($"##{label}", ref value, step, step * 10, format);
+        PopFieldStyle();
+        if (changed) value = Math.Clamp(value, min, max);
+        return changed;
+    }
+
     public static bool ComboField(VenueTheme theme, string label, IReadOnlyList<string> options, ref int index, float width = -1)
     {
         FieldLabel(theme, label);

@@ -1,16 +1,14 @@
 # VenueOS User Manual
 
-**Current version:** 0.2.0
-**What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, live host trivia, and Bingo.
+**Current version:** 0.3.0
+**What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, live host trivia, Bingo, raffles, tournament brackets, block-letter text composition, timed giveaways, and extended macros.
 **Supported environment:** Windows FFXIV with Dalamud installed (API level 15). VenueOS is unofficial, third-party, and not affiliated with Square Enix or the Dalamud/XIVLauncher project.
 
-**Working modules covered in this manual:** ShoutRunner, Attendance, Greeter, VIP, Party Finder, Mair's Trivia, Mair's Editor, Bingo.
-
-**Included but Under Development (disabled by default):** Raffle, TournamentControl. See [Under Development Modules](#under-development-modules) — do not expect these to work yet.
+**Modules covered in this manual:** ShoutRunner, Attendance, Greeter, VIP, Party Finder, Mair's Trivia, Mair's Editor, Bingo, Raffle, Brackets, Block Letters, Giveaways, Macro. Every module in this release ships enabled by default and appears on Home.
 
 You can also read this manual inside VenueOS itself — click the **User Manual** tile on Home (just before Settings), no internet connection required.
 
-This manual describes the current release only. It does not describe planned features, and it does not describe how any donor/standalone plugin VenueOS was built from used to behave where VenueOS now differs.
+This manual describes the current release only. It does not describe planned features, and it does not describe how any donor/standalone plugin VenueOS was built from used to behave where VenueOS now differs. See [Known Issues](#23-known-issues) for the small number of documented, non-blocking caveats in this release.
 
 ---
 
@@ -19,7 +17,7 @@ This manual describes the current release only. It does not describe planned fea
 1. Install VenueOS through Dalamud's Experimental Plugin Repository (see [Installation](#1-installation)).
 2. Open it with `/venueos` (it does not open automatically on login).
 3. Go to **Settings → Venue** and create or select a Venue Profile.
-4. Check **Settings → Modules** — enable/disable modules as needed. Raffle and TournamentControl are off by default and marked "Under Development."
+4. Check **Settings → Modules** — enable/disable modules as needed. Every module ships enabled by default.
 5. Configure the modules you intend to use, in their own Settings sections.
 6. Launch applications from the **Home** screen.
 7. Use a module's pop-out icon if you want it in its own window instead of embedded in the tablet.
@@ -38,6 +36,11 @@ This manual describes the current release only. It does not describe planned fea
 | Mair's Trivia | Live host trivia backed by a remote server | Yes — remote Mair's Trivia backend | Yes (connection settings); the question library it reads from is not | Yes (polling continues; see [Lifecycle / Resume](#lifecycle--resume)) |
 | Mair's Editor | Authors trivia question sets used by Mair's Trivia | No | **No — global, shared library** | N/A (no background process; it's a pure editing surface) |
 | Bingo | Hosts a Bingo room: cards, calling, and payout tracking, backed by a remote server | Yes — remote Bingo backend | Yes | Yes (calling/alerts continue; see its own section) |
+| Raffle | Runs a raffle with paid/free tickets and a live browser wheel, backed by a remote server | Yes — remote Raffle backend | Yes | Yes (realtime mirroring continues) |
+| Brackets | Runs a single-elimination tournament bracket, backed by a remote server | Yes — remote Brackets backend | Yes | Yes (realtime mirroring continues) |
+| Block Letters | Composes FFXIV block-letter text within real per-destination character limits | No | Default destination only | N/A (pure composing surface; the composition itself is not persisted) |
+| Giveaways | Runs timed venue giveaways with automated announcements and `/random` roll tracking | No | Yes | Yes (the announcement/roll timeline keeps running) |
+| Macro | Runs extended, nestable FFXIV macros from a live launcher and up to four faux hotbars | No | Yes | Yes (a running macro and the faux hotbars keep working) |
 
 ---
 
@@ -77,7 +80,7 @@ VenueOS presents itself as a tablet with one persistent toolbar and a content ar
 | General | System behavior |
 | Diagnostics | Logs & troubleshooting |
 
-**Enabled vs. disabled modules:** a disabled module does not appear on Home at all — it's simply not there, not just grayed out. It still appears in **Settings → Modules**, where you can re-enable it. Toggling a module on/off in Settings → Modules is remembered — it's not reset by future updates unless you've never touched that toggle (see [Under Development Modules](#under-development-modules)).
+**Enabled vs. disabled modules:** a disabled module does not appear on Home at all — it's simply not there, not just grayed out. It still appears in **Settings → Modules**, where you can re-enable it. Toggling a module on/off in Settings → Modules is remembered — it's not reset by future updates unless you've never touched that toggle.
 
 **Settings vs. the module itself:** where a module has both, its **Settings → Modules → *Module*** page holds persistent configuration (server URLs, credentials, defaults), while the module's own app screen (opened from Home) holds live operational controls (start/stop, current guest list, active game state, and so on). The two are intentionally separate.
 
@@ -85,7 +88,7 @@ VenueOS presents itself as a tablet with one persistent toolbar and a content ar
 
 ## 3. Venue Profiles
 
-A **Venue Profile** represents one venue identity: a name and a theme, plus whichever module settings are stored per-venue (most of them are — see the [Persistence](#14-persistence) table).
+A **Venue Profile** represents one venue identity: a name and a theme, plus whichever module settings are stored per-venue (most of them are — see the [Persistence](#19-persistence) table).
 
 Manage venues under **Settings → Venue**:
 
@@ -100,7 +103,7 @@ You can also switch venues quickly from the toolbar's dropdown, without going in
 
 **Switching away from an active Mair's Trivia game:** if Mair's Trivia has a game running in the venue you're leaving, switching shows a confirmation: *"Mair's Trivia has an active game ("<game name>") running in this venue. Switching venues will end this game for all connected players. This will not end the Series it may belong to."* Confirming ends that game (but never the Series it's part of, which stays resumable). No other module currently has a venue-switch warning.
 
-**Global vs. venue-specific:** module enabled/disabled state, the Auto Pop-Out preference, and the Mair's Editor question library are global (shared across every venue). Everything else module-specific — connection settings, presets, rosters, recruitment criteria — is per-venue. See [Persistence](#14-persistence) for the full breakdown.
+**Global vs. venue-specific:** module enabled/disabled state, the Auto Pop-Out preference, and the Mair's Editor question library are global (shared across every venue). Everything else module-specific — connection settings, presets, rosters, recruitment criteria — is per-venue. See [Persistence](#19-persistence) for the full breakdown.
 
 ---
 
@@ -109,11 +112,11 @@ You can also switch venues quickly from the toolbar's dropdown, without going in
 Found under **Settings → General**:
 
 - **"Open modules in separate windows"** toggle (Auto Pop-Out). Off by default. When on, launching a module from Home opens (or focuses) its own detached window instead of embedding it in the tablet. This applies the same way for every venue and doesn't change when you switch venues. Settings itself is unaffected by this toggle and always opens embedded.
-- An **About VenueOS** card showing a version line (the actual installed release version, e.g. "VenueOS 0.2.0") and a one-line description of what VenueOS is.
+- An **About VenueOS** card showing a version line (the actual installed release version, e.g. "VenueOS 0.3.0") and a one-line description of what VenueOS is.
 
-**Settings → Modules** is where you enable/disable modules and jump into each one's own settings — see [Basics](#2-venueos-basics) above and [Under Development Modules](#under-development-modules) below.
+**Settings → Modules** is where you enable/disable modules and jump into each one's own settings — see [Basics](#2-venueos-basics) above.
 
-**Settings → Diagnostics** shows a filterable log of recent errors and configuration-recovery warnings (filters: **Log Level** — All Levels/Errors/Warnings, **Module**, and a **Search** box), plus **Clear** and **Copy** buttons and small stat tiles (Total Entries, Errors, Warnings, Last Update). Useful for troubleshooting — see [Troubleshooting](#15-troubleshooting).
+**Settings → Diagnostics** shows a filterable log of recent errors and configuration-recovery warnings (filters: **Log Level** — All Levels/Errors/Warnings, **Module**, and a **Search** box), plus **Clear** and **Copy** buttons and small stat tiles (Total Entries, Errors, Warnings, Last Update). Useful for troubleshooting — see [Troubleshooting](#20-troubleshooting).
 
 ---
 
@@ -392,7 +395,7 @@ Configured in **Settings → Modules → Mair's Trivia**:
 - **Username**
 - **Password**
 
-All four fields are plain, visible, readable text — none are password-masked. This is a deliberate product decision so venue staff can copy/share connection configuration easily. Treat your VenueOS configuration accordingly (see [Data / Privacy notes](#16-data--privacy--credential-notes)).
+All four fields are plain, visible, readable text — none are password-masked. This is a deliberate product decision so venue staff can copy/share connection configuration easily. Treat your VenueOS configuration accordingly (see [Data / Privacy notes](#21-data--privacy--credential-notes)).
 
 These settings are saved per venue. If you've previously signed in and a stored session token exists, VenueOS reconnects automatically when you switch to that venue — no manual sign-in needed. If your session expires while working, VenueOS tries to silently renew it, and if that fails, quietly falls back to signing in again with your stored username/password. Only if *both* fail do you see an error badge (*"Session expired and automatic sign-in failed."*) — at that point sign in again manually via Settings.
 
@@ -542,7 +545,190 @@ When a player's card completes the pattern, a detached **Bingo Call Alert** wind
 
 ---
 
-## 13. Detached Windows / Auto Pop-Out
+## 13. Raffle
+
+**Purpose:** runs a venue raffle with paid/free ticket tracking and a live browser wheel, backed by a remote Raffle server. VenueOS is the organizer console; the wheel itself (spinning, redraw, winner reveal) lives on a webpage the host and viewers open in a browser.
+
+### Settings (Settings → Modules → Raffle)
+
+- **Backend URL** and **Backend Access Key** — the raffle server's address and its organizer secret. This is VenueOS's own credential (separate from any host/viewer link token) and, per VenueOS's standard credential convention, is shown as plain, selectable, copyable text — never masked.
+- **Defaults** applied to every new raffle you create: **Starting Pot**, **Ticket Cost**, **Prize %**, **Paid Tickets For Free (bonus rule)** (e.g. buy N paid tickets, get one free), and **Free Tickets Per Block**. Each raffle can override its own copy of these after creation.
+
+### Creating and managing raffles
+
+- **New raffle name** + **Create raffle** — creates a local raffle you can then configure and publish.
+- Per raffle: **Rename**, **Archive** (nondestructive — hides it from the active list, fully restorable), **Reset** (clears participants/tickets/winner but keeps the raffle and its backend link — confirmed, since it destroys in-progress data), and **Delete Permanently** (confirmed, cannot be undone — if the raffle was ever published, VenueOS also best-effort deletes the backend's copy; a failed backend cleanup is logged to Diagnostics but never blocks the local deletion you already confirmed).
+- Archived raffles are hidden from the normal list; a **Show archived raffles** view offers **Restore** per row.
+
+### Participants and tickets
+
+- **Name** and **Home World** (optional — leave blank for a legacy Name-only entrant) identify a participant; **Use Current Target** fills both from whatever you have targeted in-game.
+- **Paid tickets to add** / **Add Paid Tickets**, **Free tickets to add** / **Add Free Tickets**, or **Add Participant Only** with zero tickets.
+- Existing participants: **+Paid** / **-Paid** / **+Free** / **-Free** adjust their ticket counts; **Remove** deletes them from this raffle entirely. Counts never go negative.
+- Two characters with the same name on different Home Worlds are always tracked as distinct participants; a legacy Name-only entrant (imported from an older export, or entered with no Home World) is also tracked as its own distinct identity rather than being guessed at.
+
+### Publishing and the live wheel
+
+- A status badge shows **Not Published**, **Unpublished Changes**, or **Published**.
+- **Publish / Update Raffle** sends the current roster and settings to the backend; **Refresh From Backend** pulls the backend's current state back into VenueOS.
+- Once published, **Host Link** and **Viewer Link** appear (each with its own **Copy** button) — share the Host Link with whoever will spin the wheel, and the Viewer Link with the audience. VenueOS itself never spins the wheel; it's a read-only observer of the backend's spin state and updates automatically the moment a result comes in.
+- **"Unpublished Changes"** appears the moment you adjust tickets, add a participant, or change settings after a Publish — a reminder that the live wheel hasn't seen your latest edits yet until you Publish again.
+
+### Redraw and exclusion
+
+The browser wheel's Spin button becomes **Redraw** once a winner already exists, and shows a confirmation before actually sending a redraw — the backend enforces this the same way regardless of what the browser does, so a redraw can never happen silently. A confirmed redraw removes **every** ticket belonging to the previous winner from the pool going forward, and VenueOS marks that participant **"Excluded (previous winner)"** in the roster — they cannot win again even if you add more tickets for other participants and republish, unless you explicitly clear the exclusion. To do that, check **"Also clear previously-excluded winners on publish"** before your next Publish.
+
+### Import / Export
+
+**Export to XLSX** and **Import from XLSX** round-trip a raffle's full settings and participant roster (including Home World and exclusion state) as a spreadsheet. Importing always creates a brand-new local raffle with no backend link yet — publish it again to put it live. Importing an older, pre-Home-World export brings every participant in as a legacy Name-only entrant rather than inventing a Home World for them.
+
+---
+
+## 14. Brackets
+
+**Purpose:** runs a single-elimination tournament bracket, backed by a remote Brackets server (module ID `games.tournament`, internally still named TournamentControl — this never affects anything you see).
+
+### Settings (Settings → Modules → Brackets)
+
+- **Server URL**, **Server access password**, and **Organizer key** — plain, selectable, copyable text, per VenueOS's standard credential convention.
+- **Authenticate** signs in with the password/key above; **Create Organizer** registers a brand-new organizer identity on the backend (confirmed first — do this once per organizer; it does not migrate any existing tournaments).
+- **Default game name** / **Default tournament name** — pre-filled when you create a new tournament.
+- Callout **Delay between lines (seconds)** — timing for the Call Players announcement (see below).
+
+### Browsing and creating tournaments
+
+The live screen opens on a browser: search, a **Status** filter, **Refresh**, and a list of this organizer's tournaments with a **Delete** action per row (disabled, with a tooltip, while a tournament is Active — cancel it first). While authenticated and nothing is loaded, an inline form lets you enter a **Game name**, **Tournament name**, and **Event date** and click **Create**.
+
+### Setup phase
+
+Once a tournament is loaded and still in Setup: add players one at a time (**Player name** / **Add**) or in bulk (**Add Bulk Entries**), reorder seeding with **Up**/**Down** per row, **Remove** a player (confirmed — remaining seeds renumber), or **Randomize Seeds** (confirmed). **Start Tournament** generates the bracket from the current seed order and is confirmed, since players can no longer be added, removed, or reseeded afterward.
+
+### Running the bracket
+
+Once Active, matches are shown round by round. Each match card shows both contestants; **Call Players** sends the configured announcement template to your Shout/Yell channel with the configured delay. Recording a winner is confirmed. Byes (from an odd number of entrants) auto-advance automatically — you'll never see a bye match waiting to be called.
+
+### Correcting a result
+
+A completed match always offers **Correct Result**, which flips the winner to the other contestant:
+- If no later match has been played yet, this is a plain confirmation.
+- If a later match already completed using the wrong winner, VenueOS shows a red **"Correct Result (clears completed later matches)"** button instead — its confirmation states plainly that every already-completed downstream match will be reset back to waiting, and this cannot be undone.
+
+### Completion and cleanup
+
+Once every match is decided, a champion card appears. **Copy Public Bracket URL** copies a link to the tournament's public (read-only, no login needed) bracket view. **Cancel Tournament** (confirmed) is available any time before completion. **Delete** (from the browser) permanently removes a tournament and its full bracket/history from the backend once it's no longer Active.
+
+### Multiple controllers / realtime
+
+Brackets stays in sync automatically if more than one controller (or the public web page) is watching the same tournament — a result recorded on one is reflected on the others without a manual reopen. If VenueOS briefly loses its connection, it reconnects and refreshes automatically once the connection returns.
+
+---
+
+## 15. Block Letters
+
+**Purpose:** a text/glyph composer for FFXIV's built-in "block letter" characters — the large stylized letters/digits/symbols the game itself renders in chat — kept within the real character limit of wherever you intend to paste the result.
+
+### Composing
+
+- **Destination** selector: **Chat**, **Party Finder (Comment)**, or **Macro Line** — each has its own real limit (Chat and Macro Line are measured in bytes, matching how FFXIV itself counts them; Party Finder Comment matches VenueOS's own Party Finder module).
+- The composition box behaves like an ordinary text editor: type, paste, select, and move the cursor normally. Clicking a glyph button in the palette inserts it immediately at your current cursor position (or replaces your current selection) — no need to click back into the box first.
+- The palette renders each button using the actual in-game glyph (via FFXIV's own font), not a placeholder label, so what you see is what will appear in-game. Letters, digits, and a curated set of additional symbols are all available.
+- A live byte counter shows how much room is left against the selected destination's limit, and input simply stops accepting more once you're at the limit — exactly like typing directly into that field in-game would.
+
+### Switching destinations
+
+Changing the Destination never discards or truncates your composition. If your current text is over the newly selected (smaller) destination's limit, a warning appears and **Copy** is disabled until you shorten it back down — nothing is silently cut.
+
+### Copying
+
+**Copy** puts the exact composed text on your clipboard, ready to paste into FFXIV chat, a Party Finder comment, or a macro line. VenueOS does not send anything on your behalf — you paste it wherever you need it yourself.
+
+### Settings (Settings → Modules → Block Letters)
+
+Only one thing is persisted per venue: the **Default Destination** the composer opens to. The composition text itself is intentionally not saved anywhere — it's cleared on venue switch, module disable, or a plugin reload, since it's meant as a one-off compose-and-copy tool rather than a saved document.
+
+---
+
+## 16. Giveaways
+
+**Purpose:** runs a timed venue giveaway with automated Shout/Yell announcements at Start, Midpoint, and Closing, and an FFXIV `/random` roll tracker that decides a winner automatically by your chosen rule.
+
+### Authoring presets (Settings → Modules → Giveaways)
+
+Settings shows a compact list of saved presets (name, channel/winner-mode summary, a **RUNNING** flag if one is currently active) with **Edit**/**Delete** per row and a **+ New Preset** button. All authoring happens in one dedicated editor window — there is no separate inline editor to get confused with:
+
+- **Preset Name**
+- **Shout / Yell** — which channel every announcement line goes to.
+- **Delay Between Lines (seconds)** and **Giveaway Duration (seconds)**.
+- **Start**, **Midpoint**, and **Closing** blocks — up to 10 lines each, with **+ Add Line**/**Remove** per line. Blank lines are simply skipped when sending.
+- **Winner Mode** — **Highest**, **Lowest**, or **Closest** (with a **Closest Target Number** field when Closest is selected).
+- **Allowed Rolls Per Person** — `1` accepts only a player's first roll; a higher number accepts up to that many rolls per person and keeps their best; `0` means unlimited rolls, taking the best of however many they make.
+- **Special Numbers (comma-separated)** — rolls that land on one of these are highlighted with a distinct "SPECIAL" badge. Special Numbers only take effect when Allowed Rolls Per Person is exactly `1` — with multiple or unlimited rolls allowed, special-number highlighting is turned off entirely, since letting someone re-roll for it would defeat the point.
+
+**Save** validates the preset and only closes/persists on success; **Cancel** (or closing the window's X) discards whatever you were editing with no effect on the saved preset. Starting a giveaway snapshots the currently selected preset — editing that same preset afterward in Settings never changes the giveaway already in progress.
+
+### Running a giveaway
+
+The live screen shows the active (or, if none is running, currently selected) preset's name in large, unmistakable text, a preset selector (locked while a giveaway is running), **Start**, **Cancel** (confirmed — stops remaining announcements and closes roll acceptance immediately, but never deletes the preset, and captured rolls stay visible until you Clear Results), and **Clear Results**. A separate, independently opened **tracker window** shows the exact same roll tracker outside the main module window, if you want it detached.
+
+**Timeline:** Start's lines send in order; once the last one goes out, the countdown begins and roll acceptance opens. At the halfway point, Midpoint sends. At the full duration, Closing begins sending — but **roll acceptance does not close yet**. Rolls remain accepted through the entire Closing sequence (including between lines), closing only the instant Closing's last non-empty line has actually gone out. If Closing has no lines configured, roll acceptance closes immediately once the duration expires instead. This is deliberate: a Closing announcement that says "last chance to roll!" would otherwise be a lie.
+
+### Rolls and the tracker
+
+Players use FFXIV's own `/random` (or `/random 999`) — VenueOS reads the result straight from your chat. Both the host's own roll and other players' rolls (same-world or cross-world) are captured and resolved to a Name + Home World identity. One row is shown per participant, holding their best accepted roll; **Total Rolls** counts every accepted roll, and the current leader (by Highest/Lowest/Closest, as configured) is highlighted and sorted to the top automatically, with ties shown as multiple leaders rather than an arbitrary pick.
+
+**Roll visibility is limited by FFXIV's normal `/random` message range** — a player has to be close enough to you for their roll to actually appear in your own chat. VenueOS cannot capture a roll your game client never received; this note is shown directly under the tracker as a reminder.
+
+---
+
+## 17. Macro
+
+**Purpose:** a persistent, per-venue library of extended FFXIV command macros — with no 15-line limit, nested macro invocation, an action-readiness wait, and up to four faux hotbars that render on the game screen independently of the VenueOS tablet.
+
+### Creating and editing a macro (Settings → Modules → Macro → Library)
+
+**+ New Macro** opens a dedicated editor window (separate from the browser list, never inline):
+
+- **Macro Name**
+- An **FFXIV icon** picker — a curated, job-independent set of general game icons (the same category FFXIV's own macro editor calls "General").
+- **Delay Between Lines (seconds)** — how long to wait between each line this macro sends, including fractional seconds.
+- One large **Macro Body** text area — paste or type a complete multi-line macro exactly like you would into FFXIV's own macro editor. Normal editing (type, paste, Ctrl+A/C/X/V, arbitrary cursor movement) all work as expected.
+
+**Save** validates every line and only closes/persists on success; **Cancel**, or closing the window's native X, discards the draft with no effect on the saved macro.
+
+**Where the macro "ends":** VenueOS reads your macro body top to bottom. The **first line that is empty (or contains only whitespace)** ends the executable macro — everything after it is ignored and not saved as part of the runnable macro. If there's no blank line at all, the entire body runs. This lets you keep scratch notes below a macro in the same box without them accidentally executing.
+
+**Line limit:** each individual line may be up to **500 UTF-8 bytes** — the real FFXIV chat/command limit, not FFXIV's own shorter 181-byte macro-editor limit — so lines a normal in-game macro couldn't hold will still work here. A line over the limit is reported by exact line number and byte count, and nothing is saved until every line fits.
+
+### Running macros
+
+Open Macro from Home: a status card shows **RUNNING: `<name>`** (plus a nested macro name and line progress, if applicable) with **Cancel Macro**, or "No macro running." with the outcome of the last run. Below it, a grid of large macro tiles — click one to run it immediately; tiles disable while something is already running, but Cancel always stays available.
+
+You can also run a macro from anywhere with **`/venueos macro "Macro Name"`** — this works whether the VenueOS tablet is open or closed, and works from inside a real, built-in FFXIV macro (since a built-in macro just plays back chat/slash commands). If the Macro module is disabled, this prints a chat message telling you to enable it instead of silently doing nothing.
+
+### Nesting and `/actionready`
+
+A macro line that is exactly `/venueos macro "Child Name"` runs that other macro to completion (using the child's own Delay Between Lines) before returning to the parent — never sent to FFXIV as a literal command. A macro that would call itself, directly or through a chain (A→B→A, etc.), is refused immediately with a clear error rather than looping forever.
+
+`/actionready` on its own line pauses the macro until VenueOS's game-state probe reports you're no longer busy (animation lock, casting, or actively resolving a crafting/gathering step), then applies the macro's configured delay before moving to the next line. If readiness genuinely can't be determined, the macro waits rather than guessing and advancing — it never sends the next line "just in case." This has been live-verified against a real combat ability sequence with a short Delay Between Lines.
+
+### Faux hotbars
+
+Up to four independent hotbar overlays can render directly on the game screen, entirely separate from the VenueOS tablet — they keep working whether the tablet or the Macro module window is open or closed. Each hotbar has:
+
+- **Enabled** — whether it's visible at all.
+- **Layout** — one of six arrangements (12×1, 6×2, 4×3, 3×4, 2×6, 1×12), all covering the same 12 logical slots.
+- **Scale** and **Transparency**.
+- 12 slot assignments, set from **Settings → Modules → Macro → Hotbars**: drag a macro from the palette onto a slot to assign it (dropping onto an already-assigned slot swaps the two), or click a palette icon then click a slot as a non-drag fallback. **Clear Hotbar** (confirmed) empties every slot without deleting the macros themselves.
+
+A single global **Edit Hotbars** toggle (on the live Macro screen) switches every visible bar between **Locked** (clicking a slot runs its macro; the bar cannot be accidentally dragged) and **Editing** (the bar can be repositioned by dragging its background). The faux hotbars deliberately look like part of FFXIV's own interface — a dark HUD-style panel with no VenueOS window chrome, title bar, or theme colors — rather than another VenueOS window, so they blend into the game screen.
+
+### Persistence
+
+The macro library and all four hotbars' configuration (enabled state, layout, slot assignments, position, scale, transparency) are saved per Venue Profile and survive a plugin reload or `/xlrestart`. Disabling the Macro module never clears any of this — re-enabling it restores exactly where you left off.
+
+---
+
+## 18. Detached Windows / Auto Pop-Out
 
 Every module can run either **embedded** (inside the main VenueOS tablet) or **detached** (its own separate window) — the content and behavior are identical either way; it's purely a display choice.
 
@@ -550,26 +736,27 @@ Every module can run either **embedded** (inside the main VenueOS tablet) or **d
 - A detached window has its own compact header: the module's icon and name on the left, a Settings gear and a Close (X) on the right. The empty middle doubles as a drag handle.
 - Closing a detached window only closes that window — the module stays enabled and any of its automation keeps running.
 - The **"Open modules in separate windows"** toggle in Settings → General controls what happens when you launch a module from Home: on, it opens (or focuses, if already open) detached; off, it opens embedded in the tablet. Clicking an already-open detached module's tile again just brings it to front rather than opening a second copy.
+- A few modules also have their own independent auxiliary windows that are not part of this pop-out system at all — Bingo's Called Numbers/Card Viewer/Bingo Call Alert, Giveaways' tracker window, and Macro's faux hotbars all render on their own, gated only on the module being enabled, regardless of whether the module's own window or the main tablet is open.
 
 ---
 
-## 14. Persistence
+## 19. Persistence
 
 | Scope | Examples |
 |---|---|
 | **Global** (shared by every venue) | Which modules are enabled/disabled, Auto Pop-Out preference, the entire Mair's Editor question library |
-| **Venue-specific** | ShoutRunner settings (and its recovery checkpoint for an interrupted run), Attendance settings and history (including each opening's own Venue Area Type), Greeter presets/hotbar, VIP roster, Party Finder recruitment criteria, Mair's Trivia connection settings and scoring defaults, Bingo room key and default game settings |
-| **Runtime-only** (does not survive a reload) | ShoutRunner's on-screen terminal history, Mair's Editor's Undo history, Mair's Trivia's and Bingo's reference to "which game/room is currently open" (though the game/room itself survives on its backend and can be resumed) |
+| **Venue-specific** | ShoutRunner settings (and its recovery checkpoint for an interrupted run), Attendance settings and history (including each opening's own Venue Area Type), Greeter presets/hotbar, VIP roster, Party Finder recruitment criteria, Mair's Trivia connection settings and scoring defaults, Bingo room key and default game settings, Raffle connection settings/defaults/raffles, Brackets connection settings, Block Letters' default destination, Giveaways presets, Macro's macro library and hotbar configuration |
+| **Runtime-only** (does not survive a reload) | ShoutRunner's on-screen terminal history, Mair's Editor's Undo history, Mair's Trivia's/Bingo's/Raffle's/Brackets' reference to "which game/room/raffle/tournament is currently open" (though the game/room/raffle/tournament itself survives on its backend and can be resumed), Block Letters' composition text, Giveaways' in-progress timeline/roll board, Macro's currently-running execution state |
 
 Disabling a module never erases its saved configuration — re-enabling it picks back up exactly where you left off.
 
 ---
 
-## 15. Troubleshooting
+## 20. Troubleshooting
 
 **VenueOS doesn't open by itself.** That's expected — it never opens automatically. Run `/venueos`.
 
-**A module I expect is missing from Applications.** Check **Settings → Modules** — it's probably disabled. Raffle and TournamentControl are disabled by default on a fresh install (see [below](#under-development-modules)).
+**A module I expect is missing from Applications.** Check **Settings → Modules** — it's probably disabled.
 
 **ShoutRunner won't travel between Worlds.** Confirm Lifestream is installed and working — ShoutRunner depends on it for all world travel but doesn't check for it before letting you press Start. Also check that at least one Data Center and one destination are configured, and check the Run Terminal for the actual failure reason.
 
@@ -585,20 +772,32 @@ Disabling a module never erases its saved configuration — re-enabling it picks
 
 **A player doesn't show up in the game right away.** VenueOS polls the backend periodically rather than instantly — give it a moment.
 
+**Raffle says "Unpublished Changes" and won't go away.** That's expected until you click **Publish / Update Raffle** again — any ticket/participant/setting change after your last publish sets this until you republish.
+
+**A Raffle redraw didn't let the previous winner roll again — that's intentional.** They're marked "Excluded (previous winner)" and stay excluded across republishes until you check "Also clear previously-excluded winners on publish" and publish again.
+
+**Brackets won't let me Delete a tournament.** Active tournaments can't be deleted directly — Cancel it first, then Delete becomes available.
+
+**Block Letters' Copy button is disabled.** Your composition is over the selected destination's limit — switch to a longer-limit destination, or shorten the text; nothing is ever truncated automatically.
+
+**A Giveaways roll didn't count.** Check whether the giveaway's roll window was actually open (before Start finishes sending, or after Closing's last line has gone out, rolls are ignored), whether the roller was within `/random` chat range of you, and whether they'd already used up their Allowed Rolls Per Person.
+
+**A Macro tile drag onto a faux hotbar doesn't work.** This is a known issue — see [Known Issues](#23-known-issues). Assign hotbar slots from **Settings → Modules → Macro → Hotbars** instead.
+
 Anything logged as an error or warning also appears in **Settings → Diagnostics**, filterable by module/level, with a **Copy** button if you need to share the log.
 
 ---
 
-## 16. Data / Privacy / Credential Notes
+## 21. Data / Privacy / Credential Notes
 
-- Mair's Trivia's Server-access password, Username, and Password are stored and displayed **in plain, readable text** by design, so venue staff can easily copy/share connection details. Don't casually share your VenueOS configuration file with people you don't want to see them.
-- Mair's Trivia player/game/Series data, and Bingo room/player/payout data, live on their respective remote backends, not just locally.
-- Your local VenueOS configuration otherwise contains operational data — venue names, rosters, presets, recruitment criteria, and similar.
-- This manual makes no telemetry claims; nothing in the source reviewed for this manual indicates VenueOS phones home beyond the Mair's Trivia backend you configure yourself.
+- Mair's Trivia's Server-access password/Username/Password, Bingo's Room Key, Raffle's Backend Access Key, and Brackets' Server access password/Organizer key are all stored and displayed **in plain, readable text** by design, so venue staff can easily copy/share connection details. Don't casually share your VenueOS configuration file with people you don't want to see them.
+- Mair's Trivia player/game/Series data, Bingo room/player/payout data, Raffle roster/spin data, and Brackets tournament/bracket data all live on their respective remote backends, not just locally.
+- Your local VenueOS configuration otherwise contains operational data — venue names, rosters, presets, recruitment criteria, macro bodies, and similar.
+- This manual makes no telemetry claims; nothing in the source reviewed for this manual indicates VenueOS phones home beyond the backends you configure yourself (Mair's Trivia, Bingo, Raffle, Brackets).
 
 ---
 
-## 17. Updates
+## 22. Updates
 
 Once VenueOS is installed from the Experimental Plugin Repository, updates arrive the normal Dalamud way — the Plugin Installer checks configured repositories periodically (or via Settings → Experimental → "Check for Updates") and offers an update when a newer version is published. You should not need to manually replace any files for a normal release.
 
@@ -606,14 +805,12 @@ Once VenueOS is installed from the Experimental Plugin Repository, updates arriv
 
 ---
 
-## Under Development Modules
+## 23. Known Issues
 
-**Raffle and TournamentControl** exist in this release but are **not ready for use**:
+These are documented, non-blocking caveats in the current release — none of them require the affected module to be disabled or treated as unfinished.
 
-- They ship **disabled by default** on a fresh install.
-- Because they're disabled, they do **not** appear on the Home/Applications screen.
-- They still show up in **Settings → Modules**, clearly labeled **"Under Development"**, so you can see they exist.
-- They are not covered by this manual's operational instructions and should not be treated as functional features of this release.
+- **Macro: dragging a tile from the Live launcher directly onto a faux hotbar slot is not currently reliable in the live ImGui runtime.** Clicking a saved macro to run it, and assigning hotbar slots from **Settings → Modules → Macro → Hotbars** (drag-and-drop or click-to-place, both from Settings), work correctly — only the live-window-to-overlay drag path is affected. Use the Settings assignment path until this is fixed in a future update.
+- **Bingo's automated payout remains an experimental convenience feature**, not a fully verified path — see the [Bingo](#12-bingo) section and [Troubleshooting](#20-troubleshooting) above. Manual reconciliation via Mark Paid/Mark Not Paid, or a normal in-game trade, is always available and fully supported.
 
 ---
 

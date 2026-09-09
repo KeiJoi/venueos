@@ -1,6 +1,18 @@
-# VenueOS 0.2.2 release
+# VenueOS 0.3.0 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.0 highlights
+
+- **All modules promoted to production.** Raffle and Brackets (formerly TournamentControl) completed reconstruction and live QA and are no longer "Under Development"; three new greenfield modules — Block Letters, Giveaways, and Macro — completed their own build/automated-test/live-QA passes and ship as production modules from their first release. Every module VenueOS ships is now enabled by default and appears on Home; `UnderDevelopment` remains available as generic infrastructure for a future module, but no current module uses it.
+- **Raffle reconstruction** — organizer-key backend authentication, confirmed-redraw/previous-winner-exclusion semantics, crash-safe backend persistence, HomeWorld-aware participant identity, archive/delete/reset lifecycle, and a live realtime-mirrored browser wheel. See `docs/RAFFLE_RECONSTRUCTION.md`.
+- **Brackets reconstruction** (module ID `games.tournament` unchanged) — fixed a backend bye-progression defect that broke odd-sized brackets (17 players, etc.), added realtime bracket sync, result correction with downstream-rollback confirmation, and organizer-initiated tournament deletion. See `BRACKETS_RECONSTRUCTION.md`.
+- **Block Letters** (new) — compose FFXIV block-letter text within real per-destination character limits (Chat, Party Finder Comment, Macro Line), with cursor/selection-aware glyph insertion and actual in-game glyph rendering in the palette. See `docs/BLOCK_LETTERS_IMPLEMENTATION.md`.
+- **Giveaways** (new) — timed venue giveaways with automated Shout/Yell announcements and an FFXIV `/random` roll tracker (Highest/Lowest/Closest winner modes, per-person roll limits, special numbers, cross-world identity). See `docs/GIVEAWAYS_IMPLEMENTATION.md`.
+- **Macro** (new) — a persistent per-venue macro library authored in a dedicated multiline editor, a live tile launcher, up to four faux FFXIV-style hotbars, nested macro invocation with cycle protection, `/actionready` action-readiness waiting, and `/venueos macro "Name"`. One known non-blocking issue: dragging a macro tile from the Live launcher directly onto a faux hotbar slot is not yet reliable in the live ImGui runtime — assign hotbar slots from Settings → Modules → Macro → Hotbars instead. See `docs/MACRO_IMPLEMENTATION.md`.
+- **User Manual updated** to cover every production module, including the workflows above and the Known Issues section.
+
+See `docs/RELEASE_PREPARATION.md` for the full release-preparation record (tests, builds, packaging, files changed).
 
 ## 0.2.2 hotfix
 

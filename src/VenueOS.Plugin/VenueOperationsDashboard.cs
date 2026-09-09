@@ -2,7 +2,9 @@ using Dalamud.Bindings.ImGui;
 using VenueOS.Core;
 using VenueOS.Modules.Operations;
 using VenueOS.Modules.Operations.Bingo;
+using VenueOS.Modules.Operations.Raffle;
 using VenueOS.Modules.Operations.ShoutRunner;
+using VenueOS.Modules.Operations.Tournament;
 using VenueOS.Modules.Operations.Trivia;
 using VenueOS.Plugin.Shell;
 using VenueOS.Services;
@@ -30,9 +32,9 @@ internal sealed class VenueOperationsDashboard(VenueProfileService venues, Modul
         ImGui.Spacing();
 
         Badge(theme, "Bingo", Bingo(bingo.Dashboard), bingo.Dashboard.IsConnected);
-        Badge(theme, "Raffle", $"{raffle.Dashboard.RaffleCount} local raffle(s)", raffle.Dashboard.RaffleCount > 0);
+        Badge(theme, "Raffle", $"{raffle.Dashboard.ActiveRaffleCount} local raffle(s)", raffle.Dashboard.ActiveRaffleCount > 0);
         Badge(theme, "Mair's Trivia", trivia.Dashboard.IsAuthenticated ? trivia.Dashboard.GameState ?? "connected" : trivia.Dashboard.IsConfigured ? "sign-in required" : "not configured", trivia.Dashboard.IsAuthenticated);
-        Badge(theme, "TournamentControl", tournament.Dashboard.IsAuthenticated ? tournament.Dashboard.State ?? "connected" : tournament.Dashboard.IsConfigured ? "sign-in required" : "not configured", tournament.Dashboard.IsAuthenticated);
+        Badge(theme, "Brackets", tournament.Dashboard.IsAuthenticated ? tournament.Dashboard.State ?? "connected" : tournament.Dashboard.IsConfigured ? "sign-in required" : "not configured", tournament.Dashboard.IsAuthenticated);
 
         ImGui.Spacing();
         var errorCount = diagnostics.Capture().RecentErrors.Count;

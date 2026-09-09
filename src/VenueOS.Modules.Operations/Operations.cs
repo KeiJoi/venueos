@@ -2,7 +2,6 @@ using VenueOS.Core;
 using VenueOS.Services;
 using VenueOS.Venues;
 using VenueOS.Modules.Operations.Raffle;
-using VenueOS.Modules.Operations.Tournament;
 
 namespace VenueOS.Modules.Operations;
 
@@ -680,78 +679,23 @@ public sealed class VipModule(VipOrchestrationService vip, GreetingCoordinator c
     }
     public void Tick(DateTimeOffset now) { } public void Draw() => draw?.Invoke(); public void DrawSettings() => (drawSettings ?? draw)?.Invoke(); public ValueTask DisposeAsync() => ValueTask.CompletedTask; }
 
-public sealed record VenueRaffleSettings(RaffleConnectionSettings Connection, List<LocalRaffle> Raffles, string? SelectedRaffleId = null);
-public sealed class VenueRaffleService(VenueRaffleClient client, VenueProfileService profiles)
-{
-    private CancellationTokenSource contextCancellation = new(); private Guid venueId; public VenueRaffleSettings Settings { get; private set; } = new(new(), []);
-    public RaffleDashboard Dashboard => new(Settings.Raffles.Count, Settings.Raffles.FirstOrDefault(x => x.Id == Settings.SelectedRaffleId)?.Name, Settings.Raffles.FirstOrDefault(x => x.Id == Settings.SelectedRaffleId)?.WinnerName);
-    public void Load(Guid nextVenueId) { contextCancellation.Cancel(); contextCancellation.Dispose(); contextCancellation = new(); venueId = nextVenueId; Settings = profiles.GetModuleConfig(venueId, "games.raffle", 1, () => new VenueRaffleSettings(new(), [])); }
-    public LocalRaffle Create(string name) { var raffle = new LocalRaffle(Guid.NewGuid().ToString("N"), string.IsNullOrWhiteSpace(name) ? $"Raffle {DateTime.UtcNow:yyyy-MM-dd HHmm}" : name.Trim(), DateTime.UtcNow, new(), []); Settings.Raffles.Insert(0, raffle); Save(); return raffle; }
-    public async Task<RaffleClientResult<RaffleCreateResponse>> UpsertAsync(LocalRaffle raffle) { var result = await client.UpsertAsync(Settings.Connection, raffle, contextCancellation.Token).ConfigureAwait(false); if (result.Success && result.Value is { } value) { var index = Settings.Raffles.FindIndex(x => x.Id == raffle.Id); if (index >= 0) Settings.Raffles[index] = raffle with { ExternalId = value.RaffleId ?? raffle.ExternalId, HostUrl = value.HostUrl, ViewerUrl = value.ViewerUrl, WinnerName = value.WinnerName }; Save(); } return result; }
-    public async Task<RaffleClientResult<RaffleStateResponse>> FetchAsync(LocalRaffle raffle, string? token) { var result = await client.FetchAsync(Settings.Connection, raffle.ExternalId ?? raffle.Id, token, contextCancellation.Token).ConfigureAwait(false); if (result.Success && result.Value is { } value) { var index = Settings.Raffles.FindIndex(x => x.Id == raffle.Id); if (index >= 0) { Settings.Raffles[index] = raffle with { WinnerName = value.WinnerName }; Save(); } } return result; }
-    private void Save() => profiles.SaveModuleConfig(venueId, "games.raffle", 1, Settings);
-}
-public sealed record RaffleDashboard(int RaffleCount, string? SelectedRaffleName, string? WinnerName);
-public sealed class VenueRaffleModule(VenueRaffleService raffle, Action? draw = null) : IVenueModule
-{ public ModuleDescriptor Descriptor { get; } = new("games.raffle", "Raffle", "Backend-compatible raffle operations.", "ticket", UnderDevelopment: true, DisplayOrder: 9); public bool IsEnabled { get; set; } = false; public Task InitializeAsync(ModuleContext c, CancellationToken t) => Task.CompletedTask; public Task OnVenueChangedAsync(VenueContext c, CancellationToken t) { raffle.Load(c.VenueId); return Task.CompletedTask; } public void Tick(DateTimeOffset now) { } public void Draw() => draw?.Invoke(); public void DrawSettings() => draw?.Invoke(); public ValueTask DisposeAsync() => ValueTask.CompletedTask; }
+// VenueRaffleSettings/VenueRaffleService/RaffleDashboard/VenueRaffleModule moved to
+// VenueOS.Modules.Operations.Raffle.VenueRaffleService.cs (alongside VenueRaffleClient.cs and
+// RaffleRealtimeClient.cs) as part of the full Raffle reconstruction (see docs/RAFFLE_RECONSTRUCTION.md) — a
+// backend-backed module with this much surface (live wheel realtime client, redraw/exclusion, archive/delete,
+// XLSX import/export) gets its own file/folder per NEW_MODULE_GUIDE.md §21.
 
 // Mair's Trivia's settings/service/module moved to VenueOS.Modules.Operations.Trivia.MairsTriviaService.cs — a
 // backend-backed module with this much surface (Series, occurrences, player management) gets its own file/folder
 // per NEW_MODULE_GUIDE.md §21, matching the precedent already set by PartyFinder/ShoutRunner/Raffle/Tournament/Bingo.
 
-public enum TournamentCalloutChannel { Shout, Yell }
-public sealed record TournamentCalloutSettings(TournamentCalloutChannel Channel = TournamentCalloutChannel.Shout, string Line1 = "<1> versus <2> — your match is ready!", string Line2 = "", int DelaySeconds = 2);
-public sealed class TournamentCalloutService(SchedulerService scheduler, ChatCommandService chat)
-{
-    private CancellationTokenSource cancellation = new(); private readonly HashSet<string> active = []; private readonly Dictionary<string, DateTimeOffset> lastStarted = [];
-    public bool Send(string matchId, TournamentCalloutSettings settings, string player1, string player2)
-    {
-        if (string.IsNullOrWhiteSpace(matchId) || string.IsNullOrWhiteSpace(player1) || string.IsNullOrWhiteSpace(player2) || active.Contains(matchId) || (lastStarted.TryGetValue(matchId, out var last) && DateTimeOffset.UtcNow - last < TimeSpan.FromSeconds(2))) return false;
-        var lines = new[] { Render(settings.Line1, player1, player2), Render(settings.Line2, player1, player2) }.Where(x => !string.IsNullOrWhiteSpace(x) && x.Length <= 500).ToArray(); if (lines.Length == 0) return false;
-        active.Add(matchId); lastStarted[matchId] = DateTimeOffset.UtcNow; var command = settings.Channel == TournamentCalloutChannel.Yell ? "/yell " : "/shout "; chat.Enqueue(new(command + lines[0], cancellation.Token)); if (lines.Length > 1) scheduler.Schedule(TimeSpan.FromSeconds(Math.Clamp(settings.DelaySeconds, 1, 10)), () => { chat.Enqueue(new(command + lines[1], cancellation.Token)); active.Remove(matchId); }, cancellationToken: cancellation.Token); else active.Remove(matchId); return true;
-    }
-    public void Stop() { cancellation.Cancel(); cancellation.Dispose(); cancellation = new(); active.Clear(); }
-    private static string Render(string template, string first, string second) => new string((template ?? "").Replace("<1>", first, StringComparison.Ordinal).Replace("<2>", second, StringComparison.Ordinal).Select(x => x is '\r' or '\n' ? ' ' : x).Where(x => !char.IsControl(x)).ToArray()).Trim();
-}
-public sealed record TournamentModuleSettings(TournamentConnectionSettings Connection, string VenueName, string DefaultGameName, string DefaultTournamentName, TournamentCalloutSettings Callouts)
-{ public static TournamentModuleSettings Default() => new(new(), "", "", "Tournament", new()); }
-public sealed record TournamentDashboard(bool IsConfigured, bool IsAuthenticated, string? TournamentName, string? State, int? Revision, string? Notice);
-public sealed class TournamentControlService(TournamentControlClient client, VenueProfileService profiles, TournamentCalloutService callouts)
-{
-    private CancellationTokenSource contextCancellation = new(); private Guid venueId; public TournamentModuleSettings Settings { get; private set; } = TournamentModuleSettings.Default(); public TournamentControllerState? Current { get; private set; } public string? Notice { get; private set; }
-    public TournamentDashboard Dashboard => new(!string.IsNullOrWhiteSpace(Settings.Connection.BaseUrl), Settings.Connection.SessionExpiresAt > DateTimeOffset.UtcNow && !string.IsNullOrWhiteSpace(Settings.Connection.AccessToken), Current?.Tournament.TournamentName, Current?.Tournament.Status, Current?.Tournament.Revision, Notice);
-    public void Load(Guid nextVenue) { contextCancellation.Cancel(); contextCancellation.Dispose(); contextCancellation = new(); callouts.Stop(); venueId = nextVenue; Current = null; Notice = null; Settings = profiles.GetModuleConfig(venueId, "games.tournament", 1, TournamentModuleSettings.Default); }
-    public void Configure(TournamentModuleSettings settings) { Settings = settings; Save(); }
-    public async Task<TournamentResult<TournamentSession>> AuthenticateAsync() { var result = await client.AuthenticateAsync(Settings.Connection, contextCancellation.Token).ConfigureAwait(false); if (result.Success && result.Value is { } session) { Settings = Settings with { Connection = Settings.Connection with { AccessToken = session.AccessToken, SessionExpiresAt = session.ExpiresAt } }; Save(); } return result; }
-    public async Task<TournamentResult<TournamentControllerState>> LoadStateAsync(string id) { var result = await client.GetStateAsync(Settings.Connection, id, contextCancellation.Token).ConfigureAwait(false); if (result.Success) { Current = result.Value; Notice = null; } else if (result.Error?.Code == "session_expired") ClearSession(); return result; }
-    public async Task<TournamentResult<TournamentControllerState>> StartAsync()
-    {
-        if (Current is null) return TournamentResult<TournamentControllerState>.Failed("tournament_required", "Load a tournament first.");
-        var result = await client.StartAsync(Settings.Connection, Current.Tournament.Id, Current.Tournament.Revision, contextCancellation.Token).ConfigureAwait(false); return await ReconcileAsync(result).ConfigureAwait(false);
-    }
-    public async Task<TournamentResult<TournamentControllerState>> RecordWinnerAsync(string matchId, string winnerId)
-    {
-        if (Current is null) return TournamentResult<TournamentControllerState>.Failed("tournament_required", "Load a tournament first.");
-        var result = await client.RecordWinnerAsync(Settings.Connection, Current.Tournament.Id, matchId, Current.Tournament.Revision, winnerId, contextCancellation.Token).ConfigureAwait(false); return await ReconcileAsync(result).ConfigureAwait(false);
-    }
-    public async Task<TournamentResult<TournamentControllerState>> ApplyEventAsync(TournamentEventMessage message)
-    {
-        var decision = TournamentEventProtocol.Inspect(message, Current?.Tournament.Revision); if (decision.TokenExpired) { ClearSession(); Notice = decision.Reason; return TournamentResult<TournamentControllerState>.Failed("session_expired", decision.Reason!); }
-        if (decision.ShouldRefetch && Current is not null) { Notice = decision.Reason; return await LoadStateAsync(Current.Tournament.Id).ConfigureAwait(false); }
-        return Current is null ? TournamentResult<TournamentControllerState>.Failed("tournament_required", "No tournament is selected.") : new(true, Current);
-    }
-    public bool SendMatchCallout(string matchId, string player1, string player2) => callouts.Send(matchId, Settings.Callouts, player1, player2);
-    private async Task<TournamentResult<TournamentControllerState>> ReconcileAsync(TournamentResult<TournamentControllerState> result)
-    {
-        if (result.Success) { Current = result.Value; Notice = null; return result; }
-        if (result.Error?.Code == "stale_tournament" && Current is not null) { Notice = "Tournament changed elsewhere; refreshed authoritative state. Retry deliberately if still appropriate."; var state = await client.GetStateAsync(Settings.Connection, Current.Tournament.Id, contextCancellation.Token).ConfigureAwait(false); if (state.Success) { Current = state.Value; return state with { Error = result.Error, AuthoritativeState = state.Value }; } }
-        if (result.Error?.Code == "session_expired") ClearSession(); return result;
-    }
-    private void ClearSession() { Settings = Settings with { Connection = Settings.Connection with { AccessToken = null, SessionExpiresAt = null } }; Save(); }
-    private void Save() => profiles.SaveModuleConfig(venueId, "games.tournament", 1, Settings);
-}
-public sealed class TournamentControlModule(TournamentControlService tournament, Action? draw = null) : IVenueModule
-{ public ModuleDescriptor Descriptor { get; } = new("games.tournament", "TournamentControl", "Backend-compatible tournament bracket operations.", "trophy", UnderDevelopment: true, DisplayOrder: 10); public bool IsEnabled { get; set; } = false; public Task InitializeAsync(ModuleContext c, CancellationToken t) => Task.CompletedTask; public Task OnVenueChangedAsync(VenueContext c, CancellationToken t) { tournament.Load(c.VenueId); return Task.CompletedTask; } public void Tick(DateTimeOffset now) { } public void Draw() => draw?.Invoke(); public void DrawSettings() => draw?.Invoke(); public ValueTask DisposeAsync() { tournament.Load(Guid.Empty); return ValueTask.CompletedTask; } }
+// TournamentCalloutSettings/TournamentCalloutService/TournamentModuleSettings/TournamentDashboard/
+// TournamentControlService/TournamentControlModule moved to
+// VenueOS.Modules.Operations.Tournament.TournamentControlService.cs — a backend-backed module with this much
+// surface (browser, setup, seeding, round operation, correction/rollback, realtime) gets its own file/folder per
+// NEW_MODULE_GUIDE.md §21, matching the precedent already set by PartyFinder/ShoutRunner/Raffle/Trivia/Bingo.
+// Display name is "Brackets" (module ID remains games.tournament — see VENUEOS_ARCHITECTURE-facing notes in
+// TOURNAMENT_CONTROL_BRACKETS_AUDIT.md for why the ID never changes with the display name).
 
 // VenueBingoSettings/VenueBingoService/VenueBingoModule/BingoDashboard moved to
 // VenueOS.Modules.Operations.Bingo.VenueBingoService.cs — Bingo, like Party Finder/Trivia/Tournament, gets its own

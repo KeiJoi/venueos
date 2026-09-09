@@ -30,6 +30,9 @@ internal static class AppIcons
             case "terminal": DrawTerminal(drawList, center, radius, color, thickness); break;
             case "file-pen": DrawFilePen(drawList, center, radius, color, thickness); break;
             case "book": DrawBook(drawList, center, radius, color, thickness); break;
+            case "block-letters": DrawBlockLetters(drawList, center, radius, color); break;
+            case "gift": DrawGift(drawList, center, radius, color, thickness); break;
+            case "macro": DrawMacro(drawList, center, radius, color, thickness); break;
             default: drawList.AddCircle(center, radius * 0.6f, color, 0, thickness); break;
         }
     }
@@ -223,6 +226,75 @@ internal static class AppIcons
             var y = min.Y + (max.Y - min.Y) * fraction;
             d.AddLine(new Vector2(min.X + r * 0.12f, y), new Vector2(c.X - r * 0.1f, y), color, t * 0.8f);
             d.AddLine(new Vector2(c.X + r * 0.1f, y), new Vector2(max.X - r * 0.12f, y), color, t * 0.8f);
+        }
+    }
+
+    /// <summary>Block Letters' glyph — a pixel-art capital "A" built from filled squares on a 5x5 grid, matching
+    /// the module's own subject (FFXIV block-letter text) rather than an abstract shape. Distinct from every other
+    /// registered key.</summary>
+    private static void DrawBlockLetters(ImDrawListPtr d, Vector2 c, float r, uint color)
+    {
+        ReadOnlySpan<string> pattern =
+        [
+            "01110",
+            "10001",
+            "11111",
+            "10001",
+            "10001",
+        ];
+        var cell = r * 0.32f;
+        var origin = c + new Vector2(-cell * 2.5f, -cell * 2.5f);
+        for (var row = 0; row < pattern.Length; row++)
+        {
+            for (var col = 0; col < pattern[row].Length; col++)
+            {
+                if (pattern[row][col] != '1') continue;
+                var min = origin + new Vector2(col * cell, row * cell);
+                d.AddRectFilled(min + new Vector2(1, 1), min + new Vector2(cell - 1, cell - 1), color);
+            }
+        }
+    }
+
+    /// <summary>Giveaways' glyph — a gift box: a lidded square with a vertical+horizontal ribbon and a small bow on
+    /// top. Distinct from "ticket" (Raffle's icon, a different prize/drawing concept) and every other registered
+    /// key.</summary>
+    private static void DrawGift(ImDrawListPtr d, Vector2 c, float r, uint color, float t)
+    {
+        var lidMin = c + new Vector2(-r * 0.55f, -r * 0.15f);
+        var lidMax = c + new Vector2(r * 0.55f, r * 0.05f);
+        d.AddRect(lidMin, lidMax, color, r * 0.06f, ImDrawFlags.None, t);
+        var boxMin = c + new Vector2(-r * 0.45f, r * 0.05f);
+        var boxMax = c + new Vector2(r * 0.45f, r * 0.6f);
+        d.AddRect(boxMin, boxMax, color, r * 0.06f, ImDrawFlags.None, t);
+        d.AddLine(new Vector2(c.X, lidMin.Y), new Vector2(c.X, boxMax.Y), color, t);
+        d.AddLine(new Vector2(boxMin.X, c.Y + r * 0.3f), new Vector2(boxMax.X, c.Y + r * 0.3f), color, t);
+        d.PathArcTo(c + new Vector2(-r * 0.12f, -r * 0.2f), r * 0.14f, 0f, MathF.PI * 1.6f, 8);
+        d.PathStroke(color, ImDrawFlags.None, t * 0.8f);
+        d.PathArcTo(c + new Vector2(r * 0.12f, -r * 0.2f), r * 0.14f, MathF.PI, MathF.PI * 2.6f, 8);
+        d.PathStroke(color, ImDrawFlags.None, t * 0.8f);
+    }
+
+    /// <summary>Macro's glyph — three small square hotbar slots in a row, the first one holding a filled "play"
+    /// triangle — reads as "a hotbar you press to run something", distinct from "grid" (an even 3x3 grid, Bingo's
+    /// concept) and "terminal" (a command-line prompt, not a launcher).</summary>
+    private static void DrawMacro(ImDrawListPtr d, Vector2 c, float r, uint color, float t)
+    {
+        var slot = r * 0.52f;
+        var gap = r * 0.18f;
+        var totalWidth = slot * 3 + gap * 2;
+        var originX = c.X - totalWidth / 2f;
+        var top = c.Y - slot / 2f;
+
+        for (var i = 0; i < 3; i++)
+        {
+            var min = new Vector2(originX + i * (slot + gap), top);
+            var max = min + new Vector2(slot, slot);
+            d.AddRect(min, max, color, r * 0.08f, ImDrawFlags.None, t);
+            if (i == 0)
+            {
+                var pad = slot * 0.22f;
+                d.AddTriangleFilled(min + new Vector2(pad, pad), min + new Vector2(pad, slot - pad), min + new Vector2(slot - pad, slot / 2f), color);
+            }
         }
     }
 
