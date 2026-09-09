@@ -178,8 +178,12 @@ Promotion-specific source edits (this pass, on top of the pre-existing uncommitt
 
 ## Commit / push
 
-See the final response for the exact commit hash, branch, remote, and push result — recorded here after the commit
-completes so this report can cite the real hash rather than a placeholder.
+- **Commit:** `a872f111ac96c4b85e80d8d8c7a4c9be070f8196` — "VenueOS: prepare 0.3.0 release"
+- **Branch:** `main`
+- **Remote:** `origin` → `https://github.com/KeiJoi/venueos`
+- **Push result:** `6b2948c..a872f11  main -> main` — succeeded, normal (non-force) push, no history rewrite.
+- **Post-push verification:** local `HEAD` and `origin/main` both resolve to `a872f111ac96c4b85e80d8d8c7a4c9be070f8196`;
+  working tree clean; 0 commits ahead/behind.
 
 ## Deferred post-release work (not performed in this pass)
 
