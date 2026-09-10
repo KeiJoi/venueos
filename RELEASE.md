@@ -1,6 +1,43 @@
-# VenueOS 0.3.0 release
+# VenueOS 0.3.1 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.1 maintenance release
+
+A post-0.3.0 quality/maintenance pass — three targeted functional fixes, a central login/session presentation
+gate, and a dialog/editor chrome-consistency pass across the whole plugin. No new modules, no persistence/protocol
+changes, no module removed from production.
+
+- **Mair's Trivia — fixed an intermittent "expired token" defect.** Root cause was a refresh-token race: the
+  auto-reconnect-on-load path called the backend directly instead of going through the existing single-flight
+  recovery guard, so an overlapping load-time refresh and a reactive 401 recovery could each send the backend's
+  rotating refresh token and silently clobber each other's result. Also fixed a secondary defect where disabling
+  Trivia, switching venues, then re-enabling it could resume with a previous venue's stale credentials (`ModuleHost`
+  skips venue-changed notifications for a disabled module). See `docs/MAIRS_TRIVIA_TOKEN_FIX.md`.
+- **Macro — fixed the Live tile → faux hotbar drag/drop defect, live-QA confirmed working.** Root cause was a
+  `NullReferenceException` in the drag-payload handling (`ImGuiPayloadPtr` dereferences a null native pointer
+  unless its `IsNull` property is checked first — the ordinary state on almost every frame with no drag in
+  progress), not the cross-window hover interaction originally suspected. Also added a dedicated drag-handle strip
+  so repositioning a hotbar and dropping a macro onto a slot no longer share screen space. See
+  `docs/MACRO_IMPLEMENTATION.md`.
+- **Raffle — short viewer/player links.** Publishing a raffle now also mints a short `.../l/<code>` link (mirroring
+  Bingo's proven `short_links` pattern) that's practical to paste into FFXIV chat, with the full-length link still
+  available via a "Show Full Links" toggle. The long host/viewer token remains the real, unchanged credential — the
+  short code is purely a shareable alias for it. See `docs/RAFFLE_RECONSTRUCTION.md`.
+- **Central character-session presentation gate.** No VenueOS-generated UI (main tablet, detached module windows,
+  the Macro faux hotbars, Bingo's/Giveaways' auxiliary windows) renders while genuinely logged out — previously
+  there was no such gate at all, and a persisted, enabled Macro hotbar could appear over the FFXIV title screen.
+  One deliberate exception: an already-active ShoutRunner operation's own UI stays visible through a temporary
+  world/Data Center travel transition. See `docs/SESSION_PRESENTATION_GATE.md`.
+- **Dialog/editor chrome standardized across the whole plugin.** Every VenueOS-generated window and popup now uses
+  consistent VenueOS chrome instead of ImGui's raw native title bar — Create/Edit Macro, the Giveaway Preset
+  editor, Add/Edit VIP, and the Venue Switch Failed dialog all gained a shared themed header; the smaller
+  Confirm/Text-Input dialogs had their redundant native title bar removed. Also fixed a live, unfixed
+  modal-identity-collision bug (Mair's Editor's "New Set"/"Import As New" dialogs shared one popup identity, the
+  same bug class already found once in Giveaways) by giving every `ConfirmDialog`/`TextInputModal` instance its own
+  identity at the class level, closing the whole bug class rather than just the one instance. See
+  `docs/UI_QUALITY_AUDIT.md`.
+- All 13 production modules remain enabled by default; none were touched functionally beyond the fixes above.
 
 ## 0.3.0 highlights
 

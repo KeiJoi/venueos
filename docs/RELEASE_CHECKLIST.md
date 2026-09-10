@@ -15,6 +15,13 @@ bottom before authorizing a public push/tag/release; nothing here authorizes pus
 > updated line-by-line for this release; see `docs/RELEASE_PREPARATION.md` for the current, authoritative
 > per-module status and `RELEASE.md`'s "0.3.0 highlights" for what changed.
 
+> **0.3.1 update:** a maintenance release — three targeted functional fixes (Mair's Trivia token refresh, Macro
+> Live tile → faux hotbar drag/drop), a new short-link workflow for Raffle, a central login/session presentation
+> gate, and a dialog/editor chrome-consistency pass. No module's production/enabled status changed; the module
+> readiness matrix below remains historical. See `RELEASE.md`'s "0.3.1 maintenance release" section for the full
+> summary and `docs/UI_QUALITY_AUDIT.md`/`docs/MACRO_IMPLEMENTATION.md`/`docs/MAIRS_TRIVIA_TOKEN_FIX.md`/
+> `docs/RAFFLE_RECONSTRUCTION.md`/`docs/SESSION_PRESENTATION_GATE.md` for the detailed engineering reports.
+
 ## Module readiness matrix
 
 | Module | Stable ID | Display Name | Default enabled (fresh install) | Shown in Applications when disabled | Settings entry | Release status | Live tested? | Notes |

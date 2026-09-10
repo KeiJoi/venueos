@@ -1,6 +1,6 @@
 # VenueOS User Manual
 
-**Current version:** 0.3.0
+**Current version:** 0.3.1
 **What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, live host trivia, Bingo, raffles, tournament brackets, block-letter text composition, timed giveaways, and extended macros.
 **Supported environment:** Windows FFXIV with Dalamud installed (API level 15). VenueOS is unofficial, third-party, and not affiliated with Square Enix or the Dalamud/XIVLauncher project.
 
@@ -114,7 +114,7 @@ You can also switch venues quickly from the toolbar's dropdown, without going in
 Found under **Settings → General**:
 
 - **"Open modules in separate windows"** toggle (Auto Pop-Out). Off by default. When on, launching a module from Home opens (or focuses) its own detached window instead of embedding it in the tablet. This applies the same way for every venue and doesn't change when you switch venues. Settings itself is unaffected by this toggle and always opens embedded.
-- An **About VenueOS** card showing a version line (the actual installed release version, e.g. "VenueOS 0.3.0") and a one-line description of what VenueOS is.
+- An **About VenueOS** card showing a version line (the actual installed release version, e.g. "VenueOS 0.3.1") and a one-line description of what VenueOS is.
 
 **Settings → Modules** is where you enable/disable modules and jump into each one's own settings — see [Basics](#2-venueos-basics) above.
 
