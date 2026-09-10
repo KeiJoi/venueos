@@ -22,6 +22,13 @@ public sealed class MacroService
     public MacroSettings Settings { get; private set; } = MacroSettings.Default();
     public MacroRunner Runner { get; }
 
+    /// <summary>Fired by <see cref="DropMacroOntoSlot"/> on each actual hotbar slot assignment — a low-frequency,
+    /// operator-meaningful event, routed to Dalamud's own log at the composition root (<c>Plugin.cs</c>), matching
+    /// the established <c>VenueBingoService.DiagnosticEvent</c> pattern (a plain event, not
+    /// <see cref="DiagnosticsService"/>, since a successful assignment is routine detail, not an operator-facing
+    /// failure). Null-safe to leave unsubscribed (e.g. in tests).</summary>
+    public event Action<string>? DiagnosticEvent;
+
     public MacroService(SchedulerService scheduler, ChatCommandService chat, VenueProfileService profiles, IActionReadyProbe probe, DiagnosticsService diagnostics)
     {
         this.profiles = profiles;
@@ -179,10 +186,15 @@ public sealed class MacroService
     /// simply (re)assigned.</summary>
     public void DropMacroOntoSlot(int hotbarIndex, int targetSlot, Guid macroId)
     {
-        if (hotbarIndex < 0 || hotbarIndex >= Settings.Hotbars.Count) return;
+        if (hotbarIndex < 0 || hotbarIndex >= Settings.Hotbars.Count)
+        {
+            DiagnosticEvent?.Invoke($"DropMacroOntoSlot: hotbarIndex {hotbarIndex} out of range — ignored, nothing persisted.");
+            return;
+        }
         var sourceSlot = Settings.Hotbars[hotbarIndex].SlotMacroIds.ToList().IndexOf(macroId);
         if (sourceSlot >= 0 && sourceSlot != targetSlot) SwapSlots(hotbarIndex, sourceSlot, targetSlot);
         else AssignSlot(hotbarIndex, targetSlot, macroId);
+        DiagnosticEvent?.Invoke($"DropMacroOntoSlot: hotbar={hotbarIndex} targetSlot={targetSlot} macro={macroId} sourceSlot={(sourceSlot >= 0 ? sourceSlot : (int?)null)} -> persisted (SlotMacroIds[{targetSlot}]={Settings.Hotbars[hotbarIndex].SlotMacroIds[targetSlot]}).");
     }
 
     public void ClearSlot(int hotbarIndex, int slot) => AssignSlot(hotbarIndex, slot, null);

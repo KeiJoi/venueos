@@ -467,11 +467,21 @@ internal static class UiKit
     }
 }
 
-/// <summary>Single-instance confirmation modal, reused wherever a destructive action (venue deletion) needs an
-/// explicit yes/no gate instead of firing immediately on click.</summary>
+/// <summary>Confirmation modal, reused wherever a destructive action (venue deletion, etc.) needs an explicit
+/// yes/no gate instead of firing immediately on click. One instance per owning panel, per the established
+/// `private readonly ConfirmDialog confirmDialog = new();` convention (~15 call sites across the plugin).
+///
+/// 0.3.0 UI QUALITY AUDIT FIX: the popup identity used to be a single `private const string` shared by EVERY
+/// instance of this class, not just within one panel — an identity collision if two different instances were ever
+/// both mid-request in the same frame (both instances render into the SAME ImGui popup). This is the exact bug
+/// class already found and fixed once for two `TextInputModal` instances in Giveaways
+/// (docs/GIVEAWAYS_IMPLEMENTATION.md) and found AGAIN, still unfixed, for two `TextInputModal` instances in Mair's
+/// Editor during this pass's UI audit (docs/UI_QUALITY_AUDIT.md). Each instance now gets its own GUID-derived
+/// popup identity at construction — no call site needs to change, since every existing `new ConfirmDialog()`
+/// already takes no arguments.</summary>
 internal sealed class ConfirmDialog
 {
-    private const string PopupId = "Confirm##venueos-confirm-dialog";
+    private readonly string popupId = $"Confirm##venueos-confirm-dialog-{Guid.NewGuid():N}";
     private string title = ""; private string message = ""; private Action? onConfirm; private bool openRequested; private bool windowOpen = true;
 
     public void Request(string title, string message, Action onConfirm)
@@ -481,9 +491,13 @@ internal sealed class ConfirmDialog
 
     public void Draw(VenueTheme theme)
     {
-        if (openRequested) { ImGui.OpenPopup(PopupId); openRequested = false; }
+        if (openRequested) { ImGui.OpenPopup(popupId); openRequested = false; }
         ImGui.SetNextWindowSize(new Vector2(380, 0));
-        if (ImGui.BeginPopupModal(PopupId, ref windowOpen, ImGuiWindowFlags.NoResize | ImGuiWindowFlags.AlwaysAutoResize))
+        // 0.3.0 UI pass: NoTitleBar removes ImGui's raw native popup title bar — this already draws its own themed
+        // title line as content immediately below, so no separate DialogHeader is needed here (proportionate for
+        // a small, single-purpose confirmation, per NEW_MODULE_GUIDE.md's "proportionate, not ceremonial" guidance
+        // — compare the larger multi-field editors, which do get the full DialogHeader treatment).
+        if (ImGui.BeginPopupModal(popupId, ref windowOpen, ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.AlwaysAutoResize))
         {
             ImGui.TextUnformatted(title);
             UiKit.Divider(theme);
@@ -497,11 +511,14 @@ internal sealed class ConfirmDialog
     }
 }
 
-/// <summary>Single-instance "one field, one confirm" modal — used for "+ Add Venue" so venue creation is an
-/// intentional dialog flow instead of a permanently-visible bare input field sitting in the venue list.</summary>
+/// <summary>"One field, one confirm" modal — used for "+ Add Venue" and (per-instance since 0.3.0) Mair's Editor's
+/// "New Set"/"Import As New" flows, so those actions are an intentional dialog rather than a permanently-visible
+/// bare input field. See <see cref="ConfirmDialog"/>'s doc comment for why the popup identity is now per-instance
+/// (GUID-derived) rather than a shared class-wide constant — this class had the exact same defect, and unlike
+/// <see cref="ConfirmDialog"/>, it had already actually manifested twice (Giveaways, then Mair's Editor).</summary>
 internal sealed class TextInputModal
 {
-    private const string PopupId = "Add##venueos-text-input-modal";
+    private readonly string popupId = $"Add##venueos-text-input-modal-{Guid.NewGuid():N}";
     private string title = ""; private string label = ""; private string hint = ""; private string value = ""; private Action<string>? onSubmit; private bool openRequested; private bool windowOpen = true;
 
     public void Request(string title, string label, string hint, Action<string> onSubmit)
@@ -511,9 +528,10 @@ internal sealed class TextInputModal
 
     public void Draw(VenueTheme theme)
     {
-        if (openRequested) { ImGui.OpenPopup(PopupId); openRequested = false; }
+        if (openRequested) { ImGui.OpenPopup(popupId); openRequested = false; }
         ImGui.SetNextWindowSize(new Vector2(360, 0));
-        if (ImGui.BeginPopupModal(PopupId, ref windowOpen, ImGuiWindowFlags.NoResize | ImGuiWindowFlags.AlwaysAutoResize))
+        // 0.3.0 UI pass: see ConfirmDialog.Draw's doc comment — same NoTitleBar rationale.
+        if (ImGui.BeginPopupModal(popupId, ref windowOpen, ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.AlwaysAutoResize))
         {
             ImGui.TextUnformatted(title);
             UiKit.Divider(theme);

@@ -23,13 +23,20 @@ internal sealed class ModuleWindowManager(DiagnosticsService diagnostics, VenueS
     public void Open(string moduleId) { open.Add(moduleId); focusRequested.Add(moduleId); }
     public void Close(string moduleId) => open.Remove(moduleId);
 
-    public void DrawAll(VenueTheme theme, IReadOnlyList<IVenueModule> modules)
+    /// <summary><paramref name="canRenderModule"/> is the 0.3.0 character-session presentation gate
+    /// (<c>Plugin.cs</c>'s composed policy, ultimately <c>SessionPresentationGateService</c>) — a module whose
+    /// window is open but not currently permitted to render (e.g. genuinely logged out, with no ShoutRunner
+    /// exception applying to this module) is simply skipped for THIS frame; it stays in <see cref="open"/> and
+    /// resumes rendering the moment the gate allows it again. This is presentation-only — it must never call
+    /// <c>open.Remove</c>, which would be indistinguishable from the operator explicitly closing the window.</summary>
+    public void DrawAll(VenueTheme theme, IReadOnlyList<IVenueModule> modules, Func<string, bool> canRenderModule)
     {
         if (open.Count == 0) return;
         foreach (var moduleId in open.ToArray())
         {
             var module = modules.FirstOrDefault(x => x.Descriptor.Id == moduleId);
             if (module is null || !module.IsEnabled) { open.Remove(moduleId); continue; }
+            if (!canRenderModule(moduleId)) continue;
             DrawWindow(theme, module);
         }
     }

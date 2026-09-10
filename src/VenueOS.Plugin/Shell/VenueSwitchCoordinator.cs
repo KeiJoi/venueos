@@ -55,9 +55,14 @@ public sealed class VenueSwitchCoordinator(VenueProfileService venues, IReadOnly
         const string popupId = "Venue switch failed##venueos-switch-error";
         ImGui.OpenPopup(popupId); errorPopupOpen = true;
         ImGui.SetNextWindowSize(new System.Numerics.Vector2(380, 0));
-        if (ImGui.BeginPopupModal(popupId, ref errorPopupOpen, ImGuiWindowFlags.NoResize | ImGuiWindowFlags.AlwaysAutoResize))
+        // 0.3.0 UI pass: this previously had no themed heading at all, relying entirely on ImGui's raw native
+        // popup title bar ("Venue switch failed") for its only title — now NoTitleBar + DialogHeader, matching
+        // every other VenueOS window/modal.
+        if (ImGui.BeginPopupModal(popupId, ref errorPopupOpen, ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.AlwaysAutoResize))
         {
-            ImGui.TextWrapped(pendingError);
+            DialogHeader.Draw(theme, "Venue Switch Failed", ImGui.CloseCurrentPopup);
+            UiKit.ErrorState(theme, pendingError);
+            ImGui.Spacing();
             if (UiKit.PrimaryButton(theme, "OK")) { pendingError = null; ImGui.CloseCurrentPopup(); }
             ImGui.EndPopup();
         }

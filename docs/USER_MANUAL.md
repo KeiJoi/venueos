@@ -84,6 +84,8 @@ VenueOS presents itself as a tablet with one persistent toolbar and a content ar
 
 **Settings vs. the module itself:** where a module has both, its **Settings → Modules → *Module*** page holds persistent configuration (server URLs, credentials, defaults), while the module's own app screen (opened from Home) holds live operational controls (start/stop, current guest list, active game state, and so on). The two are intentionally separate.
 
+**VenueOS only shows itself while you're logged into a character.** Nothing VenueOS draws — the tablet, a detached module window, a faux Macro hotbar, Bingo's auxiliary windows — appears at the title screen or character select. Everything you've configured (settings, Macro hotbar assignments/position, venue profiles) is untouched by logging out and simply reappears the next time you log a character in. The one exception is ShoutRunner: if a route is already running when a world/Data Center travel step temporarily interrupts your session, ShoutRunner's own screen (including **Stop**) stays available through that transition instead of disappearing and reappearing — every other VenueOS window stays hidden during that same window.
+
 ---
 
 ## 3. Venue Profiles
@@ -571,7 +573,7 @@ When a player's card completes the pattern, a detached **Bingo Call Alert** wind
 
 - A status badge shows **Not Published**, **Unpublished Changes**, or **Published**.
 - **Publish / Update Raffle** sends the current roster and settings to the backend; **Refresh From Backend** pulls the backend's current state back into VenueOS.
-- Once published, **Host Link** and **Viewer Link** appear (each with its own **Copy** button) — share the Host Link with whoever will spin the wheel, and the Viewer Link with the audience. VenueOS itself never spins the wheel; it's a read-only observer of the backend's spin state and updates automatically the moment a result comes in.
+- Once published, **Host Link** and **Viewer Link** appear (each with its own **Copy** button) — share the Host Link with whoever will spin the wheel, and the Viewer Link with the audience. These are now short links (`.../l/AB23CD`) that are practical to paste directly into FFXIV chat, resolved by the backend to the full link automatically — if a short link hasn't been minted yet (e.g. no Access Key configured in Settings), the field falls back to showing the full link instead, with a **Retry Short Links** button once the key is set. A **Show Full Links** toggle reveals the original full-length links if you ever need them. VenueOS itself never spins the wheel; it's a read-only observer of the backend's spin state and updates automatically the moment a result comes in.
 - **"Unpublished Changes"** appears the moment you adjust tickets, add a participant, or change settings after a Publish — a reminder that the live wheel hasn't seen your latest edits yet until you Publish again.
 
 ### Redraw and exclusion
@@ -720,7 +722,7 @@ Up to four independent hotbar overlays can render directly on the game screen, e
 - **Scale** and **Transparency**.
 - 12 slot assignments, set from **Settings → Modules → Macro → Hotbars**: drag a macro from the palette onto a slot to assign it (dropping onto an already-assigned slot swaps the two), or click a palette icon then click a slot as a non-drag fallback. **Clear Hotbar** (confirmed) empties every slot without deleting the macros themselves.
 
-A single global **Edit Hotbars** toggle (on the live Macro screen) switches every visible bar between **Locked** (clicking a slot runs its macro; the bar cannot be accidentally dragged) and **Editing** (the bar can be repositioned by dragging its background). The faux hotbars deliberately look like part of FFXIV's own interface — a dark HUD-style panel with no VenueOS window chrome, title bar, or theme colors — rather than another VenueOS window, so they blend into the game screen.
+A single global **Edit Hotbars** toggle (on the live Macro screen) switches every visible bar between **Locked** (clicking a slot runs its macro; the bar cannot be accidentally dragged) and **Editing** (a small grip strip appears above the slots — drag that strip to reposition the bar; the slots themselves are no longer part of the drag region, so a drag can never be started from on top of a slot). The faux hotbars deliberately look like part of FFXIV's own interface — a dark HUD-style panel with no VenueOS window chrome, title bar, or theme colors — rather than another VenueOS window, so they blend into the game screen.
 
 ### Persistence
 
@@ -782,7 +784,7 @@ Disabling a module never erases its saved configuration — re-enabling it picks
 
 **A Giveaways roll didn't count.** Check whether the giveaway's roll window was actually open (before Start finishes sending, or after Closing's last line has gone out, rolls are ignored), whether the roller was within `/random` chat range of you, and whether they'd already used up their Allowed Rolls Per Person.
 
-**A Macro tile drag onto a faux hotbar doesn't work.** This is a known issue — see [Known Issues](#23-known-issues). Assign hotbar slots from **Settings → Modules → Macro → Hotbars** instead.
+**Dragging a Macro tile onto a faux hotbar slot doesn't assign it.** Make sure **Edit Hotbars** is enabled first — assignment by drag only works while the bar is in Edit mode (locked bars are click-to-run only, by design, so a plain click can never accidentally move or reassign anything).
 
 Anything logged as an error or warning also appears in **Settings → Diagnostics**, filterable by module/level, with a **Copy** button if you need to share the log.
 
@@ -809,7 +811,6 @@ Once VenueOS is installed from the Experimental Plugin Repository, updates arriv
 
 These are documented, non-blocking caveats in the current release — none of them require the affected module to be disabled or treated as unfinished.
 
-- **Macro: dragging a tile from the Live launcher directly onto a faux hotbar slot is not currently reliable in the live ImGui runtime.** Clicking a saved macro to run it, and assigning hotbar slots from **Settings → Modules → Macro → Hotbars** (drag-and-drop or click-to-place, both from Settings), work correctly — only the live-window-to-overlay drag path is affected. Use the Settings assignment path until this is fixed in a future update.
 - **Bingo's automated payout remains an experimental convenience feature**, not a fully verified path — see the [Bingo](#12-bingo) section and [Troubleshooting](#20-troubleshooting) above. Manual reconciliation via Mark Paid/Mark Not Paid, or a normal in-game trade, is always available and fully supported.
 
 ---

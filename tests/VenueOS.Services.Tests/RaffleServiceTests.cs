@@ -265,6 +265,108 @@ public sealed class RaffleServiceTests
         Assert.DoesNotContain(diagnostics.Capture().RecentErrors, e => e.Message.Contains("the-key"));
     }
 
+    /// <summary>Routes by path/method so short-link calls (POST /api/links, GET /api/links/lookup) get their own
+    /// correctly-shaped responses alongside the raffle-create response — unlike the single-response Handler used by
+    /// several tests above, which is fine for tests that don't care what EnsureShortLinksAsync does with an
+    /// unrelated response shape.</summary>
+    private static Handler RoutedHandler(Func<HttpRequestMessage, HttpResponseMessage?> route, HttpResponseMessage? fallback = null) =>
+        new(request => Task.FromResult(route(request) ?? fallback ?? new HttpResponseMessage(HttpStatusCode.NotFound)));
+
+    [Fact]
+    public async Task Publishing_automatically_mints_short_links_for_both_host_and_viewer()
+    {
+        var linkRequests = new List<string>();
+        var handler = RoutedHandler(request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/raffles") return Json("{\"raffleId\":\"remote-3\",\"hostUrl\":\"https://raffle.test/host/remote-3/host-tok\",\"viewerUrl\":\"https://raffle.test/view/remote-3/view-tok\",\"winnerName\":null}");
+            if (request.RequestUri!.AbsolutePath == "/api/links/lookup") return Json("{\"ok\":true,\"code\":null}"); // no existing link yet
+            if (request.RequestUri!.AbsolutePath == "/api/links") { linkRequests.Add(request.RequestUri!.AbsolutePath); return Json("{\"ok\":true,\"code\":\"AB23CD\"}"); }
+            return null;
+        });
+        var (service, _, _) = Build(handler);
+        var raffle = service.Create("Friday");
+        service.AddPaidTickets(raffle.Id, "Ada", "Balmung", 1);
+
+        await service.PublishAsync(raffle.Id);
+
+        Assert.Equal(2, linkRequests.Count); // one for host, one for viewer
+        Assert.Equal("https://raffle.test/l/AB23CD", service.Selected!.DisplayHostUrl("https://raffle.test"));
+        Assert.Equal("https://raffle.test/l/AB23CD", service.Selected!.DisplayViewerUrl("https://raffle.test"));
+    }
+
+    [Fact]
+    public async Task Republishing_reuses_an_already_minted_short_link_instead_of_creating_a_duplicate()
+    {
+        var createCalls = 0;
+        var handler = RoutedHandler(request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/raffles") return Json("{\"raffleId\":\"remote-4\",\"hostUrl\":\"https://raffle.test/host/remote-4/host-tok\",\"viewerUrl\":\"https://raffle.test/view/remote-4/view-tok\",\"winnerName\":null}");
+            if (request.RequestUri!.AbsolutePath == "/api/links/lookup") return Json("{\"ok\":true,\"code\":\"EXISTING\"}"); // already exists on the backend
+            if (request.RequestUri!.AbsolutePath == "/api/links") { createCalls++; return Json("{\"ok\":true,\"code\":\"SHOULDNOT\"}"); }
+            return null;
+        });
+        var (service, _, _) = Build(handler);
+        var raffle = service.Create("Friday");
+
+        await service.PublishAsync(raffle.Id);
+
+        Assert.Equal(0, createCalls); // lookup found an existing code, so POST /api/links was never called
+        Assert.Equal("https://raffle.test/l/EXISTING", service.Selected!.DisplayHostUrl("https://raffle.test"));
+    }
+
+    [Fact]
+    public async Task No_access_key_configured_skips_short_link_minting_without_error()
+    {
+        // Publishing itself always requires the access key (VenueRaffleClient.UpsertAsync), so this exercises the
+        // scenario where EnsureShortLinksAsync is called directly (e.g. the operator panel's "Retry Short Links"
+        // button) after the key was cleared post-publish, rather than the automatic post-PublishAsync call.
+        var linkCallMade = false;
+        var handler = RoutedHandler(request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/raffles") return Json("{\"raffleId\":\"remote-5\",\"hostUrl\":\"https://raffle.test/host/remote-5/host-tok\",\"viewerUrl\":\"https://raffle.test/view/remote-5/view-tok\",\"winnerName\":null}");
+            if (request.RequestUri!.AbsolutePath.StartsWith("/api/links")) { linkCallMade = true; return Json("{\"ok\":true,\"code\":\"SHOULDNOT\"}"); }
+            return null;
+        });
+        var (service, _, diagnostics) = Build(handler);
+        var raffle = service.Create("Friday");
+        var result = await service.PublishAsync(raffle.Id);
+        Assert.True(result.Success);
+        var mintedDuringPublish = service.Selected!.HostLinkCode;
+        Assert.NotNull(mintedDuringPublish); // Build() configures a valid access key, so publish's automatic mint did run
+        linkCallMade = false;
+
+        service.SaveConnection(service.Settings.Connection with { AccessKey = "" }); // operator clears the key afterward
+        var changed = await service.EnsureShortLinksAsync(raffle.Id);
+
+        Assert.False(changed);
+        Assert.False(linkCallMade); // no network call attempted once the key is missing
+        Assert.Empty(diagnostics.Capture().RecentErrors);
+    }
+
+    [Fact]
+    public async Task Deleting_the_published_copy_over_realtime_clears_the_short_link_codes_too()
+    {
+        var transport = new FakeTransport();
+        var handler = RoutedHandler(request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/raffles") return Json("{\"raffleId\":\"remote-6\",\"hostUrl\":\"https://raffle.test/host/remote-6/host-tok\",\"viewerUrl\":\"https://raffle.test/view/remote-6/view-tok\",\"winnerName\":null}");
+            if (request.RequestUri!.AbsolutePath == "/api/links/lookup") return Json("{\"ok\":true,\"code\":null}");
+            if (request.RequestUri!.AbsolutePath == "/api/links") return Json("{\"ok\":true,\"code\":\"AB23CD\"}");
+            return null;
+        });
+        var (service, _, _) = Build(handler, () => transport);
+        var raffle = service.Create("Friday");
+        await service.PublishAsync(raffle.Id);
+        Assert.NotNull(service.Selected!.HostLinkCode);
+
+        transport.EnqueueIncoming(new("deleted", RaffleId: "remote-6"));
+        await transport.WaitForMessagesConsumed();
+        service.Tick(DateTimeOffset.UtcNow);
+
+        Assert.Null(service.Selected!.HostLinkCode);
+        Assert.Null(service.Selected!.ViewerLinkCode);
+    }
+
     private static HttpResponseMessage Json(string value) => new(HttpStatusCode.OK) { Content = new StringContent(value, Encoding.UTF8, "application/json") };
 
     private sealed class Handler(Func<HttpRequestMessage, Task<HttpResponseMessage>> action) : HttpMessageHandler

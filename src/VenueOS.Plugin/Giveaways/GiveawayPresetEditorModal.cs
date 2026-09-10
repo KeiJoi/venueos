@@ -67,8 +67,12 @@ internal sealed class GiveawayPresetEditorModal
 
         ImGui.SetNextWindowSize(new Vector2(620, 680), ImGuiCond.FirstUseEver);
         ImGui.SetNextWindowSizeConstraints(new Vector2(480, 420), new Vector2(float.MaxValue, float.MaxValue));
-        if (ImGui.BeginPopupModal(PopupId, ref windowOpen, ImGuiWindowFlags.None))
+        // 0.3.0 UI pass: NoTitleBar + DialogHeader replaces ImGui's raw native popup title bar, matching every
+        // other VenueOS window/modal's chrome.
+        if (ImGui.BeginPopupModal(PopupId, ref windowOpen, ImGuiWindowFlags.NoTitleBar))
         {
+            DialogHeader.Draw(theme, editingExistingId is null ? "New Giveaway Preset" : "Edit Giveaway Preset", ImGui.CloseCurrentPopup);
+
             ImGui.BeginChild("giveaways-preset-editor-content", new Vector2(0, -60f), false);
             DrawContent(theme);
             ImGui.EndChild();
@@ -79,10 +83,9 @@ internal sealed class GiveawayPresetEditorModal
             ImGui.EndPopup();
         }
 
-        // The popup's own title-bar close (X) sets windowOpen=false and closes the popup on ImGui's own side —
-        // draft is simply never persisted either way, which is exactly Cancel's behavior (spec: "closing via its
-        // X ... must behave like Cancel"). No extra bookkeeping is needed for that: the next OpenForNew/OpenForEdit
-        // call resets draft fresh regardless of how the previous popup instance was dismissed.
+        // draft is simply never persisted regardless of how the popup is dismissed (Close button or Escape) —
+        // "closing must behave like Cancel" holds with no extra bookkeeping needed here. The next
+        // OpenForNew/OpenForEdit call resets draft fresh regardless of how the previous instance was dismissed.
     }
 
     private void DrawContent(VenueTheme theme)

@@ -362,6 +362,70 @@ public sealed class MairsTriviaServiceLiveConsoleTests
         Assert.Equal("fresh", service.Settings.Connection.AccessToken);
     }
 
+    /// <summary>Regression test for the confirmed root cause of Mair's Trivia's intermittent "expired token" defect:
+    /// <see cref="MairsTriviaService.Load"/>'s auto-connect refresh used to call the backend directly, bypassing the
+    /// single-flight guard the reactive 401-recovery path already used. Because the backend rotates the refresh
+    /// token on every use, an overlapping Load-time refresh and reactive-recovery refresh could each send the same
+    /// now-stale token and race to overwrite each other's result. Both entry points must now share exactly one
+    /// in-flight refresh attempt.</summary>
+    [Fact] public async Task Load_time_auto_refresh_and_a_concurrently_discovered_expired_token_share_one_refresh_attempt()
+    {
+        var profiles = new VenueProfileService(new InMemoryVenueStore(), new ModuleHost());
+        profiles.SaveModuleConfig(profiles.Current.Id, "games.trivia", 1, new MairsTriviaSettings(new("https://test", AccessToken: "stale", RefreshToken: "stored-refresh"), "Game", new(100, 0, 50)));
+        var diagnostics = new DiagnosticsService(new ModuleHost(), profiles, new FakeClock());
+        var refreshGate = new TaskCompletionSource<HttpResponseMessage>();
+        var refreshCalls = 0;
+        var gamesCalls = 0;
+        var handler = new ScriptedHandler(request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/v1/auth/refresh") { Interlocked.Increment(ref refreshCalls); return refreshGate.Task; }
+            if (path == "/v1/games") { var call = Interlocked.Increment(ref gamesCalls); return Task.FromResult(call == 1 ? ErrorJson("expired_token") : Json("[]")); }
+            throw new InvalidOperationException(path);
+        });
+        var service = new MairsTriviaService(new MairsTriviaClient(new HttpClient(handler)), profiles, new FakeRepository(), diagnostics);
+
+        service.Load(profiles.Current.Id); // fires the load-time auto-refresh
+        var gamesTask = service.RefreshResumableGamesAsync(); // concurrently discovers the same expired token via a 401
+        await Task.Delay(30); // let both reach EnsureAuthenticatedAsync before the shared refresh resolves
+        refreshGate.SetResult(Json("""{"accessToken":"fresh","refreshToken":"new-refresh"}"""));
+        await gamesTask;
+        await Task.Delay(30); // let Load's fire-and-forget refresh finish observing the shared result
+
+        Assert.Equal(1, refreshCalls); // single-flight across BOTH entry points, not just within RunAsync's own recovery branch
+        Assert.Equal("fresh", service.Settings.Connection.AccessToken);
+    }
+
+    /// <summary>Regression test for the secondary confirmed cause of the intermittent "expired token" defect:
+    /// <c>ModuleHost</c> skips venue-changed notifications for a disabled module, so <see cref="MairsTriviaService"/>
+    /// (a process-lifetime singleton) can be left holding a previous venue's connection/token after the operator
+    /// disables Trivia, switches venues, and re-enables it. <see cref="MairsTriviaModule.IsEnabled"/>'s setter must
+    /// force a fresh load for whichever venue is actually active at re-enable time.</summary>
+    [Fact] public async Task Re_enabling_after_a_venue_switch_while_disabled_loads_the_now_active_venue_not_the_previous_one()
+    {
+        var profiles = new VenueProfileService(new InMemoryVenueStore(), new ModuleHost());
+        var venueA = profiles.Current;
+        var venueB = profiles.Create("Venue B");
+        profiles.SaveModuleConfig(venueA.Id, "games.trivia", 1, new MairsTriviaSettings(new("https://a", AccessToken: "token-a"), "Game A", new(100, 0, 50)));
+        profiles.SaveModuleConfig(venueB.Id, "games.trivia", 1, new MairsTriviaSettings(new("https://b", AccessToken: "token-b"), "Game B", new(100, 0, 50)));
+        var diagnostics = new DiagnosticsService(new ModuleHost(), profiles, new FakeClock());
+        var service = new MairsTriviaService(new MairsTriviaClient(new HttpClient(new ScriptedHandler(_ => throw new InvalidOperationException("no network call expected")))), profiles, new FakeRepository(), diagnostics);
+        var module = new MairsTriviaModule(service);
+
+        service.Load(venueA.Id);
+        Assert.Equal("https://a", service.Settings.Connection.BaseUrl);
+
+        module.IsEnabled = false; // ModuleHost would now skip OnVenueChangedAsync for every switch below
+        var switched = await profiles.SwitchAsync(venueB.Id);
+        Assert.True(switched.Success);
+        // service.Load(venueB.Id) is deliberately NOT called here — this is exactly what a real disabled module misses.
+
+        module.IsEnabled = true; // must force a fresh load for the venue that is actually active now, not venue A
+
+        Assert.Equal("https://b", service.Settings.Connection.BaseUrl);
+        Assert.Equal("token-b", service.Settings.Connection.AccessToken);
+    }
+
     // ------------------------------------------------------------------------------------- finished-game navigation (QA fix #3)
     [Fact] public async Task Finished_standalone_game_stops_periodic_polling_and_preserves_the_final_result()
     {

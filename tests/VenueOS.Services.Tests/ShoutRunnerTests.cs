@@ -372,6 +372,51 @@ public sealed class ShoutRunnerServiceTests
         Assert.DoesNotContain(service.TerminalEvents, e => e.DataCenter == "Crystal");
     }
 
+    // ----- IsActive (0.3.0 session-presentation gate signal) -----
+
+    [Fact] public void A_freshly_loaded_service_is_not_active()
+    {
+        var (service, _, _, _, _) = New();
+        Assert.Equal(ShoutRunnerState.Stopped, service.State);
+        Assert.False(service.IsActive);
+    }
+
+    [Fact] public void Starting_a_run_immediately_marks_the_service_active_before_any_Tick()
+    {
+        var (service, _, _, _, _) = ReadyToStart(destinations: ["A"], dataCenters: ["Aether"]);
+        service.Start();
+        Assert.NotEqual(ShoutRunnerState.Stopped, service.State);
+        Assert.NotEqual(ShoutRunnerState.Faulted, service.State);
+        Assert.True(service.IsActive);
+    }
+
+    [Fact] public void A_run_that_settles_into_Faulted_is_not_active()
+    {
+        var (service, automation, clock, chat, _) = ReadyToStart(destinations: ["A"], dataCenters: ["Aether", "Crystal"]);
+        automation.OnEnsureReady = _ => Done(ShoutRunnerReadinessOutcome.RecoveryFailed("could not recover"));
+
+        service.Start();
+        PumpUntilSettled(service, clock, chat);
+
+        Assert.Equal(ShoutRunnerState.Faulted, service.State);
+        Assert.False(service.IsActive); // the 0.3.0 session-gate ShoutRunner exception must not stay open forever after a fault
+    }
+
+    [Fact] public void Loading_a_venue_forces_Stopped_and_therefore_not_active_even_mid_run()
+    {
+        // Load() calls HardStop() first (see ShoutRunnerService.Load) — this is the exact mechanism
+        // SessionPresentationGateService's doc comment relies on to guarantee IsActive is false at the very first
+        // venue activation of a plugin session, before any character login is even possible.
+        var (service, _, _, _, _) = ReadyToStart(destinations: ["A"], dataCenters: ["Aether"]);
+        service.Start();
+        Assert.True(service.IsActive);
+
+        service.Load(Guid.NewGuid());
+
+        Assert.Equal(ShoutRunnerState.Stopped, service.State);
+        Assert.False(service.IsActive);
+    }
+
     [Fact] public void Teleport_failure_marks_the_destination_skipped_but_the_world_continues()
     {
         var (service, automation, clock, chat, _) = ReadyToStart(destinations: ["A", "B"], dataCenters: ["Aether"]);

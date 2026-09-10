@@ -79,6 +79,11 @@ public sealed class Plugin : IDalamudPlugin
     private readonly VenueOS.Modules.Operations.Macro.MacroService macroService;
     private readonly VenueOS.Modules.Operations.Macro.MacroModule macroModule;
     private readonly VenueOS.Plugin.Macro.MacroHotbarRenderer macroHotbarRenderer;
+    // 0.3.0 character-session presentation gate (Plugin.Draw): the ShoutRunner service is needed there for its
+    // IsActive signal (SessionPresentationGateService.CanRenderShoutRunnerUi's exception), so it's promoted to a
+    // field like every other service Draw() reads, rather than staying a constructor-local var.
+    private readonly VenueOS.Modules.Operations.ShoutRunner.ShoutRunnerService shoutRunnerServiceRef;
+    private readonly VenueOS.Services.SessionPresentationGateService sessionGate;
     // The built-in offline manual — reads the bundled USER_MANUAL.md copy (see UserManualLoader's doc comment for
     // why that file, not this class, is the single source of truth) once at construction; a missing/unreadable file
     // renders a plain warning inside the screen itself rather than failing plugin construction.
@@ -146,6 +151,8 @@ public sealed class Plugin : IDalamudPlugin
         // atomic-write guarantee (same temp-file-then-move pattern already proven by FileQuestionSetRepository).
         var shoutRunnerRecoveryStore = new FileShoutRunnerRecoveryStore(PluginInterface.ConfigDirectory.FullName);
         var shoutRunnerService = new ShoutRunnerService(shoutRunnerAutomation, chat, venues, diagnostics, clock, shoutRunnerRecoveryStore);
+        shoutRunnerServiceRef = shoutRunnerService;
+        sessionGate = new VenueOS.Services.SessionPresentationGateService(new DalamudSessionStateProvider(ClientState));
         var raffleService = new VenueRaffleService(new VenueRaffleClient(new HttpClient { Timeout = TimeSpan.FromSeconds(15) }), venues, diagnostics);
         // The canonical question library is VenueOS-wide (not per-venue) and independent of either Trivia's or
         // Editor's enabled state — constructed once here, exactly like venueDatabase above.
@@ -177,6 +184,10 @@ public sealed class Plugin : IDalamudPlugin
         // §30) — see DalamudActionReadyProbe's doc comment for the exact researched game-state signals it reads.
         var macroActionReadyProbe = new VenueOS.Plugin.Macro.DalamudActionReadyProbe(ObjectTable, Condition);
         macroService = new VenueOS.Modules.Operations.Macro.MacroService(scheduler, chat, venues, macroActionReadyProbe, diagnostics);
+        // Low-frequency, operator-meaningful event (fires once per actual hotbar slot assignment, never per frame)
+        // — kept in Dalamud's own log per the established VenueBingoService.DiagnosticEvent precedent, not routed
+        // through DiagnosticsService since a successful assignment isn't an operator-facing failure.
+        macroService.DiagnosticEvent += msg => Log.Debug($"[Macro] {msg}");
         var macroIconPicker = new VenueOS.Plugin.Macro.MacroIconPicker(TextureProvider, DataManager);
         macroHotbarRenderer = new VenueOS.Plugin.Macro.MacroHotbarRenderer(macroService, TextureProvider);
         var macroPanel = new VenueOS.Plugin.Macro.MacroOperatorPanel(macroService, venues, macroIconPicker, macroHotbarRenderer, TextureProvider);
@@ -315,22 +326,37 @@ public sealed class Plugin : IDalamudPlugin
     {
         var venueTheme = venues.Current.Theme;
 
+        // 0.3.0 character-session presentation gate (SessionPresentationGateService): nothing VenueOS-generated
+        // should normally render while genuinely logged out (title screen, character select), with the one
+        // deliberate exception of an already-active ShoutRunner operation's own UI during a temporary world/DC
+        // travel transition — see SessionPresentationGateService's doc comment for the full policy and the proof
+        // that the exception can't leak UI at startup or persist indefinitely after a genuine logout. This is a
+        // presentation-only gate: no service/config/lifecycle call below this point depends on it.
+        var canRenderGeneral = sessionGate.CanRenderGeneralUi;
+        var canRenderShoutRunner = sessionGate.CanRenderShoutRunnerUi(shoutRunnerServiceRef.IsActive);
+
         // Detached module windows are independent ImGui windows and must keep rendering even while the main
-        // tablet is closed — closing the tablet is a UI action on the tablet only, not on any module.
-        windowManager.DrawAll(venueTheme, modules.Modules);
+        // tablet is closed — closing the tablet is a UI action on the tablet only, not on any module. The gate
+        // predicate lets ShoutRunner's own detached window (if the operator has it popped out) keep rendering
+        // through its travel exception while every other detached module stays suppressed.
+        windowManager.DrawAll(venueTheme, modules.Modules, moduleId => moduleId == VenueOS.Modules.Operations.ShoutRunner.ShoutRunnerService.ModuleId ? canRenderShoutRunner : canRenderGeneral);
         // Bingo's two auxiliary windows (Called Numbers, Player Cards) are a second tier of detached window below
         // even that — they must survive not just the tablet closing, but the main Bingo screen itself being
         // closed/hidden or navigated away from (live-QA product requirement: the host wants to free screen space
         // by closing the main Bingo window while continuing to call numbers from Called Numbers alone). Gated on
-        // bingoModule.IsEnabled — matching ModuleWindowManager's own convention — so a disabled Bingo module still
-        // correctly stops showing its detached UI, per the module-disable/plugin-unload lifecycle requirement.
-        if (bingoModule.IsEnabled) { bingoCalledNumbersWindow.Draw(venueTheme); bingoPlayerCardViewerWindow.Draw(venueTheme); bingoCallAlertWindow.Draw(venueTheme); }
-        if (giveawaysModule.IsEnabled) giveawaysPanel.TrackerWindow.Draw(venueTheme, giveawaysPanel);
+        // bingoModule.IsEnabled AND the session gate — no ShoutRunner-style exception applies to these.
+        if (canRenderGeneral && bingoModule.IsEnabled) { bingoCalledNumbersWindow.Draw(venueTheme); bingoPlayerCardViewerWindow.Draw(venueTheme); bingoCallAlertWindow.Draw(venueTheme); }
+        if (canRenderGeneral && giveawaysModule.IsEnabled) giveawaysPanel.TrackerWindow.Draw(venueTheme, giveawaysPanel);
         // Faux Macro hotbars are HUD overlays, not detached module windows (MACRO spec §24/§37) — they render
-        // regardless of the main tablet's open/closed state, gated only on the module being enabled, same pattern
-        // as every other auxiliary window above.
-        if (macroModule.IsEnabled) macroHotbarRenderer.DrawAll();
+        // regardless of the main tablet's open/closed state, gated on the module being enabled AND the session
+        // gate. This is the exact defect the 0.3.0 pass fixes: a persisted hotbar could previously appear over the
+        // FFXIV title/intro screen before character login.
+        if (canRenderGeneral && macroModule.IsEnabled) macroHotbarRenderer.DrawAll();
         if (!open) return;
+        // The main tablet itself: suppressed while genuinely logged out UNLESS the operator currently has it on
+        // the ShoutRunner screen during an active operation's travel exception — never for Home/Settings/any other
+        // module, so the exception can't leak unrelated VenueOS content through it.
+        if (!canRenderGeneral && !(canRenderShoutRunner && shell.SelectedModuleId == VenueOS.Modules.Operations.ShoutRunner.ShoutRunnerService.ModuleId)) return;
 
         UiKit.PushWindowTheme(venueTheme);
         ImGui.SetNextWindowSize(new System.Numerics.Vector2(980, 650), ImGuiCond.FirstUseEver);
@@ -367,6 +393,16 @@ public sealed class Plugin : IDalamudPlugin
 internal sealed class DalamudObjectSnapshotProvider(IObjectTable objects, IClientState clientState) : IObjectSnapshotProvider
 {
     public IReadOnlyList<PlayerSnapshot> Snapshot() => objects.OfType<IPlayerCharacter>().Select(player => new PlayerSnapshot(player.Name.TextValue, player.HomeWorld.ValueNullable?.Name.ExtractText() ?? player.CurrentWorld.ValueNullable?.Name.ExtractText() ?? "Unknown", player.GameObjectId, clientState.TerritoryType, player.Position)).ToArray();
+}
+
+/// <summary>Backs the 0.3.0 character-session presentation gate (<see cref="VenueOS.Services.SessionPresentationGateService"/>).
+/// Deliberately just <see cref="IClientState.IsLoggedIn"/> — the same property this codebase already uses
+/// elsewhere for this exact distinction (<c>ShoutRunnerAutomationService</c>'s <c>GameState.IsLoggedIn</c>) —
+/// never <c>ObjectTable.LocalPlayer is null</c>, which is also transiently true for one ordinary frame during a
+/// zone transition while genuinely still logged in.</summary>
+internal sealed class DalamudSessionStateProvider(IClientState clientState) : VenueOS.Services.ISessionStateProvider
+{
+    public bool IsLoggedIn => clientState.IsLoggedIn;
 }
 
 /// <summary>Backs VIP's "Use Current Target" autofill via Dalamud's supported <see cref="ITargetManager"/> — never

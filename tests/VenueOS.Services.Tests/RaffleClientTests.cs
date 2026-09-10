@@ -144,6 +144,81 @@ public sealed class RaffleClientTests
         Assert.False(result.Success);
     }
 
+    [Fact]
+    public async Task CreateShortLinkAsync_sends_raffle_id_and_role_and_the_access_key_and_never_a_token()
+    {
+        string? body = null; string? accessKeyHeader = null;
+        var handler = new Handler(async request =>
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("/api/links", request.RequestUri!.AbsolutePath);
+            accessKeyHeader = request.Headers.TryGetValues("X-Access-Key", out var values) ? values.FirstOrDefault() : null;
+            body = await request.Content!.ReadAsStringAsync();
+            return Json("{\"ok\":true,\"code\":\"AB23CD\"}");
+        });
+        var result = await new VenueRaffleClient(new HttpClient(handler)).CreateShortLinkAsync(new("https://raffle.test", "shh"), "remote-id", "host", default);
+        Assert.True(result.Success);
+        Assert.Equal("shh", accessKeyHeader);
+        Assert.Contains("\"raffleId\":\"remote-id\"", body);
+        Assert.Contains("\"role\":\"host\"", body);
+        Assert.DoesNotContain("token", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("AB23CD", result.Value!.Code);
+    }
+
+    [Fact]
+    public async Task CreateShortLinkAsync_without_an_access_key_configured_fails_locally_without_a_network_call()
+    {
+        var called = false;
+        var handler = new Handler(_ => { called = true; return Task.FromResult(Json("{}")); });
+        var result = await new VenueRaffleClient(new HttpClient(handler)).CreateShortLinkAsync(new("https://raffle.test", ""), "id", "host", default);
+        Assert.False(result.Success);
+        Assert.False(called);
+    }
+
+    [Fact]
+    public async Task FindShortLinkAsync_escapes_raffle_id_and_role_as_query_parameters()
+    {
+        Uri? uri = null;
+        var handler = new Handler(request => { uri = request.RequestUri; return Task.FromResult(Json("{\"ok\":true,\"code\":\"QR45ST\"}")); });
+        var result = await new VenueRaffleClient(new HttpClient(handler)).FindShortLinkAsync(new("https://raffle.test", "key"), "id with space", "view", default);
+        Assert.True(result.Success);
+        Assert.Contains("raffleId=id%20with%20space", uri!.Query);
+        Assert.Contains("role=view", uri.Query);
+        Assert.Equal("QR45ST", result.Value!.Code);
+    }
+
+    [Fact]
+    public async Task FindShortLinkAsync_reports_no_link_found_without_error()
+    {
+        var handler = new Handler(_ => Task.FromResult(Json("{\"ok\":true,\"code\":null}")));
+        var result = await new VenueRaffleClient(new HttpClient(handler)).FindShortLinkAsync(new("https://raffle.test", "key"), "id", "host", default);
+        Assert.True(result.Success);
+        Assert.Null(result.Value!.Code);
+    }
+
+    [Fact]
+    public void DisplayHostUrl_and_DisplayViewerUrl_prefer_the_short_code_and_fall_back_to_the_full_url()
+    {
+        var withCodes = new LocalRaffle("local", "Friday", DateTime.UnixEpoch, new(), [], [], HostUrl: "https://raffle.test/host/id/secret-host", ViewerUrl: "https://raffle.test/view/id/secret-view", HostLinkCode: "AB23CD", ViewerLinkCode: "QR45ST");
+        Assert.Equal("https://raffle.test/l/AB23CD", withCodes.DisplayHostUrl("https://raffle.test"));
+        Assert.Equal("https://raffle.test/l/QR45ST", withCodes.DisplayViewerUrl("https://raffle.test"));
+
+        var withoutCodes = withCodes with { HostLinkCode = null, ViewerLinkCode = null };
+        Assert.Equal("https://raffle.test/host/id/secret-host", withoutCodes.DisplayHostUrl("https://raffle.test"));
+        Assert.Equal("https://raffle.test/view/id/secret-view", withoutCodes.DisplayViewerUrl("https://raffle.test"));
+    }
+
+    [Fact]
+    public void WithoutSecrets_also_strips_the_short_link_codes()
+    {
+        var raffle = new LocalRaffle("local", "Friday", DateTime.UnixEpoch, new(), [], [], HostUrl: "https://x/host/id/t", ViewerUrl: "https://x/view/id/t", HostLinkCode: "AB23CD", ViewerLinkCode: "QR45ST");
+        var stripped = raffle.WithoutSecrets();
+        Assert.Null(stripped.HostUrl);
+        Assert.Null(stripped.ViewerUrl);
+        Assert.Null(stripped.HostLinkCode);
+        Assert.Null(stripped.ViewerLinkCode);
+    }
+
     private static HttpResponseMessage Json(string value) => new(HttpStatusCode.OK) { Content = new StringContent(value, Encoding.UTF8, "application/json") };
     private sealed class Handler : HttpMessageHandler { private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> action; public Handler(Func<HttpRequestMessage, Task<HttpResponseMessage>> action) : this((request, _) => action(request)) { } public Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> action) => this.action = action; protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => action(request, cancellationToken); }
 }

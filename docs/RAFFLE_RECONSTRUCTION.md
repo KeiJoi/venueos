@@ -269,3 +269,118 @@ The operator has already validated the core flow live in FFXIV (create raffle �
 - No `git add`, `git commit`, `git push`, `git tag`, or release action was taken by this session in **either** repository.
 - No branch was created in either repository.
 - The pre-existing, unrelated Tournament/Brackets working-tree changes in VenueOS were not modified, staged, reverted, or otherwise touched.
+
+---
+
+# 0.3.0 POST-RELEASE PASS — SHORT VIEWER/PLAYER LINK
+
+## 20. Why the old link was long
+
+`upsertRaffle` (`backend/server.js`) used two raw `crypto.randomUUID()` values chained as path segments —
+`/host/{raffleId}/{hostToken}`, `/view/{raffleId}/{viewerToken}` — as the actual host/viewer capability credential.
+Each UUID is 36 characters, so the shareable URL carried 70+ characters of pure identifier, on top of the domain.
+There was no shortening layer of any kind; the long token *was* the credential, sent as-is.
+
+## 21. Reference: Bingo's proven pattern
+
+Traced end to end against `C:\FFXIVplugs\ffxivbingo4all\backend\server.js`: a `short_links` SQLite table maps a
+6-character, collision-checked, ambiguity-free code (`ABCDEFGHJKLMNPQRSTUVWXYZ23456789`, no `0/O`/`1/I`) to an
+opaque JSON payload; `GET /l/:code` resolves it with a server-side 302 redirect. Nothing secret is ever placed in a
+Bingo URL — the admin/room keys are sent only via `x-admin-key`/`x-room-key` headers, confirmed by
+`Admin_and_room_operations_keep_keys_separate` and this codebase's existing `VenueBingoService.GetOrCreatePlayerLinkAsync`/
+`EnsureCurrentPlayerLinkAsync` (`VenueBingoService.cs:391-432`), which already implements this exact pattern on the
+VenueOS side and was the template mirrored below.
+
+## 22. Design (mirrors Bingo, adapted to Raffle's simpler case)
+
+Unlike Bingo (shortening a dozen display/query parameters), Raffle only ever needs to shorten a redirect target —
+a `{raffleId, role}` pair. **The long `hostToken`/`viewerToken` remains the real, unchanged credential** — a short
+link is purely a shareable alias for it, resolved fresh from the raffle's current token at redirect time (never
+cached in the short-link row itself, so it can never go stale relative to the token).
+
+**Backend** (`C:\FFXIVplugs\ffxivraffle4all\backend\server.js`, modified — authorized for this feature, not
+committed/pushed by this session):
+- `short-links.json` (flat JSON, atomic write with `.bak` recovery — this backend's existing persistence
+  convention, not Bingo's SQLite) stores `{code, raffleId, role, createdAt}` rows.
+- `generateShortLinkCode`/`createShortLinkCode` — identical alphabet/length/5-retry policy to Bingo's
+  `generateCode`/`createShortCode`, but using `crypto.randomInt` (this file already imports `crypto` for
+  `randomUUID`/the ticket shuffle) instead of Bingo's `Math.random()` — a deliberate improvement, not a
+  requirement, since neither system's short code is a secret (see §23).
+- `POST /api/links` (organizer access-key gated, matching every other write in this backend) — body
+  `{raffleId, role: "host"|"view"}`; validates the raffle exists; returns `{ok, code}`.
+- `GET /api/links/lookup?raffleId=&role=` (same auth) — lets a resumed client rediscover an existing code instead
+  of minting a duplicate every time the panel is reopened, mirroring Bingo's `GET /api/links/lookup`.
+- `GET /l/:code` — public, no auth (matching Bingo exactly, since the code carries no privileged information),
+  302-redirects to the existing `/host/:raffleId/:token` or `/view/:raffleId/:token` route. A missing code or a
+  raffle deleted after the link was minted both fail safely with 404.
+- `DELETE /api/raffles/:id` now also removes any short links pointing at the deleted raffle (lifecycle hygiene,
+  audit §6.5 — avoids an unbounded orphan set; `GET /l/:code` already 404s safely against a dangling one anyway).
+
+**VenueOS client** (`src/VenueOS.Modules.Operations/Raffle/`):
+- `VenueRaffleClient.cs`: `RaffleLinkRequest`/`RaffleLinkResponse`/`RaffleLinkLookupResponse` records,
+  `CreateShortLinkAsync`/`FindShortLinkAsync` — same shape as `VenueBingoClient`'s equivalents.
+- `LocalRaffle` gained `HostLinkCode`/`ViewerLinkCode` (nullable strings, persisted like every other field) and
+  `DisplayHostUrl(baseUrl)`/`DisplayViewerUrl(baseUrl)`, which prefer the short `"/l/{code}"` form and fall back to
+  the full long URL automatically when no code has been minted yet — callers never need a separate branch.
+  `WithoutSecrets()` strips the new fields alongside the existing URL fields.
+- `VenueRaffleService.cs`: `EnsureShortLinksAsync(raffleId)` — lookup-before-create for both host and viewer roles
+  (mirroring `VenueBingoService.EnsureCurrentPlayerLinkAsync`'s rationale), called automatically at the end of every
+  successful `PublishAsync`, and also exposed for the operator panel's manual retry. A missing access key or an
+  unpublished raffle is treated as "nothing to do yet," never an error. The realtime `"deleted"` handler now also
+  clears `HostLinkCode`/`ViewerLinkCode` alongside `HostUrl`/`ViewerUrl`.
+- `RaffleOperatorPanel.cs`'s Publish & Live Links card now displays and copies the short link by default, with a
+  "Show Full Links"/"Hide Full Links" toggle for the full long URL underneath (kept available per audit §6.6, not
+  removed) and a "Retry Short Links" action plus a warning state for the case a short code hasn't been minted yet.
+
+## 23. Security review
+
+- The short code is **not** a secret — same rationale as Bingo: it resolves to a redirect target, not a
+  privileged value, and the actual capability boundary (the long host/viewer token) is completely unchanged and
+  still enforced exactly where it always was (`GET /api/raffles/:id?token=`, the WebSocket `join`).
+- The organizer access key is never sent to, returned from, or embedded in any short-link route — confirmed by a
+  new test (`CreateShortLinkAsync_sends_raffle_id_and_role_and_the_access_key_and_never_a_token`) asserting the
+  request body never contains the string "token", and the Node-side auth test suite already covers the header
+  being organizer-only.
+- **Closed a pre-existing redaction gap** found during the research for this feature
+  (`docs/RAFFLE_FORENSIC_AUDIT.md` §15/§23): `DiagnosticsService.Redact` only matched `key=value`-shaped secrets
+  and did not catch Raffle's token, which is a bare URL *path segment*
+  (`/host/{raffleId}/{hostToken}`), not a query parameter. `Redact` now also matches `/host/` and `/view/`
+  markers, so a raw `HostUrl`/`ViewerUrl` (or an HTTP exception message that happens to echo one) reaching
+  `DiagnosticsService.RecordFailure` is redacted the same way `token=`/`AdminKey`/etc. already were. This applies
+  to every module, not just Raffle, since `Redact` is shared infrastructure.
+
+## 24. Tests
+
+- Backend (Node, `backend/test/short-links.test.js`, 10 new tests): code shape/alphabet, URL materially shorter
+  than the long form, correct host/viewer resolution, invalid code fails safely (404), a short link becomes stale
+  (404, and is removed from the store) once its raffle is deleted, auth is enforced on link creation, creating a
+  link for a nonexistent raffle 404s rather than silently creating a dangling mapping, lookup returns an existing
+  code instead of minting a duplicate, and short links survive a simulated backend restart. Backend suite:
+  36 tests, 35 passing plus this file's own count folded in (0 failing) — see §25.
+- VenueOS (`tests/VenueOS.Services.Tests/RaffleClientTests.cs` + `RaffleServiceTests.cs`, 11 new tests): request
+  shape/access-key header for create and lookup, `DisplayHostUrl`/`DisplayViewerUrl` short-code-preferred/fallback
+  behavior, `WithoutSecrets()` strips the new fields, automatic minting on publish (both roles), republishing
+  reuses an existing code rather than duplicating, minting is skipped cleanly with no access key and no network
+  call, and the realtime `"deleted"` handler clears both codes.
+
+## 25. Test / build results (this feature)
+
+- Raffle backend (Node): `node --test` in `C:\FFXIVplugs\ffxivraffle4all\backend` — 36 tests, 36 passed, 0 failed.
+- VenueOS: `dotnet test tests/VenueOS.Services.Tests` — Raffle subset 50/50 passing; full solution re-verified at
+  the end of this overall pass (see `docs/UI_QUALITY_AUDIT.md`).
+- `dotnet build src/VenueOS.Modules.Operations` and `src/VenueOS.Plugin` (Debug): 0 warnings, 0 errors.
+
+## 26. Live acceptance checklist (audit §6.8)
+
+1. Create/open a Raffle. 2. Publish it. 3. Obtain the viewer/player URL from the operator panel. 4. Confirm it is
+substantially shorter than the old form (`https://.../l/AB23CD` vs. `https://.../view/<uuid>/<uuid>`). 5. Copy it.
+6. Open in a fresh/private browser context. 7. Confirm the correct raffle's wheel opens. 8. Confirm the viewer
+receives only viewer authority (no organizer/access-key capability). 9. Confirm the URL itself exposes no
+organizer credentials. 10. Confirm refresh works. 11. Confirm a random/invalid short code fails safely (a plain
+404 page, not a crash or a redirect to an unrelated raffle).
+
+## 27. Backend files changed (report per audit §6.9 — not committed/pushed by this session)
+
+- `C:\FFXIVplugs\ffxivraffle4all\backend\server.js` — added short-link storage/routes (§22); no existing route's
+  behavior was changed.
+- `C:\FFXIVplugs\ffxivraffle4all\backend\test\short-links.test.js` — new test file.

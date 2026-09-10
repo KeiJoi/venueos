@@ -159,11 +159,11 @@ internal sealed class MacroOperatorPanel(MacroService service, VenueProfileServi
         var nameStart = start + new Vector2(6, TileSize.Y - nameSize.Y - 8);
         drawList.AddText(ImGui.GetFont(), ImGui.GetFontSize(), nameStart, UiKit.ColorU32(theme.Tokens.TextPrimary), macro.Name, TileSize.X - 12);
 
-        // MACRO LIVE QA FIX §21/§22: the same drag source every other macro icon in this module uses, so a tile can
-        // be dragged directly onto a visible faux hotbar (only actually accepted while that hotbar is in Edit mode
-        // — see MacroHotbarRenderer.DrawSlot). Coexists with the ordinary click-to-run handling below it unchanged:
-        // ImGui only treats this as a drag once the mouse moves past its own drag threshold while held down, so a
-        // plain click still runs the macro exactly as before.
+        // Live-verified (0.3.0 pass): the same drag source every other macro icon in this module uses, so a tile
+        // can be dragged directly onto a visible faux hotbar (only actually accepted while that hotbar is in Edit
+        // mode — see MacroHotbarRenderer.DrawSlot). Coexists with the ordinary click-to-run handling below it
+        // unchanged: ImGui only treats this as a drag once the mouse moves past its own drag threshold while held
+        // down, so a plain click still runs the macro exactly as before.
         MacroDragDrop.BeginSource(macro.Id, macro.Name);
 
         ImGui.PopID();

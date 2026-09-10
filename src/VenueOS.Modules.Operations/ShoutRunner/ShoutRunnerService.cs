@@ -81,6 +81,16 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     private int pendingResumedStepIndex;
 
     public ShoutRunnerState State { get; private set; } = ShoutRunnerState.Stopped;
+
+    /// <summary>0.3.0 session-presentation gate (<c>SessionPresentationGateService.CanRenderShoutRunnerUi</c>):
+    /// true whenever a run is in progress in any way, including its own Stop cleanup — the only states this
+    /// excludes are <see cref="ShoutRunnerState.Stopped"/> and <see cref="ShoutRunnerState.Faulted"/>, exactly the
+    /// two <see cref="CanStart"/> already treats as "nothing running." See
+    /// <c>SessionPresentationGateService</c>'s doc comment for the full proof that this signal can only ever become
+    /// true from an operator action taken while logged in, and self-corrects to false within this service's own
+    /// existing travel-timeout bounds if the character never returns.</summary>
+    public bool IsActive => State is not (ShoutRunnerState.Stopped or ShoutRunnerState.Faulted);
+
     public int RunNumber { get; private set; }
     public string StatusText { get; private set; } = "Stopped";
     public DateTimeOffset? NextRunAtUtc => State == ShoutRunnerState.WaitingRepeat ? nextRunAtUtc : null;

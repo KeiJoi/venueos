@@ -69,12 +69,21 @@ internal sealed class MacroEditorWindow
         UiKit.PushWindowTheme(theme);
 
         var title = editingId is null ? "New Macro" : $"Edit Macro — {name}";
-        var windowOpen = true;
+        var closeRequested = false;
         // A real native window (X-to-close = Cancel, per §16), not a BeginPopupModal — a modal would block the
         // operator from ever seeing the library list behind it while comparing names/icons, which this task's own
-        // "separate window" wording (§14) is more naturally read as than a blocking popup.
-        if (ImGui.Begin($"{title}###venueos-macro-editor", ref windowOpen, ImGuiWindowFlags.NoCollapse))
+        // "separate window" wording (§14) is more naturally read as than a blocking popup. 0.3.0 UI pass: this used
+        // to be the one VenueOS window still showing ImGui's raw native title bar — every other top-level
+        // window/modal already used NoTitleBar + custom chrome (ModuleWindowHeader, or now DialogHeader below).
+        if (ImGui.Begin("###venueos-macro-editor", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse))
         {
+            DialogHeader.Draw(theme, title, () => closeRequested = true); // native title-bar X's Cancel-equivalent behavior (§16) is now this Close button
+
+            // 0.3.0 UI pass: Save/Cancel are now a pinned footer outside the scrollable content region, matching
+            // GiveawayPresetEditorModal's pattern — previously the whole window scrolled as one unit (ImGui.Begin's
+            // default behavior with no NoScrollbar flag), so the footer buttons could scroll out of view at a
+            // small window size or with a long macro body.
+            ImGui.BeginChild("macro-editor-content", new Vector2(0, -56f), false);
             Forms.TextField(theme, "Macro Name", ref name, 128);
             ImGui.Spacing();
 
@@ -88,8 +97,9 @@ internal sealed class MacroEditorWindow
             DrawBodyField(theme);
 
             foreach (var error in errors) UiKit.ErrorState(theme, error);
+            ImGui.EndChild();
 
-            ImGui.Spacing();
+            UiKit.Divider(theme);
             if (UiKit.PrimaryButton(theme, "Save")) TrySave(service);
             ImGui.SameLine();
             if (UiKit.GhostButton(theme, "Cancel")) IsOpen = false;
@@ -97,7 +107,7 @@ internal sealed class MacroEditorWindow
         ImGui.End();
         UiKit.PopWindowTheme();
 
-        if (!windowOpen) IsOpen = false; // native close button behaves as Cancel (§16)
+        if (closeRequested) IsOpen = false; // Close button behaves as Cancel (§16), same as the native X used to
     }
 
     /// <summary>One large multiline field — copy/paste, Ctrl+A/C/X/V, arbitrary cursor movement/selection all work

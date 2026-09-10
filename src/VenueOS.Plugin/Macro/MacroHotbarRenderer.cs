@@ -35,6 +35,7 @@ internal sealed class MacroHotbarRenderer(MacroService service, ITextureProvider
     private const float BaseSlotSize = 40f;
     private const float BaseSpacing = 3f;
     private const float BasePadding = 6f;
+    private const float BaseHandleHeight = 16f;
 
     public bool EditMode;
     private readonly bool[] positionInitialized = new bool[MacroHotbar.MaxHotbars];
@@ -53,7 +54,14 @@ internal sealed class MacroHotbarRenderer(MacroService service, ITextureProvider
         var slotSize = BaseSlotSize * hotbar.Scale;
         var spacing = BaseSpacing * hotbar.Scale;
         var padding = BasePadding * hotbar.Scale;
-        var size = new Vector2(columns * slotSize + (columns - 1) * spacing + padding * 2, rows * slotSize + (rows - 1) * spacing + padding * 2);
+        // 0.3.0 UI PASS: a dedicated drag-handle strip, spatially disjoint from every slot rectangle, replaces the
+        // previous whole-bar InvisibleButton that visually underlapped the slots (SetItemAllowOverlap()'s hover
+        // arbitration was already tried live and did not resolve the reported drop failure — see DrawDragLayer's
+        // doc comment). This is a structural UI improvement approved regardless of the drag/drop root cause: only
+        // added when EditMode is on, so a locked bar's footprint/appearance is completely unchanged.
+        var handleHeight = EditMode ? BaseHandleHeight * hotbar.Scale : 0f;
+        var gridSize = new Vector2(columns * slotSize + (columns - 1) * spacing + padding * 2, rows * slotSize + (rows - 1) * spacing + padding * 2);
+        var size = new Vector2(gridSize.X, gridSize.Y + handleHeight);
 
         ImGui.SetNextWindowSize(size, ImGuiCond.Always);
         // Position is per-venue persisted state (MacroSettings' doc comment) — only ever pushed into ImGui as a
@@ -75,26 +83,21 @@ internal sealed class MacroHotbarRenderer(MacroService service, ITextureProvider
         if (opened)
         {
             var origin = ImGui.GetWindowPos();
+            var gridOrigin = origin + new Vector2(0, handleHeight);
             var drawList = ImGui.GetWindowDrawList();
             var alpha = Math.Clamp(hotbar.Transparency, MacroHotbar.MinTransparency, MacroHotbar.MaxTransparency);
-            drawList.AddRectFilled(origin, origin + size, ImGui.ColorConvertFloat4ToU32(new Vector4(0.04f, 0.04f, 0.05f, 0.72f * alpha)), 4f);
-            drawList.AddRect(origin, origin + size, ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.9f * alpha)), 4f, ImDrawFlags.None, 1.5f);
+            drawList.AddRectFilled(gridOrigin, gridOrigin + gridSize, ImGui.ColorConvertFloat4ToU32(new Vector4(0.04f, 0.04f, 0.05f, 0.72f * alpha)), 4f);
+            drawList.AddRect(gridOrigin, gridOrigin + gridSize, ImGui.ColorConvertFloat4ToU32(new Vector4(0f, 0f, 0f, 0.9f * alpha)), 4f, ImDrawFlags.None, 1.5f);
 
-            // Edit mode's whole-bar drag layer is drawn FIRST (visually underneath), then each slot's own
-            // InvisibleButton is drawn on top of it. The layer is marked SetItemAllowOverlap() (see
-            // DrawDragLayer's doc comment for why that specific call — not draw order alone — is what lets a slot
-            // still receive hover despite the layer covering the same screen region) so a slot can still become the
-            // hovered/target item while the drag layer remains active over the gaps between slots. This is what
-            // lets "drag the bar" (a plain click-drag on the background) and "drop a macro onto a slot" (ImGui's
-            // separate drag-drop-payload state machine, active only while a BeginDragDropSource elsewhere is being
-            // dragged) coexist without either stealing the other's input — see DrawSlot's doc comment for the
-            // target side.
-            if (EditMode) DrawDragLayer(index, origin, size);
+            // The handle strip occupies its own reserved region above the slot grid — it never shares screen space
+            // with a slot, so there is no overlapping-item hover arbitration to get wrong here (unlike the previous
+            // whole-bar layer, which visually underlapped every slot).
+            if (EditMode) DrawDragHandle(index, origin, new Vector2(size.X, handleHeight));
 
             for (var slot = 0; slot < MacroHotbarLayouts.SlotCount; slot++)
             {
                 var (col, row) = MacroHotbarLayouts.Position(hotbar.Layout, slot);
-                var slotMin = origin + new Vector2(padding + col * (slotSize + spacing), padding + row * (slotSize + spacing));
+                var slotMin = gridOrigin + new Vector2(padding + col * (slotSize + spacing), padding + row * (slotSize + spacing));
                 DrawSlot(index, hotbar, slot, slotMin, slotSize);
             }
         }
@@ -137,38 +140,31 @@ internal sealed class MacroHotbarRenderer(MacroService service, ITextureProvider
         else
         {
             // Hover feedback while editing (spec requirement — "highlight slot border/background" while a drag is
-            // over a valid target), independent of whether a drop actually completes this frame. Only reachable
-            // now that the drag layer's SetNextItemAllowOverlap() fix (DrawDragLayer's doc comment) lets this
-            // slot's own InvisibleButton become hovered at all.
+            // over a valid target), independent of whether a drop actually completes this frame. The drag-handle
+            // strip is now spatially disjoint from every slot (DrawBar's doc comment), so this no longer depends on
+            // any overlap-hover arbitration with a whole-bar layer.
             if (ImGui.IsItemHovered()) drawList.AddRect(slotMin - new Vector2(1, 1), slotMin + slotSizeVec + new Vector2(1, 1), ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 0.8f, 0.2f, 0.95f)), 3f, ImDrawFlags.None, 2.5f);
             if (MacroDragDrop.AcceptTarget() is { } droppedMacroId) service.DropMacroOntoSlot(hotbarIndex, slot, droppedMacroId);
         }
         ImGui.PopID();
     }
 
-    /// <summary>Edit-mode dragging — identical mechanics to <c>TabletHeader.DrawDragHandle</c> (spec §32/§46: never
-    /// let a normal macro click risk moving the bar, so this layer only ever exists while <see cref="EditMode"/> is
-    /// on, and slot click-to-run is skipped entirely for that same duration above). Persists the final position via
-    /// <see cref="MacroService.SetHotbarPosition"/> only on mouse release, not every dragged frame, so an operator
-    /// repositioning a bar doesn't trigger a config save on every single frame of the drag.</summary>
-    private void DrawDragLayer(int hotbarIndex, Vector2 origin, Vector2 size)
+    /// <summary>Edit-mode dragging — 0.3.0 UI PASS: this used to be a whole-bar <c>InvisibleButton</c> drawn
+    /// UNDERNEATH every slot with <c>SetItemAllowOverlap()</c> called on it, on the theory that Dear ImGui's
+    /// first-item-claims-hover-unless-marked-overlappable rule was silently stealing hover from every slot's own
+    /// <c>InvisibleButton</c> (drawn after, per-slot). That fix was applied and shipped, but the live-reported
+    /// symptom (dragging a Live tile onto a slot does nothing) persisted — so that theory is NOT treated as proven
+    /// here; see <c>docs/MACRO_IMPLEMENTATION.md</c>'s dated fix-pass section and <c>MacroDragDrop</c>'s
+    /// instrumentation for the actual live-QA diagnosis. Independent of that unresolved question, this region is
+    /// now a dedicated handle strip that never shares screen space with any slot rectangle at all — movement and
+    /// slot drop-targets can no longer compete for hover by construction, which is a real improvement regardless of
+    /// where the drag/drop failure turns out to be. Persists the final position via
+    /// <see cref="MacroService.SetHotbarPosition"/> only on mouse release, not every dragged frame.</summary>
+    private void DrawDragHandle(int hotbarIndex, Vector2 origin, Vector2 size)
     {
         ImGui.SetCursorScreenPos(origin);
         ImGui.PushID($"hotbar{hotbarIndex}-drag");
-        // LIVE QA FIX — ROOT CAUSE of "drag onto a slot does nothing": Dear ImGui's default overlap rule is the
-        // OPPOSITE of what a naive "later-drawn item wins" assumption expects. The FIRST item submitted each frame
-        // that the mouse is over claims g.HoveredId; a LATER item overlapping the same screen region is locked out
-        // of hover entirely unless the EARLIER item is explicitly marked overlappable via SetItemAllowOverlap()
-        // (this binding exposes the older post-hoc form, called immediately AFTER the item it applies to — not the
-        // newer SetNextItemAllowOverlap()/pre-item form some other ImGui bindings use, which this one does not
-        // expose). Without this call, this full-bar InvisibleButton — drawn first specifically so slots could sit
-        // "on top" of it — silently claimed hover for the ENTIRE bar every frame in Edit mode, so no individual
-        // slot's own InvisibleButton (drawn after, per-slot, below) ever became hovered. BeginDragDropTarget()
-        // requires the target item itself to be hovered/the last item, so it never fired for any slot — drops were
-        // silently swallowed while bar-dragging (which only needs THIS item to be active) kept working, exactly
-        // matching the live-reported symptom.
         ImGui.InvisibleButton("##drag", size);
-        ImGui.SetItemAllowOverlap();
         if (ImGui.IsItemActive() && ImGui.IsMouseDragging(ImGuiMouseButton.Left))
         {
             ImGui.SetWindowPos(ImGui.GetWindowPos() + ImGui.GetMouseDragDelta(ImGuiMouseButton.Left));
@@ -180,7 +176,17 @@ internal sealed class MacroHotbarRenderer(MacroService service, ITextureProvider
             service.SetHotbarPosition(hotbarIndex, new MacroPosition(finalPos.X, finalPos.Y));
         }
         var drawList = ImGui.GetWindowDrawList();
-        drawList.AddRect(origin + new Vector2(1, 1), origin + size - new Vector2(1, 1), ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 0.8f, 0.2f, 0.9f)), 4f, ImDrawFlags.None, 2f);
+        var hovered = ImGui.IsItemHovered();
+        drawList.AddRectFilled(origin, origin + size, ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 0.8f, 0.2f, hovered ? 0.35f : 0.22f)), 4f, ImDrawFlags.RoundCornersTop);
+        // A small grip cue (three short horizontal ticks) makes the handle read as "grab here" rather than a plain
+        // colored strip — cheap, theme-independent (this HUD overlay intentionally doesn't use VenueOS theme tokens
+        // — see this file's class-level doc comment), and consistent regardless of hotbar scale.
+        var center = origin + size / 2;
+        for (var i = -1; i <= 1; i++)
+        {
+            var y = center.Y + i * 3f;
+            drawList.AddLine(new Vector2(center.X - 8, y), new Vector2(center.X + 8, y), ImGui.ColorConvertFloat4ToU32(new Vector4(1f, 1f, 1f, 0.6f)), 1.5f);
+        }
         ImGui.PopID();
     }
 }

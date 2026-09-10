@@ -256,12 +256,49 @@ public sealed class VenueRaffleService(VenueRaffleClient client, VenueProfileSer
                 PublishedTicketHash = r.CurrentTicketHash,
             });
             EnsureRealtimeConnection();
+            await EnsureShortLinksAsync(raffleId).ConfigureAwait(false);
         }
         else
         {
             diagnostics.RecordFailure($"games.raffle: publish failed ({DiagnosticsService.Redact(result.Error ?? "unknown error")})");
         }
         return result;
+    }
+
+    /// <summary>0.3.0 short-link feature — mints (or, on a resumed session, rediscovers) the short "/l/:code" alias
+    /// for this raffle's host and viewer URLs, mirroring VenueBingoService.EnsureCurrentPlayerLinkAsync's
+    /// lookup-before-create rationale. Called automatically after every successful <see cref="PublishAsync"/>; also
+    /// exposed publicly so the operator panel can retry on demand (e.g. if the access key was configured after an
+    /// earlier publish already succeeded). A missing access key or an unpublished raffle is not an error here —
+    /// short links are strictly a display convenience layered on top of an already-published raffle.</summary>
+    public async Task<bool> EnsureShortLinksAsync(string raffleId)
+    {
+        var raffle = Settings.Raffles.FirstOrDefault(x => x.Id == raffleId);
+        if (raffle?.ExternalId is null || string.IsNullOrWhiteSpace(Settings.Connection.AccessKey)) return false;
+
+        var changed = false;
+        if (string.IsNullOrWhiteSpace(raffle.HostLinkCode))
+        {
+            var code = await GetOrCreateLinkCodeAsync(raffle.ExternalId, "host").ConfigureAwait(false);
+            if (code is not null) { Update(raffleId, r => r with { HostLinkCode = code }); changed = true; }
+        }
+        if (string.IsNullOrWhiteSpace(raffle.ViewerLinkCode))
+        {
+            var code = await GetOrCreateLinkCodeAsync(raffle.ExternalId, "view").ConfigureAwait(false);
+            if (code is not null) { Update(raffleId, r => r with { ViewerLinkCode = code }); changed = true; }
+        }
+        return changed;
+    }
+
+    private async Task<string?> GetOrCreateLinkCodeAsync(string externalId, string role)
+    {
+        var lookup = await client.FindShortLinkAsync(Settings.Connection, externalId, role, contextCancellation.Token).ConfigureAwait(false);
+        if (lookup.Success && !string.IsNullOrWhiteSpace(lookup.Value?.Code)) return lookup.Value!.Code;
+
+        var created = await client.CreateShortLinkAsync(Settings.Connection, externalId, role, contextCancellation.Token).ConfigureAwait(false);
+        if (created.Success && created.Value is { } value) return value.Code;
+        diagnostics.RecordFailure($"games.raffle: create short link ({role}) failed ({DiagnosticsService.Redact(created.Error ?? "unknown error")})");
+        return null;
     }
 
     /// <summary>REST fallback/reconciliation - used after reconnect, and available as an explicit manual "Refresh"
@@ -294,7 +331,7 @@ public sealed class VenueRaffleService(VenueRaffleClient client, VenueProfileSer
                 break;
             case "deleted":
                 diagnostics.RecordFailure("games.raffle: the published copy of this raffle was deleted on the backend.");
-                Update(raffle.Id, r => r with { ExternalId = null, HostUrl = null, ViewerUrl = null, PublishedTicketHash = null });
+                Update(raffle.Id, r => r with { ExternalId = null, HostUrl = null, ViewerUrl = null, HostLinkCode = null, ViewerLinkCode = null, PublishedTicketHash = null });
                 realtime.Stop();
                 break;
             case "error":

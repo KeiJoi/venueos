@@ -642,9 +642,11 @@ internal sealed class VipEditDialog
     {
         if (openRequested) { ImGui.OpenPopup(PopupId); openRequested = false; }
         ImGui.SetNextWindowSize(new Vector2(420, 0));
-        if (!ImGui.BeginPopupModal(PopupId, ref windowOpen, ImGuiWindowFlags.NoResize | ImGuiWindowFlags.AlwaysAutoResize)) return;
+        // 0.3.0 UI pass: NoTitleBar + DialogHeader replaces ImGui's raw native popup title bar, matching every
+        // other VenueOS window/modal's chrome.
+        if (!ImGui.BeginPopupModal(PopupId, ref windowOpen, ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.AlwaysAutoResize)) return;
 
-        ImGui.TextUnformatted(isEditing ? "Edit VIP" : "Add VIP");
+        DialogHeader.Draw(theme, isEditing ? "Edit VIP" : "Add VIP", ImGui.CloseCurrentPopup);
         UiKit.Divider(theme);
 
         if (UiKit.GhostButton(theme, "Use Current Target"))

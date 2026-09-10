@@ -77,6 +77,16 @@ public sealed class MairsTriviaService(MairsTriviaClient client, VenueProfileSer
     /// <summary>Stops local polling/requests only. The backend Game/Series is untouched and remains resumable — this must never send an End Game/Series call.</summary>
     public void Stop() { contextCancellation.Cancel(); Interlocked.Increment(ref generation); }
 
+    /// <summary>Called when the module transitions from disabled back to enabled (see <see cref="MairsTriviaModule.IsEnabled"/>'s
+    /// setter). <c>ModuleHost</c> skips <c>OnVenueChangedAsync</c>/<c>Tick</c> entirely for a disabled module (see
+    /// <c>NEW_MODULE_GUIDE.md</c> §22), so <see cref="Load"/> — the only place <see cref="Settings"/>/the session
+    /// token are re-synced to the active venue — is never called for any venue switch(es) that happen while Trivia
+    /// is disabled. Without this, re-enabling resumed with whichever venue's connection/token this singleton
+    /// service last loaded, potentially reused against a different now-active venue — a confirmed contributing
+    /// cause of Trivia's intermittent "expired token" defect, distinct from (and in addition to) the refresh-race
+    /// fixed in <see cref="RefreshAsync"/>. Always reloads for whichever venue is actually active right now.</summary>
+    public void ReloadForCurrentVenue() => Load(profiles.Current.Id);
+
     // ---------------------------------------------------------------- polling ---
     private DateTimeOffset nextPoll;
     private bool polling;
@@ -261,12 +271,31 @@ public sealed class MairsTriviaService(MairsTriviaClient client, VenueProfileSer
         Configure(Settings with { Connection = Settings.Connection with { Username = value.User.Username, Password = password, AccessToken = value.AccessToken, RefreshToken = value.RefreshToken } });
         return true;
     }
+    /// <summary>Both the load-time auto-connect (<see cref="Load"/>) and the operator's manual "Refresh session"
+    /// button call this SAME method, which routes through the single-flight <see cref="EnsureAuthenticatedAsync"/>
+    /// path — the identical one the reactive 401-recovery branch of <see cref="RunAsync{T}"/> uses. This is a
+    /// deliberate fix: this method used to call <c>client.RefreshAsync</c> directly, bypassing that single-flight
+    /// guard entirely. The backend ROTATES the refresh token on every use (it invalidates the previous one), so two
+    /// independent refresh calls racing each other — e.g. a venue-load auto-refresh overlapping a background poll's
+    /// reactive 401 recovery, or the manual button clicked while a poll-triggered recovery is already in flight —
+    /// could each send the same now-superseded refresh token, and whichever <c>Configure(...)</c> call landed second
+    /// would silently discard the other's (possibly newer) token pair. This was the confirmed root cause of Mair's
+    /// Trivia's intermittent "expired token" defect. Coalescing every refresh entry point onto one shared
+    /// in-flight task (via <see cref="EnsureAuthenticatedAsync"/>'s existing <c>authRecovery</c> field) makes at
+    /// most one <c>/v1/auth/refresh</c>/login call possible at a time, with every caller awaiting that same
+    /// result — and <see cref="RecoverSessionAsync"/>'s existing <c>IsCurrent</c> check still prevents a
+    /// venue-switch-stale response from ever landing.</summary>
     public async Task<bool> RefreshAsync()
     {
-        var value = await RunAsync(ct => client.RefreshAsync(Settings.Connection, ct), "refresh session").ConfigureAwait(false);
-        if (value is null) return false;
-        Configure(Settings with { Connection = Settings.Connection with { AccessToken = value.AccessToken, RefreshToken = value.RefreshToken } });
-        return true;
+        var capturedGeneration = generation; var capturedVenue = venueId;
+        Busy = true;
+        try
+        {
+            var recovered = await EnsureAuthenticatedAsync(contextCancellation.Token).ConfigureAwait(false);
+            return IsCurrent(capturedGeneration, capturedVenue) && recovered;
+        }
+        catch (OperationCanceledException) { return false; }
+        finally { if (IsCurrent(capturedGeneration, capturedVenue)) Busy = false; }
     }
     /// <summary>Ends the session only — Password/ServerAccessPassword are durable connection configuration the operator
     /// explicitly wants to keep (Decision: readable, persistent credentials), never cleared by signing out.</summary>
@@ -471,8 +500,24 @@ public sealed class MairsTriviaService(MairsTriviaClient client, VenueProfileSer
 
 public sealed class MairsTriviaModule(MairsTriviaService trivia, Action? draw = null, Action? drawSettings = null) : IVenueModule
 {
+    private bool isEnabled = true;
+
     public ModuleDescriptor Descriptor { get; } = new("games.trivia", "Mair's Trivia", "Live host trivia operation.", "circle-question", DisplayOrder: 6);
-    public bool IsEnabled { get; set; } = true;
+
+    /// <summary>Custom setter (matching <c>ShoutRunnerModule.IsEnabled</c>'s precedent) — see
+    /// <see cref="MairsTriviaService.ReloadForCurrentVenue"/>'s doc comment for why re-enabling must force a fresh
+    /// load rather than resuming from whatever venue this singleton service last had loaded while disabled.</summary>
+    public bool IsEnabled
+    {
+        get => isEnabled;
+        set
+        {
+            if (isEnabled == value) return;
+            isEnabled = value;
+            if (value) trivia.ReloadForCurrentVenue();
+        }
+    }
+
     public Task InitializeAsync(ModuleContext c, CancellationToken t) => Task.CompletedTask;
     public Task OnVenueChangedAsync(VenueContext c, CancellationToken t) { trivia.Load(c.VenueId); return Task.CompletedTask; }
     public void Tick(DateTimeOffset now) => trivia.Tick(now);

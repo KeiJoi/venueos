@@ -999,3 +999,265 @@ report was written:
 Nothing has been staged, committed, pushed, tagged, branched, or released — this pass, or any prior Macro pass.
 Giveaways' own files were not touched at all. No global interface cleanup was performed. Macro was not promoted
 out of Under Development.
+
+---
+
+# 0.3.0 POST-RELEASE PASS — LIVE TILE → FAUX HOTBAR DRAG/DROP STILL FAILS LIVE
+
+The fix in §1–§18 above (`SetItemAllowOverlap()` on the whole-bar movement layer) was applied and shipped in 0.3.0,
+but the operator reports the live symptom is unchanged: dragging a saved Macro tile from Macro Live onto a faux
+hotbar slot still does not work. **§1's "Exact Root Cause" above is therefore NOT treated as the actual/complete
+root cause** — it correctly diagnosed and fixed a real same-window hover-arbitration issue between the whole-bar
+layer and the individual slots, but that fix evidently was not sufficient to make the live drop succeed.
+
+## 19. Independent re-investigation (this pass)
+
+A fresh forensic trace (source tile → payload → cross-window delivery → target slot → service → persistence) found
+every stage structurally correct in isolation:
+- The Live tile's drag source (`MacroOperatorPanel.DrawMacroTile`) and the hotbar slot's drag target
+  (`MacroHotbarRenderer.DrawSlot`) both go through the one shared `MacroDragDrop` helper, with a single literal
+  payload-type constant (`"VENUEOS_MACRO_ID"`) — no type-string mismatch is possible.
+- The payload is a raw 16-byte `Guid`, set correctly, with no serialization involved.
+- Click vs. drag are correctly mutually exclusive by construction of ImGui's own button/drag-source interaction —
+  no custom logic risks executing a macro merely because a drag started.
+- Cross-window payload delivery is standard, intentional Dear ImGui behavior (§8 above remains correct on this
+  specific point) and is not, by itself, sufficient to explain a silent drop failure.
+
+**The leading unconfirmed hypothesis** is a cross-window `ActiveId`/hover-ownership interaction: while a drag is
+in progress, the *source* tile's `InvisibleButton` (in the separate Macro Live window) holds Dear ImGui's
+`ActiveId` for the duration of the drag. Whether that alone can suppress `BeginDragDropTarget()`/hover resolution
+on an *unrelated* item in a *different* window could not be confirmed against the exact vendored
+`Dalamud.Bindings.ImGui` source in this environment. **This is a hypothesis, not a proven root cause** — per the
+explicit instruction for this pass, it is not being treated as the fix, and no change was made on the assumption
+it is correct.
+
+## 20. What changed this pass, and why
+
+Two independent things, deliberately not conflated:
+
+1. **A structural UI improvement** (`MacroHotbarRenderer.DrawBar`/`DrawDragHandle`): Edit mode's whole-bar movement
+   affordance is now a dedicated handle strip above the slot grid, with a visible grip cue, instead of a whole-bar
+   `InvisibleButton` drawn underneath the slots. This is applied regardless of whether it turns out to be the
+   functional fix — it removes the same-window "which overlapping item wins hover" question by construction (no
+   two items ever share screen space now), and is a genuine usability improvement (the drag region for moving the
+   bar is now visually obvious, previously it was the entire invisible background). **It is not claimed to be the
+   fix for the underlying cross-window failure**, since the previous same-window fix (§1–§5 above) already
+   addressed the same-window case without resolving the live symptom.
+2. **Temporary, end-to-end diagnostic instrumentation**, covering every stage the operator's live test needs to
+   distinguish:
+
+   ```
+   Live tile item → drag source entered → payload created/set → payload type/Guid →
+   mouse/hotbar target window interaction → target slot hover/rect state →
+   BeginDragDropTarget → AcceptDragDropPayload → payload decoded →
+   MacroService.DropMacroOntoSlot → persistence
+   ```
+
+   Implemented in `MacroDragDrop.BeginSource`/`AcceptTarget` (`MacroIconPicker.cs`) and
+   `MacroService.DropMacroOntoSlot`'s new `DiagnosticEvent`, both logged through `IPluginLog.Debug` (Dalamud's own
+   log, `[MacroDragDrop]`-prefixed) — wired at the composition root (`Plugin.cs`). No secrets are logged (macro
+   GUIDs and mouse/rect coordinates only). **This instrumentation MUST remain in the build the user live-tests
+   with, and must NOT be removed until the user has confirmed drag/drop works end to end** — if it still fails,
+   the log will show exactly which stage stopped (e.g., does `BeginDragDropTarget` ever return `true` for a slot
+   while a drag from the Live window is in progress?), turning the next diagnosis into a log read instead of
+   another unverified theory.
+
+## 21. What this pass does NOT claim
+
+- Drag/drop is **not** claimed fixed. It requires the live acceptance checklist below.
+- The dedicated drag handle is a UI improvement, evaluated and applied on its own merits — it is explicitly not
+  presented as proof of, or a fix for, the underlying cross-window failure.
+- No automated test can exercise real ImGui drag/drop (no `VenueOS.Plugin` test project exists, by deliberate
+  architecture, per `NEW_MODULE_GUIDE.md` §30) — `MacroServiceTests.cs`'s existing slot-mapping/layout/persistence
+  tests were re-run and still pass unchanged (97/97 in the Macro-relevant subset), confirming no regression to the
+  parts of the pipeline that are testable.
+
+## 22. Live acceptance checklist (audit §5.9, unchanged)
+
+1. Open Macro Live. 2. Ensure Hotbar 1 visible. 3. Enable Edit Hotbars. 4. Drag a saved Macro tile from Live onto
+Slot 1. 5. Confirm drag preview appears. 6. Confirm slot hover/drop feedback. 7. Drop. 8. Confirm Macro icon
+appears immediately. 9. Disable Edit Hotbars. 10. Click slot. 11. Confirm Macro executes. 12. Drag another Macro
+into a multi-row layout such as 4x3. 13. Confirm correct logical slot. 14. `/xlrestart`. 15. Confirm assignments
+persist. 16. Confirm simple click on Live tile still executes. 17. Confirm dragging Live tile does NOT execute it.
+18. Confirm hotbar reposition still works via the new handle strip. 19. Confirm locked hotbar does not move.
+
+If step 7 still fails, capture the Dalamud log around that moment (`[MacroDragDrop]` lines) and report back —
+the instrumentation added this pass is specifically designed to make that log immediately diagnostic.
+
+---
+
+# LIVE QA RESULT — CRASH FOUND AND FIXED, DRAG/DROP ITSELF STILL UNCONFIRMED
+
+The user performed the live test above. Two results:
+
+1. Drag/drop onto a hotbar slot still does not work.
+2. **Merely entering/using the Edit Hotbars configuration threw a live, uncaught exception** from `Plugin.Draw`:
+
+```
+System.NullReferenceException: Object reference not set to an instance of an object.
+   at Dalamud.Bindings.ImGui.ImGuiPayloadPtr.get_Data() in ...Structs.gen.cs:line 12171
+   at VenueOS.Plugin.Macro.MacroDragDrop.AcceptTarget(String slotContext, IPluginLog log) in ...MacroIconPicker.cs:line 57
+   at VenueOS.Plugin.Macro.MacroHotbarRenderer.DrawSlot(...) in ...MacroHotbarRenderer.cs:line 147
+   at VenueOS.Plugin.Macro.MacroHotbarRenderer.DrawBar(...) in ...MacroHotbarRenderer.cs:line 101
+   at VenueOS.Plugin.Macro.MacroHotbarRenderer.DrawAll() in ...MacroHotbarRenderer.cs:line 48
+   at VenueOS.Plugin.Plugin.Draw() in ...Plugin.cs:line 356
+   at Dalamud.Interface.UiBuilder.OnDraw() in .../UiBuilder.cs:line 790
+```
+
+This exception was introduced by this same pass's own instrumentation (§19-§22 above) — it did not exist before
+this pass, and its discovery via live testing is exactly why the instrumentation was mandated to stay in the build
+rather than being written and trusted blind.
+
+## 23. Root cause of the crash (confirmed, not theorized)
+
+Reflected directly against the installed `Dalamud.Bindings.ImGui.dll`
+(`C:\Users\kyro_\AppData\Roaming\XIVLauncher\addon\Hooks\dev\Dalamud.Bindings.ImGui.dll`) via a throwaway .NET 10
+console app, per the explicit instruction not to assume binding semantics:
+
+```
+Type: Dalamud.Bindings.ImGui.ImGuiPayloadPtr, IsValueType=True
+--- Fields ---
+Dalamud.Bindings.ImGui.ImGuiPayload* Handle
+--- Properties ---
+System.Boolean IsNull (get)
+...
+System.Void* Data (get, set)
+System.Int32& DataSize (get)
+...
+```
+
+`ImGuiPayloadPtr` is a struct wrapping one raw native pointer field, `Handle`. **Every property getter except
+`IsNull` dereferences `Handle` directly** (`Handle->Data`, etc.) with no internal null guard — `IsNull` is the
+*only* member safe to call unconditionally. `ImGui.GetDragDropPayload()` and `ImGui.AcceptDragDropPayload(...)`
+both return a wrapper around a **null** `Handle` whenever no payload currently qualifies, which is the ordinary
+state on the overwhelming majority of frames (almost every frame in Edit mode has no drag happening at all).
+
+§19-§22's instrumentation read `payload.Data != null` to test "is there a payload" — on this binding that is not a
+safe null check, it *is* the dereference. That line (`MacroIconPicker.cs:57` at the time of the crash) threw
+`NullReferenceException` on essentially the first frame Edit Hotbars was used, because the Settings hotbar
+editor's `AcceptTarget` call (`MacroOperatorPanel.cs`, unconditional per slot, not gated on Edit mode) and the live
+overlay's per-slot `AcceptTarget` call (gated on Edit mode) both hit this same unsafe pattern — explaining why
+"merely entering/using Edit Hotbar configuration" was enough to reach it, independent of whether an actual drag
+was ever started.
+
+**This is a pre-existing latent bug in the ORIGINAL (pre-0.3.0) `AcceptTarget` implementation, not something the
+0.3.0 instrumentation invented from nothing** — the original code (§1-§18 above) had the identical
+`payload.Data != null` pattern; it simply happened to compile and, per the original author's live testing, never
+demonstrably crashed (Dear ImGui's own `AcceptDragDropPayload` C++ signature returns a null pointer, not a
+throwing accessor, for "no payload" — the danger is specific to this managed wrapper's property-getter semantics,
+not obvious from the call site). The 0.3.0 instrumentation pass copied the same pattern into `dragInProgress`
+tracking and made a second independent copy of the same mistake, which is what actually got exercised by the
+Settings hotbar editor path (unconditionally rendered whenever Settings → Modules → Macro → Hotbars is open) and
+surfaced live.
+
+## 24. Fix
+
+`MacroIconPicker.cs`'s `MacroDragDrop.AcceptTarget` now checks `ImGuiPayloadPtr.IsNull` **before** touching any
+other property of a payload wrapper, in every place a payload is read:
+
+- The "is a drag in progress at all" check now reads `!ImGui.GetDragDropPayload().IsNull` instead of `.Data != null`.
+- The "did this slot accept a delivered payload" check now reads `!payload.IsNull` instead of `.Data != null`,
+  and only reads `.Data`/`.DataSize` after that guard passes.
+- The raw byte-decode logic (`new Guid(new ReadOnlySpan<byte>(payload.Data, payload.DataSize))`) was extracted into
+  a new pure, ImGui-free helper, `VenueOS.Modules.Operations.Macro.MacroDragPayloadCodec`
+  (`Encode(Guid)`/`TryDecode(ReadOnlySpan<byte>, out Guid)`) — this is the one piece of payload-handling logic that
+  can be meaningfully unit-tested outside ImGui (§25), and centralizes the "reject anything that isn't exactly 16
+  bytes" guard in one place instead of duplicating it inline.
+- Diagnostics were extended, not reduced: the log now also reports `IsPreview()`/`IsDelivery()` for both the
+  global in-flight payload and the per-slot accepted payload, giving the next live test more signal about exactly
+  which ImGui-side condition is/isn't true when a drop is attempted.
+
+The service/persistence layer (`MacroService.DropMacroOntoSlot`, `AssignSlot`, `SwapSlots`) was **not** touched —
+no evidence implicates it, and the already-live-verified Settings-based assignment path continues to use it
+unchanged.
+
+## 25. Tests
+
+`tests/VenueOS.Services.Tests/MacroDragPayloadCodecTests.cs` (5 facts + a 4-case theory, 9 total assertions,
+7 test cases): a macro id survives an encode/decode round trip; the encoded payload is exactly 16 bytes; a payload
+of any length other than 16 bytes fails to decode rather than guessing; `Guid.Empty` round-trips correctly. These
+prove the byte-level codec is correct — **they do not and cannot prove the live ImGui drag/drop pipeline itself
+works**, since no ImGui context exists in this test project (`VenueOS.Plugin` deliberately has no test project,
+per `NEW_MODULE_GUIDE.md` §30). The crash fix itself (§24) is verified only by the fact that it no longer calls
+any `ImGuiPayloadPtr` member without an `IsNull` guard first — confirmed by the reflection dump in §23, not by a
+test, since the crash is inherently a live-runtime/live-binding condition.
+
+Full solution re-verified after this fix: `dotnet build VenueOS.sln` (Debug/Release) — 0 warnings, 0 errors;
+`dotnet test VenueOS.sln` — 907 passed, 0 failed, 0 skipped.
+
+## 26. What is and is not established after this fix
+
+**Established (high confidence):** the crash is fixed — its exact mechanism was reflected directly against the
+shipped binding, not guessed, and every payload-property access in `MacroDragDrop` now goes through an `IsNull`
+guard first. Edit Hotbars / Settings → Macro → Hotbars should no longer throw merely from being open or used.
+
+**NOT established:** whether the underlying drag/drop delivery itself now works, or ever worked, independent of
+the crash. The crash meant that on any frame with an in-flight drag AND `dragInProgress`/`accepted` true, the
+exception fired before `BeginDragDropTarget`/`AcceptDragDropPayload`'s actual result could ever be logged or acted
+on — so the previous live test's "drag/drop still doesn't work" result is not fully trustworthy as evidence about
+the underlying drag mechanism specifically, since a crash was also happening in the vicinity. This pass does not
+claim drag/drop is fixed. It requires a fresh live QA pass, with the improved diagnostics, to determine whether
+the original functional defect (§19-§22) persists now that the crash is gone, and if so, exactly where in the
+pipeline it stops.
+
+## 27. Next required live QA (do not skip)
+
+1. Open Macro Live and Settings → Modules → Macro → Hotbars. Confirm neither throws or logs an error merely from
+   being opened.
+2. Enable Edit Hotbars on the live overlay. Confirm no exception, and no stray `[MacroDragDrop]` spam beyond what's
+   expected while idle (no drag in progress → no per-slot log lines, since `dragInProgress` gates them).
+3. Attempt the Live tile → hotbar slot drag from the original checklist. Capture the full `[MacroDragDrop]` log
+   sequence around the attempt, especially `BeginDragDropTarget [...] = ...`,
+   `AcceptDragDropPayload [...]: accepted=...`, and whether `PAYLOAD DECODED` ever appears.
+4. Report back whichever of these is true: (a) it now works; (b) `BeginDragDropTarget` never returns `true` for
+   any slot while dragging from the Live window (the original cross-window hypothesis, still unconfirmed); (c)
+   something else the log surfaces that isn't yet accounted for above.
+
+---
+
+# LIVE QA RESULT — PASSED
+
+The user performed the live QA in §27. Result: **drag/drop from the Live tile launcher onto a faux hotbar slot
+works correctly while Edit Hotbars is enabled**, and the `ImGuiPayloadPtr` crash (§19-§26) no longer reproduces.
+Assignment via drag being gated on Edit mode is confirmed as the intended design (matching the locked-mode
+click-to-run/no-accidental-drag requirement), not a residual limitation.
+
+This closes the audit's Macro drag/drop item. The original cross-window `ActiveId` hypothesis (§19) is now moot —
+the actual defect the whole investigation chased was the `IsNull`-vs-`.Data` binding-semantics bug (§23), not
+anything about cross-window hover/ActiveId ownership; once that was fixed, the drag/drop mechanism itself needed
+no further changes.
+
+## 28. Diagnostics removed after confirmed live acceptance
+
+Per the standing instruction to keep temporary instrumentation only until live acceptance, and only remove it
+afterward:
+
+- **Removed** (was per-frame/per-drag, and only ever needed to localize the two live defects, both now resolved):
+  `MacroDragDrop.BeginSource`/`AcceptTarget`'s `IPluginLog` parameters and every `[MacroDragDrop]` log line inside
+  them (SOURCE ENTERED, PAYLOAD SET, TARGET SLOT CHECK, BeginDragDropTarget result, AcceptDragDropPayload
+  accepted/dataSize/preview/delivery, PAYLOAD DECODED); `MacroOperatorPanel.DrawMacroTile`'s TILE CLICK log; the
+  `IPluginLog` parameters threaded through `MacroOperatorPanel`'s and `MacroHotbarRenderer`'s constructors and
+  their `Plugin.cs` call sites. `AcceptTarget`/`BeginSource` are back to their pre-instrumentation signatures
+  (no logging parameter) — the `IsNull`-safety fix itself (§24) is fully retained; only the temporary tracing
+  around it was removed.
+- **Retained as a permanent, non-noisy diagnostic**: `MacroService.DropMacroOntoSlot`'s `DiagnosticEvent`, wired
+  in `Plugin.cs` to `Log.Debug("[Macro] ...")`. This fires exactly once per actual hotbar assignment (never per
+  frame, never while merely hovering/idle) and reports a genuinely useful operational fact — "this macro was just
+  assigned to this slot" — matching the established `VenueBingoService.DiagnosticEvent` convention already used
+  elsewhere in this codebase for the same kind of low-frequency, log-worthy (but not operator-facing-failure)
+  event.
+- The pure `MacroDragPayloadCodec` (§24) and its 7 tests (§25) were **kept** — they're permanent, correct,
+  ImGui-independent logic, not temporary instrumentation, and remain the single place the payload byte shape is
+  defined/validated.
+
+## 29. Final verification
+
+`dotnet build VenueOS.sln` (Debug/Release): 0 warnings, 0 errors. `dotnet test VenueOS.sln`: full suite passing,
+including the unchanged Macro-relevant subset (104/104) and the `MacroDragPayloadCodec` tests — see the overall
+0.3.0 pass report (`docs/UI_QUALITY_AUDIT.md`) for the exact final total across every change in this pass.
+
+## 30. Status
+
+Macro's Live tile → faux hotbar drag/drop is **live-verified working**, Edit Hotbars is confirmed as the intended
+gate for drag-based assignment, and the crash this pass introduced-then-fixed is resolved. No further action is
+open on this item.

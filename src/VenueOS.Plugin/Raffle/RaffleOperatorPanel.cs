@@ -15,6 +15,7 @@ internal sealed class RaffleOperatorPanel(VenueRaffleService raffle, VenueProfil
     private string newRaffleName = "";
     private string renameBuffer = "";
     private bool showArchived;
+    private bool showFullLinks;
     private string newParticipantName = "";
     private string newParticipantWorld = "";
     private string? targetError;
@@ -259,13 +260,34 @@ internal sealed class RaffleOperatorPanel(VenueRaffleService raffle, VenueProfil
         if (current.HostUrl is not null && current.ViewerUrl is not null)
         {
             ImGui.Spacing();
-            var hostUrl = current.HostUrl;
-            Forms.TextField(theme, "Host Link", ref hostUrl, 512);
-            if (UiKit.GhostButton(theme, "Copy Host Link")) ImGui.SetClipboardText(current.HostUrl);
+            // 0.3.0 short-link feature: the short "/l/:code" form is the primary displayed/copied link (practical
+            // to paste into FFXIV chat, matching Bingo's proven behavior) — DisplayHostUrl/DisplayViewerUrl fall
+            // back to the full long link automatically if a short code hasn't been minted yet (e.g. no Access Key
+            // configured), so this never shows a blank field.
+            var shortHostUrl = current.DisplayHostUrl(raffle.Settings.Connection.BackendBaseUrl);
+            Forms.TextField(theme, "Host Link", ref shortHostUrl, 512);
+            if (UiKit.GhostButton(theme, "Copy Host Link")) ImGui.SetClipboardText(shortHostUrl);
 
-            var viewerUrl = current.ViewerUrl;
-            Forms.TextField(theme, "Viewer Link", ref viewerUrl, 512);
-            if (UiKit.GhostButton(theme, "Copy Viewer Link")) ImGui.SetClipboardText(current.ViewerUrl);
+            var shortViewerUrl = current.DisplayViewerUrl(raffle.Settings.Connection.BackendBaseUrl);
+            Forms.TextField(theme, "Viewer Link", ref shortViewerUrl, 512);
+            if (UiKit.GhostButton(theme, "Copy Viewer Link")) ImGui.SetClipboardText(shortViewerUrl);
+
+            if (string.IsNullOrWhiteSpace(current.HostLinkCode) || string.IsNullOrWhiteSpace(current.ViewerLinkCode))
+            {
+                ImGui.Spacing();
+                UiKit.WarningState(theme, "Short links aren't available yet — showing the full link above. Confirm the Access Key is set in Settings, then Publish again.");
+                if (UiKit.GhostButton(theme, "Retry Short Links")) _ = raffle.EnsureShortLinksAsync(current.Id);
+            }
+
+            ImGui.Spacing();
+            if (UiKit.GhostButton(theme, showFullLinks ? "Hide Full Links" : "Show Full Links")) showFullLinks = !showFullLinks;
+            if (showFullLinks)
+            {
+                var hostUrl = current.HostUrl;
+                Forms.TextField(theme, "Full Host Link", ref hostUrl, 512);
+                var viewerUrl = current.ViewerUrl;
+                Forms.TextField(theme, "Full Viewer Link", ref viewerUrl, 512);
+            }
         }
 
         UiKit.EndSectionCard();

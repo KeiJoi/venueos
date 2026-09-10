@@ -243,6 +243,25 @@ ImGui is the rendering engine; it must not be the visual identity. A module's us
 
 There is currently no dedicated `Table`/generic list-with-columns component, no generic `Modal` beyond the two single-purpose ones above, and no `HotbarButton` separate from `Hotbar.Slot`. If a module genuinely needs one of these and no existing component fits, **extend the shared UI kit with a new component**, following the existing style (a static method taking `VenueTheme theme` first, reading only `theme.Tokens`/`theme.Metrics`) — do not build an incompatible one-off.
 
+**`ConfirmDialog`/`TextInputModal` popup identity is per-instance (0.3.0).** Each instance gets its own
+GUID-derived popup identity at construction — `new ConfirmDialog()`/`new TextInputModal()` needs no arguments and
+no changes for this. Before 0.3.0 the identity was a single class-wide constant shared by every instance in the
+plugin; two instances both mid-request in the same frame rendered into the same ImGui popup (found and fixed twice
+independently — Giveaways, then Mair's Editor — before being fixed at the class level). A new module using either
+component gets this for free; there is nothing to do differently.
+
+**`Shell/DialogHeader.cs` — chrome for a dedicated editor window or larger modal (0.3.0), hard requirement.** No
+VenueOS-generated top-level `ImGui.Begin` window or `BeginPopupModal` may show ImGui's own native title bar — every
+one must pass `ImGuiWindowFlags.NoTitleBar` and draw custom chrome instead (a live-confirmed defect this release:
+Macro's Create/Edit window used `Forms`/`UiKit` correctly throughout yet still looked like a raw native ImGui
+window, purely because its window chrome was never converted). Use `ModuleWindowHeader.Draw` for a detached
+module's own window (icon + name + Settings gear + Close); use `DialogHeader.Draw(theme, title, onClose)` for
+anything else with a title bar worth replacing — a dedicated editor window (`MacroEditorWindow`) or a larger modal
+(`GiveawayPresetEditorModal`, `VipEditDialog`). For a small, single-purpose confirmation/text-entry dialog that
+already draws its own themed title line as its first line of content (`ConfirmDialog`/`TextInputModal`), just add
+`NoTitleBar` with no separate header component — a second header bar above an already-present themed title would
+be a redundant double heading in the other direction; see `docs/UI_QUALITY_AUDIT.md` §12 for the exact reasoning.
+
 **`BeginSectionCard`/`EndSectionCard` — never nest one inside another's content.** As of the Settings-rendering correction pass, `BeginSectionCard` auto-sizes to its own content by drawing its background *after* measuring that content, using `ImDrawList.ChannelsSplit`/`ChannelsMerge` on the current window's draw list. That splitter is a single, non-reentrant piece of state owned by the draw list — if a second `BeginSectionCard` call starts while a first one's content is still being drawn (on the same window/child), the two splits collide and can corrupt rendering for both (this is exactly what made `Settings → Modules → <module> → Configure` render as one large empty card: `ModulesSettingsPage` used to wrap a module's whole `DrawSettings()` in its own extra section card, so the module's *own* first section card opened a second, colliding split — removed for this reason). `BeginSectionCard` now degrades safely (header only, no background) if it ever detects it's being called while another one is still open, but treat that as a bug to fix, not a supported layout: call `BeginSectionCard`/`EndSectionCard` pairs **only in a flat, sequential list**, never nested, and never wrap an `IVenueModule.DrawSettings()` (or `Draw()`) call in an extra section card the way the operational path never wraps `module.Draw()` in one either — let the module's own content draw its own card(s) directly.
 
 ## 16. Theming
@@ -280,6 +299,27 @@ Left: icon + display name, always fully shown. Right: Settings gear + Close, res
 - **Multiple detached modules:** `ModuleWindowManager`'s open set is a plain `HashSet<string>` — any number of different modules can be open simultaneously with no interference; opening one never closes another.
 - **Active venue context:** detached windows share the single `VenueProfileService.Current` — there is no per-window venue selector, and none should be added. A module's `Draw()` reads `venues.Current` fresh every call regardless of embedded/detached context, so switching venues updates every open window (main tablet, every detached module, Settings) simultaneously.
 - **Theme:** `UiKit.PushWindowTheme`/`PopWindowTheme` wraps the whole detached window exactly like the main tablet — Dark/Light/Neon/Midnight apply identically.
+
+## 20a. Character-session presentation gate (0.3.0, hard requirement — automatic, no module code needed)
+
+No VenueOS-generated UI renders while genuinely logged out (title screen, character select) — enforced centrally
+in `Plugin.Draw()` via `SessionPresentationGateService` (`src/VenueOS.Services/SessionPresentationGateService.cs`),
+not per-module. A new module's `Draw()`/`DrawSettings()` **never needs its own logged-in check** — if the module
+registers normally (§6, §23) and renders through the standard embedded/detached paths (§18–§20), it is already
+covered: `AppFrame`/`ModuleWindowManager` are only ever invoked while the gate allows it.
+
+The one exception is ShoutRunner's own operational UI, which additionally stays visible through a temporary
+world/Data Center travel transition while it has an active run in progress (`ShoutRunnerService.IsActive`) — see
+`docs/SESSION_PRESENTATION_GATE.md` for the full design and the proof that this can't leak UI at startup or
+persist indefinitely after a genuine logout. This is a narrow, ShoutRunner-specific hook, not a general "any module
+can request to stay visible while logged out" mechanism — a future module should not assume it can opt into an
+equivalent exception without a similarly rigorous proof that its own "active operation" signal can only ever
+become true while genuinely logged in and self-corrects within a bounded window otherwise.
+
+This is a presentation-only gate: `InitializeAsync`/`OnVenueChangedAsync`/`Tick` are completely unaffected and run
+exactly as documented elsewhere in this guide (§23) regardless of login state — a module may still load
+configuration and maintain internal state while logged out; it simply doesn't draw anything until the gate allows
+it.
 
 ## 21. Known current inconsistencies (documented, not fixed here)
 
@@ -488,6 +528,14 @@ For a module that talks to an external backend (matching the pattern of Raffle/T
 - Handle venue switching explicitly: cancel in-flight requests (a `CancellationTokenSource`, cancelled and replaced in the module's `Load(nextVenueId)`/`OnVenueChangedAsync`, matching `VenueRaffleService.Load`/`MairsTriviaService.Load`/etc.), clear in-memory state, load the new venue's credentials, and never reuse the old venue's tokens/keys after switching.
 - Route backend failures through `DiagnosticsService.RecordFailure` (§25); never surface a raw exception as the primary operational UI.
 - If a module needs a distinct *player/browser-facing* display theme (Bingo's `BingoColors`: Bg/Card/Header/Text/Daub/Ball, on `VenueBingoSettings.Colors`), keep it as its own config field, separate from `VenueTheme` — the tablet theme and a module's external/web display theme are different concepts and must stay independently configurable, never merged. Bingo's split into "Server" and "Web Display" concerns is the existing precedent for how a complex module's Settings should be organized (currently, this split lives entirely inside the module's own `DrawSettings()`/operator panel — there's no separate Settings sub-navigation to build; a `Forms.Segmented` sub-tab inside the module's own settings content, matching how `SettingsScreen`'s own top-level categories are built, is the natural way to present it).
+- If a module needs a shareable browser/viewer link, prefer a short server-resolved alias over embedding a long
+  capability token directly in the URL — Bingo's `short_links` pattern (a short, collision-checked, opaque code
+  resolved by a server-side redirect; see `VenueBingoService.GetOrCreatePlayerLinkAsync`/`EnsureCurrentPlayerLinkAsync`)
+  and Raffle's equivalent (`VenueRaffleService.EnsureShortLinksAsync`, added 0.3.0 — see `docs/RAFFLE_RECONSTRUCTION.md`
+  §20-§27) are both live reference implementations. The short code itself is never a secret — the real credential
+  (an admin/room/host/viewer key or token) stays exactly where it already was (an HTTP header, or resolved fresh
+  server-side at redirect time), and the short-link layer only ever shortens what would otherwise be a long,
+  unwieldy-to-paste-into-FFXIV-chat URL.
 
 ## 34a. State authority model — write it down before implementing
 

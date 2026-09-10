@@ -2,16 +2,29 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
 using Dalamud.Plugin.Services;
+using VenueOS.Modules.Operations.Macro;
 using VenueOS.Plugin.Shell;
 using VenueOS.Venues;
 
 namespace VenueOS.Plugin.Macro;
 
 /// <summary>The one drag/drop payload mechanism for "assign this macro to this hotbar slot" — used identically by
-/// the Settings hotbar editor's macro palette/slot grid AND (MACRO LIVE QA FIX §21/§22) the live Macro module's
-/// tile launcher as a drag SOURCE and the live faux-hotbar overlay's Edit-mode slots as a drag TARGET. One shared
-/// helper so every drag source/target pair in this module always agrees on the payload type/shape — never a
-/// separate live-vs-Settings assignment subsystem (fix spec §22's explicit instruction).</summary>
+/// the Settings hotbar editor's macro palette/slot grid AND the live Macro module's tile launcher as a drag SOURCE
+/// and the live faux-hotbar overlay's Edit-mode slots as a drag TARGET. One shared helper so every drag
+/// source/target pair in this module always agrees on the payload type/shape — never a separate live-vs-Settings
+/// assignment subsystem. Live-verified end to end (0.3.0 pass): dragging a Live tile onto a hotbar slot while Edit
+/// Hotbars is enabled correctly assigns it — assignment via drag is intentionally gated on Edit mode, matching the
+/// existing click-to-run/no-accidental-drag design.
+///
+/// <b>Payload access safety (load-bearing, do not regress):</b> <see cref="Dalamud.Bindings.ImGui.ImGuiPayloadPtr"/>
+/// wraps one raw native pointer field; every property getter EXCEPT <c>IsNull</c> dereferences that pointer
+/// directly with no internal guard. <c>ImGui.GetDragDropPayload()</c>/<c>ImGui.AcceptDragDropPayload(...)</c> both
+/// return a wrapper around a null pointer whenever no payload currently qualifies — the ordinary state on almost
+/// every frame. Reading any OTHER property (`.Data`, `.DataSize`, etc.) before checking `.IsNull` is a live
+/// <c>NullReferenceException</c> from <c>Plugin.Draw</c>, confirmed by an actual crash during this pass's live QA
+/// (reflected directly against the installed <c>Dalamud.Bindings.ImGui.dll</c> to confirm the exact mechanism —
+/// see <c>docs/MACRO_IMPLEMENTATION.md</c>'s dated fix-pass section). <see cref="AcceptTarget"/> below always
+/// checks <c>IsNull</c> first.</summary>
 internal static class MacroDragDrop
 {
     private const string PayloadId = "VENUEOS_MACRO_ID";
@@ -27,7 +40,7 @@ internal static class MacroDragDrop
         ImGui.EndDragDropSource();
     }
 
-    private static void SetPayload(Guid id) => ImGui.SetDragDropPayload(PayloadId, id.ToByteArray());
+    private static void SetPayload(Guid id) => ImGui.SetDragDropPayload(PayloadId, MacroDragPayloadCodec.Encode(id));
 
     /// <summary>Call immediately after drawing a slot that should accept a drop. Returns the dropped macro's id
     /// only on the frame a drop actually completes; returns null every other frame (including while a drag is
@@ -37,7 +50,7 @@ internal static class MacroDragDrop
         if (!ImGui.BeginDragDropTarget()) return null;
         Guid? result = null;
         var payload = ImGui.AcceptDragDropPayload(PayloadId);
-        if (payload.Data != null && payload.DataSize == 16) result = new Guid(new ReadOnlySpan<byte>(payload.Data, (int)payload.DataSize));
+        if (!payload.IsNull && MacroDragPayloadCodec.TryDecode(new ReadOnlySpan<byte>(payload.Data, payload.DataSize), out var decoded)) result = decoded;
         ImGui.EndDragDropTarget();
         return result;
     }
