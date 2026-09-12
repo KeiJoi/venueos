@@ -4,7 +4,7 @@
     "Name": "VenueOS",
     "Description": "Venue-scoped operations, promotion, and backend-compatible venue games. Working modules: Attendance, Greeter, VIP, ShoutRunner, Party Finder, Mair's Trivia, Mair's Editor, Bingo, Raffle, Brackets, Block Letters, Giveaways, Macro, Shouts.",
     "InternalName": "VenueOS",
-    "AssemblyVersion": "0.3.5.0",
+    "AssemblyVersion": "0.3.6.0",
     "TestingAssemblyVersion": null,
     "RepoUrl": "https://github.com/KeiJoi/venueos",
     "ApplicableVersion": "any",
@@ -14,9 +14,9 @@
     "IsHide": false,
     "IsTestingExclusive": false,
     "IconUrl": "https://raw.githubusercontent.com/KeiJoi/venueos/main/assets/icon-512.png",
-    "DownloadLinkInstall": "https://github.com/KeiJoi/venueos/releases/download/v0.3.5/VenueOS-0.3.5.zip",
-    "DownloadLinkUpdate": "https://github.com/KeiJoi/venueos/releases/download/v0.3.5/VenueOS-0.3.5.zip",
-    "DownloadLinkTesting": "https://github.com/KeiJoi/venueos/releases/download/v0.3.5/VenueOS-0.3.5.zip",
-    "LastUpdate": "1789245747"
+    "DownloadLinkInstall": "https://github.com/KeiJoi/venueos/releases/download/v0.3.6/VenueOS-0.3.6.zip",
+    "DownloadLinkUpdate": "https://github.com/KeiJoi/venueos/releases/download/v0.3.6/VenueOS-0.3.6.zip",
+    "DownloadLinkTesting": "https://github.com/KeiJoi/venueos/releases/download/v0.3.6/VenueOS-0.3.6.zip",
+    "LastUpdate": "1789246955"
   }
 ]
