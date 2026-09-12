@@ -178,7 +178,7 @@ public sealed class Plugin : IDalamudPlugin
         // Giveaways: purely local (no backend, no shared/other-module state — NEW_MODULE_GUIDE.md §34a), so it needs
         // nothing beyond the shared SchedulerService/ChatCommandService/VenueProfileService every other timed-
         // announcement module already uses (mirrors TournamentCalloutService's own Scheduler+Chat composition).
-        var giveawayService = new GiveawayService(scheduler, chat, venues, clock);
+        var giveawayService = new GiveawayService(scheduler, chat, venues, clock, diagnostics);
         // Macro: purely local (no backend, no shared/other-module state — NEW_MODULE_GUIDE.md §34a). The
         // action-readiness probe is the one unsafe/FFXIVClientStructs boundary this module has (NEW_MODULE_GUIDE.md
         // §30) — see DalamudActionReadyProbe's doc comment for the exact researched game-state signals it reads.

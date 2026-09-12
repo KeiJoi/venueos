@@ -30,13 +30,14 @@ public readonly record struct GiveawayStartResult(bool Success, string? Error)
 /// an in-flight Midpoint block finishes sending, via <see cref="midpointSending"/>/<see cref="closingPending"/>
 /// below; this rule is unchanged by the roll-window correction.
 ///
-/// Diagnostics (NEW_MODULE_GUIDE.md §25): this module has no backend, no network, and no unsafe game-state
-/// mutation — its only failure mode is an operator starting a run with an invalid preset, which is reported inline
-/// via <see cref="Start"/>'s own <see cref="GiveawayStartResult"/> (shown as an operational ErrorState), not routed
-/// through <c>DiagnosticsService</c>. This mirrors the documented "genuinely has no failure mode to report"
-/// exception the guide's own Guest Notes example calls out explicitly, rather than wiring an unused dependency.
+/// Diagnostics (NEW_MODULE_GUIDE.md §25): this module has no backend and no unsafe game-state mutation. An operator
+/// starting a run with an invalid preset is reported inline via <see cref="Start"/>'s own <see cref="GiveawayStartResult"/>
+/// (shown as an operational ErrorState), not routed through <see cref="DiagnosticsService"/>. The one genuine failure
+/// mode this module has — the shared <c>ChatCommandService</c> failing to actually dispatch a Winner Announcement
+/// (Winner Announcement feature spec §30) — IS routed through <see cref="DiagnosticsService"/>, exactly like Bingo's
+/// own chat-announcement dispatch failures, which is why this class takes it as a constructor dependency.
 /// </summary>
-public sealed class GiveawayService(SchedulerService scheduler, ChatCommandService chat, VenueProfileService profiles, IClock clock)
+public sealed class GiveawayService(SchedulerService scheduler, ChatCommandService chat, VenueProfileService profiles, IClock clock, DiagnosticsService diagnostics)
 {
     public const string ModuleId = "events.giveaways";
     private const int SchemaVersion = 1;
@@ -323,6 +324,101 @@ public sealed class GiveawayService(SchedulerService scheduler, ChatCommandServi
     public IReadOnlyList<GiveawayLeaderboardRow> Leaderboard => RollBoard?.GetLeaderboard() ?? Array.Empty<GiveawayLeaderboardRow>();
 
     public int TotalRolls => RollBoard?.TotalRolls ?? 0;
+
+    // ---------------------------------------------------------------------------------------------------------
+    // Winner Announcement (GIVEAWAYS Winner Announcement feature spec §5–§21/§28–§30)
+    // ---------------------------------------------------------------------------------------------------------
+
+    /// <summary>The authoritative current winner set: every participant tied for best under the run's own
+    /// Highest/Lowest/Closest criterion (spec §6/§11/§14/§28) — derived from the SAME <see cref="Leaderboard"/> the
+    /// Roll Tracker renders, never from parsed UI text. A tie is a valid winner state (spec §14): this returns every
+    /// tied row, never an arbitrary single pick. Empty unless the giveaway has genuinely reached
+    /// <see cref="GiveawayPhase.Complete"/> (spec §12) — Cancel, a still-running giveaway, or a cleared/idle state
+    /// never expose a winner set here, matching <see cref="CanAnnounceWinner"/>.</summary>
+    public IReadOnlyList<GuestIdentity> CurrentWinners =>
+        Phase == GiveawayPhase.Complete && RollBoard is not null
+            ? RollBoard.GetLeaderboard().Where(x => x.IsLeader).Select(x => x.Player).ToArray()
+            : Array.Empty<GuestIdentity>();
+
+    /// <summary>The Announce Winner button's single authoritative enable/disable gate (spec §12/§13/§14/§20/§21):
+    /// true only once the giveaway is Complete AND at least one winner exists. Starting a new run, Cancel, and Clear
+    /// Results all clear this immediately and implicitly, since each of them changes <see cref="Phase"/>/<see cref="RollBoard"/>
+    /// — there is no separate flag to keep in sync.</summary>
+    public bool CanAnnounceWinner => CurrentWinners.Count > 0;
+
+    /// <summary>Live, ephemeral override of the RUNNING preset's winner-announcement channel — the live panel's
+    /// channel selector while a giveaway is active, completed, or cancelled (<see cref="RunningPreset"/> is not
+    /// null). This mutates ONLY the in-memory <see cref="RunningPreset"/> snapshot, never <see cref="Settings"/>, so
+    /// it can never be affected by (or leak into) a concurrent edit to the saved preset via Settings — the same
+    /// snapshot isolation <see cref="RunningPreset"/> already provides for the Start/Midpoint/Closing blocks (spec
+    /// §24), extended to these two fields. Intentionally ephemeral (NEW_MODULE_GUIDE.md §13a): it is a one-off tweak
+    /// for THIS run/announcement, discarded the instant <see cref="ClearResults"/> or a new <see cref="Start"/> drops
+    /// this snapshot. A no-op while no giveaway has ever been started this run (<see cref="RunningPreset"/> is null)
+    /// — the panel calls <see cref="SetSelectedPresetWinnerAnnouncementChannel"/> instead in that case, so the field
+    /// is never actually disabled or dropped on the floor; see that method's own doc comment for the counterpart
+    /// (Winner Announcement QA fix: both fields are ALWAYS editable — which of these two methods an edit reaches
+    /// depends only on whether a run is active, never on whether editing is allowed).</summary>
+    public void SetRunningWinnerAnnouncementChannel(GiveawayChatChannel channel)
+    {
+        if (RunningPreset is { } preset) RunningPreset = preset with { WinnerAnnouncementChannel = channel };
+    }
+
+    /// <summary>The live-panel counterpart to <see cref="SetRunningWinnerAnnouncementChannel"/> for the one-line
+    /// announcement template (spec §4/§17) — same ephemeral, <see cref="RunningPreset"/>-only semantics.</summary>
+    public void SetRunningWinnerAnnouncementTemplate(string template)
+    {
+        if (RunningPreset is { } preset) RunningPreset = preset with { WinnerAnnouncementTemplate = template };
+    }
+
+    /// <summary>Persistent winner-announcement channel edit for when NO giveaway is currently active (Winner
+    /// Announcement QA fix) — the live panel's channel selector routes here instead of
+    /// <see cref="SetRunningWinnerAnnouncementChannel"/> whenever <see cref="RunningPreset"/> is null (idle, before
+    /// the first run, or after Clear Results/Cancel-then-Clear), so a pre-run tweak actually "sticks" rather than
+    /// being silently dropped or the field being disabled. Routes through the exact same atomic
+    /// <see cref="UpdatePreset"/> persistence every other preset field (and the Preset Editor Modal itself) already
+    /// uses — never a second, incompatible storage path — so it survives Settings close/reopen, preset switches,
+    /// venue switches, and plugin reload identically to any other preset field. A no-op if nothing is selected.
+    /// </summary>
+    public void SetSelectedPresetWinnerAnnouncementChannel(GiveawayChatChannel channel)
+    {
+        if (SelectedPreset is { } preset) UpdatePreset(preset.Id, p => p with { WinnerAnnouncementChannel = channel });
+    }
+
+    /// <summary>The template counterpart to <see cref="SetSelectedPresetWinnerAnnouncementChannel"/>.</summary>
+    public void SetSelectedPresetWinnerAnnouncementTemplate(string template)
+    {
+        if (SelectedPreset is { } preset) UpdatePreset(preset.Id, p => p with { WinnerAnnouncementTemplate = template });
+    }
+
+    /// <summary>Resolves the running preset's winner-announcement template against <see cref="CurrentWinners"/>
+    /// WITHOUT sending anything (spec §15 steps 1–6) — used both by <see cref="AnnounceWinner"/> and by the operator
+    /// panel to show a validation error (e.g. over the chat byte limit) before the operator ever presses the button
+    /// again after correcting it.</summary>
+    public GiveawayWinnerAnnouncementResult ResolveWinnerAnnouncement()
+    {
+        if (!CanAnnounceWinner || RunningPreset is not { } preset) return GiveawayWinnerAnnouncementResult.Failed("No winner is available yet.");
+        return GiveawayWinnerAnnouncementResolver.Resolve(preset.WinnerAnnouncementTemplate, CurrentWinners);
+    }
+
+    /// <summary>Sends the resolved winner announcement through the shared <see cref="ChatCommandService"/> (spec §15
+    /// step 7) — never a direct chat/command call — on the running preset's own (possibly live-overridden, spec §2)
+    /// Winner Announcement channel. Repeatable (spec §19): never mutates winner state, so the operator may press this
+    /// as many times as they like. A chat-dispatch failure is reported through <see cref="DiagnosticsService"/> (spec
+    /// §30) and never crashes, clears the winner set, or revokes <see cref="CanAnnounceWinner"/> — the operator can
+    /// simply retry.</summary>
+    public GiveawayWinnerAnnouncementResult AnnounceWinner()
+    {
+        var result = ResolveWinnerAnnouncement();
+        if (!result.Success) return result;
+
+        var preset = RunningPreset!;
+        var prefix = preset.WinnerAnnouncementChannel == GiveawayChatChannel.Yell ? "/yell " : "/shout ";
+        chat.Enqueue(new ChatCommand(prefix + result.Message, OnDispatched: (success, ex) =>
+        {
+            if (!success) diagnostics.RecordFailure($"{ModuleId}: winner announcement failed to send ({ex?.Message})");
+        }));
+        return result;
+    }
 }
 
 /// <summary>The <see cref="IVenueModule"/> wrapper — own file/folder per NEW_MODULE_GUIDE.md §21/§33. Promoted to

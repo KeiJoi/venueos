@@ -105,6 +105,11 @@ internal sealed class GiveawayPresetEditorModal
 
         ImGui.Spacing();
         UiKit.Divider(theme);
+        UiKit.SectionHeader(theme, "Winner Announcement");
+        DrawWinnerAnnouncementSection(theme);
+
+        ImGui.Spacing();
+        UiKit.Divider(theme);
         DrawBlockEditor(theme, "Giveaway Start", draft.StartBlock, b => draft = draft with { StartBlock = b });
 
         ImGui.Spacing();
@@ -160,6 +165,22 @@ internal sealed class GiveawayPresetEditorModal
 
         if (!draft.SpecialNumbersActive && !string.IsNullOrWhiteSpace(draft.SpecialNumbersRaw))
             UiKit.WarningState(theme, "Special Numbers only take effect when Allowed Rolls Per Person is exactly 1 — with multiple or unlimited rolls, they're ignored so the special prize can't be gamed by re-rolling.");
+    }
+
+    /// <summary>The durable, reusable-next-time Winner Announcement configuration (GIVEAWAYS Winner Announcement
+    /// feature spec §22/§23) — the ONLY place these two fields are persisted; the live Giveaways module's own
+    /// channel selector/template field (<see cref="GiveawaysOperatorPanel.DrawAnnounceWinner"/>) is a deliberately
+    /// ephemeral, running-snapshot-only override that never writes back here (see that method's own doc comment).
+    /// </summary>
+    private void DrawWinnerAnnouncementSection(VenueTheme theme)
+    {
+        var channelIndex = draft.WinnerAnnouncementChannel == GiveawayChatChannel.Yell ? 0 : 1;
+        if (Forms.Segmented(theme, "giveaways-modal-winner-channel", ["Yell", "Shout"], ref channelIndex))
+            draft = draft with { WinnerAnnouncementChannel = channelIndex == 0 ? GiveawayChatChannel.Yell : GiveawayChatChannel.Shout };
+
+        var template = draft.WinnerAnnouncementTemplate;
+        if (Forms.TextField(theme, "Announcement (use <name> for the winner list)", ref template, 500))
+            draft = draft with { WinnerAnnouncementTemplate = template };
     }
 
     private void DrawBlockEditor(VenueTheme theme, string title, GiveawayAnnouncementBlock block, Action<GiveawayAnnouncementBlock> setBlock)

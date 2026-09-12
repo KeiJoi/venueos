@@ -25,7 +25,7 @@ public sealed class GiveawayServiceTests
         var t = Create();
         var preset = t.Service.CreatePreset("Friday Giveaway");
 
-        var reloaded = new GiveawayService(new SchedulerService(new Clock()), FakeChat(new Clock()), t.Profiles, new Clock());
+        var reloaded = new GiveawayService(new SchedulerService(new Clock()), FakeChat(new Clock()), t.Profiles, new Clock(), FakeDiagnostics(t.Profiles));
         reloaded.Load(t.VenueId);
         Assert.Contains(reloaded.Settings.Presets, x => x.Id == preset.Id && x.Name == "Friday Giveaway");
     }
@@ -37,7 +37,7 @@ public sealed class GiveawayServiceTests
         var preset = t.Service.CreatePreset("Original Name");
         t.Service.RenamePreset(preset.Id, "Renamed");
 
-        var reloaded = new GiveawayService(new SchedulerService(new Clock()), FakeChat(new Clock()), t.Profiles, new Clock());
+        var reloaded = new GiveawayService(new SchedulerService(new Clock()), FakeChat(new Clock()), t.Profiles, new Clock(), FakeDiagnostics(t.Profiles));
         reloaded.Load(t.VenueId);
         Assert.Equal("Renamed", reloaded.Settings.Presets.Single().Name);
     }
@@ -49,7 +49,7 @@ public sealed class GiveawayServiceTests
         var preset = t.Service.CreatePreset("Temporary");
         Assert.True(t.Service.DeletePreset(preset.Id));
 
-        var reloaded = new GiveawayService(new SchedulerService(new Clock()), FakeChat(new Clock()), t.Profiles, new Clock());
+        var reloaded = new GiveawayService(new SchedulerService(new Clock()), FakeChat(new Clock()), t.Profiles, new Clock(), FakeDiagnostics(t.Profiles));
         reloaded.Load(t.VenueId);
         Assert.Empty(reloaded.Settings.Presets);
     }
@@ -76,7 +76,7 @@ public sealed class GiveawayServiceTests
 
         var rebuiltSnapshot = JsonSerializer.Deserialize<VenueStoreSnapshot>(JsonSerializer.Serialize(t.Store.Read()))!;
         var freshProfiles = new VenueProfileService(new InMemoryVenueStore(rebuiltSnapshot), new ModuleHost());
-        var fresh = new GiveawayService(t.Scheduler, t.Chat, freshProfiles, t.Clock);
+        var fresh = new GiveawayService(t.Scheduler, t.Chat, freshProfiles, t.Clock, FakeDiagnostics(freshProfiles));
         fresh.Load(t.VenueId);
 
         var reloaded = fresh.Settings.Presets.Single();
@@ -120,7 +120,7 @@ public sealed class GiveawayServiceTests
         var preset = t.Service.CreatePreset("Chosen One");
         t.Service.SelectPreset(preset.Id);
 
-        var reloaded = new GiveawayService(new SchedulerService(new Clock()), FakeChat(new Clock()), t.Profiles, new Clock());
+        var reloaded = new GiveawayService(new SchedulerService(new Clock()), FakeChat(new Clock()), t.Profiles, new Clock(), FakeDiagnostics(t.Profiles));
         reloaded.Load(t.VenueId);
         Assert.Equal(preset.Id, reloaded.Settings.ActivePresetId);
     }
@@ -625,7 +625,7 @@ public sealed class GiveawayServiceTests
 
         var saved = t.Service.SaveNewPreset(draft);
 
-        var reloaded = new GiveawayService(new SchedulerService(new Clock()), FakeChat(new Clock()), t.Profiles, new Clock());
+        var reloaded = new GiveawayService(new SchedulerService(new Clock()), FakeChat(new Clock()), t.Profiles, new Clock(), FakeDiagnostics(t.Profiles));
         reloaded.Load(t.VenueId);
         var persisted = reloaded.Settings.Presets.Single(p => p.Id == saved.Id);
         Assert.Equal("Friday Night 1M Giveaway", persisted.Name);
@@ -864,10 +864,677 @@ public sealed class GiveawayServiceTests
     }
 
     // =========================================================================================================
+    // Winner Announcement — eligibility lifecycle (GIVEAWAYS Winner Announcement spec §12-§14/§20-§21/§32)
+    // =========================================================================================================
+
+    [Fact]
+    public void Announce_winner_is_ineligible_before_a_giveaway_starts()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 60, start: []);
+        t.Service.SelectPreset(preset.Id);
+
+        Assert.False(t.Service.CanAnnounceWinner);
+        Assert.Empty(t.Service.CurrentWinners);
+    }
+
+    [Fact]
+    public void Announce_winner_is_ineligible_while_starting()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 5, duration: 60, start: ["Line 1", "Line 2"]);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start(); // still Starting
+
+        Assert.False(t.Service.CanAnnounceWinner);
+    }
+
+    [Fact]
+    public void Announce_winner_is_ineligible_during_the_active_roll_period()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 60, start: []);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        t.Service.HandleRollObservation(new ObservedRandomRoll(new GuestIdentity("A", "Balmung"), 500, GiveawayRollKind.Standard));
+
+        Assert.Equal(GiveawayPhase.AcceptingRolls, t.Service.Phase);
+        Assert.False(t.Service.CanAnnounceWinner);
+    }
+
+    [Fact]
+    public void Announce_winner_is_ineligible_during_midpoint()
+    {
+        var t = Create();
+        // Two Midpoint lines (not one) so Phase genuinely stays Midpoint after Tick(10) — a single-line block's
+        // completion callback fires synchronously in the same tick and would immediately revert Phase back to
+        // AcceptingRolls, which is real, correct behavior (see Midpoint_begins_at_half_the_configured_duration)
+        // but would make this specific assertion meaningless.
+        var preset = MakePreset(t, delay: 1, duration: 20, start: [], midpoint: ["Halfway!", "Still going!"]);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        Tick(t, 10);
+
+        Assert.Equal(GiveawayPhase.Midpoint, t.Service.Phase);
+        Assert.False(t.Service.CanAnnounceWinner);
+    }
+
+    [Fact]
+    public void Announce_winner_is_ineligible_during_closing_while_rolls_are_still_accepted()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 2, duration: 10, start: [], closing: ["C1", "C2"]);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        Tick(t, 10); // Closing begins, C1 sent, rolls still open, C2 still pending
+
+        Assert.Equal(GiveawayPhase.Closing, t.Service.Phase);
+        Assert.True(t.Service.IsAcceptingRolls);
+        Assert.False(t.Service.CanAnnounceWinner);
+    }
+
+    [Fact]
+    public void Announce_winner_becomes_eligible_immediately_after_the_final_closing_line_with_one_winner()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 2, start: [], closing: ["Closed!"]);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        t.Service.HandleRollObservation(new ObservedRandomRoll(new GuestIdentity("A", "Balmung"), 500, GiveawayRollKind.Standard));
+        Tick(t, 2); // duration elapses, Closing's only line sends and closes roll acceptance
+
+        Assert.Equal(GiveawayPhase.Complete, t.Service.Phase);
+        Assert.True(t.Service.CanAnnounceWinner);
+        Assert.Equal("A", t.Service.CurrentWinners.Single().Name);
+    }
+
+    [Fact]
+    public void Announce_winner_becomes_eligible_immediately_after_the_final_closing_line_with_tied_winners()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 2, start: [], closing: ["Closed!"]);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        t.Service.HandleRollObservation(new ObservedRandomRoll(new GuestIdentity("A", "Balmung"), 500, GiveawayRollKind.Standard));
+        t.Service.HandleRollObservation(new ObservedRandomRoll(new GuestIdentity("B", "Gilgamesh"), 500, GiveawayRollKind.Standard));
+        Tick(t, 2);
+
+        Assert.True(t.Service.CanAnnounceWinner);
+        Assert.Equal(2, t.Service.CurrentWinners.Count);
+        Assert.Contains(t.Service.CurrentWinners, x => x.Name == "A");
+        Assert.Contains(t.Service.CurrentWinners, x => x.Name == "B");
+    }
+
+    [Fact]
+    public void Empty_closing_becomes_eligible_at_duration_expiry_if_winners_exist()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 2, start: [], closing: []);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        t.Service.HandleRollObservation(new ObservedRandomRoll(new GuestIdentity("A", "Balmung"), 500, GiveawayRollKind.Standard));
+        Tick(t, 2);
+
+        Assert.Equal(GiveawayPhase.Complete, t.Service.Phase);
+        Assert.True(t.Service.CanAnnounceWinner);
+    }
+
+    [Fact]
+    public void Completed_giveaway_with_no_rolls_is_ineligible()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 2, start: [], closing: []);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        Tick(t, 2);
+
+        Assert.Equal(GiveawayPhase.Complete, t.Service.Phase);
+        Assert.False(t.Service.CanAnnounceWinner);
+        Assert.Empty(t.Service.CurrentWinners);
+    }
+
+    [Fact]
+    public void Clear_results_makes_announce_winner_ineligible()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 2, start: [], closing: []);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        t.Service.HandleRollObservation(new ObservedRandomRoll(new GuestIdentity("A", "Balmung"), 500, GiveawayRollKind.Standard));
+        Tick(t, 2);
+        Assert.True(t.Service.CanAnnounceWinner);
+
+        t.Service.ClearResults();
+        Assert.False(t.Service.CanAnnounceWinner);
+        Assert.Empty(t.Service.CurrentWinners);
+    }
+
+    [Fact]
+    public void Starting_a_new_run_clears_prior_winner_eligibility()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 2, start: [], closing: []);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        t.Service.HandleRollObservation(new ObservedRandomRoll(new GuestIdentity("A", "Balmung"), 500, GiveawayRollKind.Standard));
+        Tick(t, 2);
+        Assert.True(t.Service.CanAnnounceWinner);
+
+        t.Service.Start(); // a fresh run on the same preset
+        Assert.False(t.Service.CanAnnounceWinner);
+        Assert.Empty(t.Service.CurrentWinners);
+    }
+
+    [Fact]
+    public void Cancelled_giveaway_is_ineligible_even_with_captured_rolls()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 60, start: []);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        t.Service.HandleRollObservation(new ObservedRandomRoll(new GuestIdentity("A", "Balmung"), 500, GiveawayRollKind.Standard));
+
+        t.Service.Cancel();
+        Assert.Equal(GiveawayPhase.Cancelled, t.Service.Phase);
+        Assert.False(t.Service.CanAnnounceWinner); // spec §12: only "Giveaway state is Complete" is eligible
+    }
+
+    // =========================================================================================================
+    // Winner Announcement — send / channel / repeat (spec §15/§19/§30/§36/§38)
+    // =========================================================================================================
+
+    [Fact]
+    public void Announcing_on_yell_dispatches_a_slash_yell_command()
+    {
+        var t = CompleteWithOneWinner(GiveawayChatChannel.Yell, "Congratulations <name>!");
+        var result = t.Service.AnnounceWinner();
+        DispatchImmediate(t);
+
+        Assert.True(result.Success);
+        Assert.Contains("/yell Congratulations A!", t.Sent);
+    }
+
+    [Fact]
+    public void Announcing_on_shout_dispatches_a_slash_shout_command()
+    {
+        var t = CompleteWithOneWinner(GiveawayChatChannel.Shout, "Congratulations <name>!");
+        var result = t.Service.AnnounceWinner();
+        DispatchImmediate(t);
+
+        Assert.True(result.Success);
+        Assert.Contains("/shout Congratulations A!", t.Sent);
+    }
+
+    [Fact]
+    public void Announcing_without_eligibility_fails_and_sends_nothing()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 60, start: []);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start(); // never completed
+
+        var result = t.Service.AnnounceWinner();
+        Assert.False(result.Success);
+        Assert.Empty(t.Sent);
+    }
+
+    [Fact]
+    public void First_announcement_succeeds_and_the_button_remains_eligible_for_a_repeat_send()
+    {
+        var t = CompleteWithOneWinner(GiveawayChatChannel.Yell, "Congratulations <name>!");
+
+        var first = t.Service.AnnounceWinner();
+        DispatchImmediate(t);
+        Assert.True(first.Success);
+        Assert.True(t.Service.CanAnnounceWinner); // spec §19 — never permanently disabled after one press
+
+        Tick(t, 1); // let ChatCommandService's minimum dispatch interval elapse before sending again
+        var second = t.Service.AnnounceWinner();
+        DispatchImmediate(t);
+        Assert.True(second.Success);
+        Assert.Equal(2, t.Sent.Count(x => x == "/yell Congratulations A!"));
+        Assert.Single(t.Service.CurrentWinners); // winner set itself is unchanged by repeat sends
+    }
+
+    [Fact]
+    public void A_chat_dispatch_failure_is_reported_through_diagnostics_and_preserves_retry_eligibility()
+    {
+        var t = CreateWithFailingChat();
+        var preset = MakePreset(t, delay: 1, duration: 2, start: [], closing: []);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        t.Service.HandleRollObservation(new ObservedRandomRoll(new GuestIdentity("A", "Balmung"), 500, GiveawayRollKind.Standard));
+        Tick(t, 2);
+        Assert.True(t.Service.CanAnnounceWinner);
+
+        var result = t.Service.AnnounceWinner();
+        Assert.True(result.Success); // AnnounceWinner reports the ENQUEUE outcome, not the later async dispatch result
+        DispatchImmediate(t); // this is where the dispatch actually "fails"
+
+        Assert.True(t.Service.CanAnnounceWinner); // never revoked by a dispatch failure — the operator can just retry
+        Assert.Single(t.Service.CurrentWinners); // winner state untouched
+        Assert.Contains(t.Diagnostics.Capture().RecentErrors, e => e.Message.Contains("events.giveaways") && e.Message.Contains("winner announcement"));
+    }
+
+    private static Fixture CreateWithFailingChat()
+    {
+        var clock = new Clock();
+        var scheduler = new SchedulerService(clock);
+        var sent = new List<string>();
+        var chat = new ChatCommandService(clock, new InlineFrameworkDispatcher(), _ => false, TimeSpan.FromSeconds(1)); // always "fails" to dispatch
+        var store = new InMemoryVenueStore();
+        var profiles = new VenueProfileService(store, new ModuleHost());
+        var diagnostics = FakeDiagnostics(profiles, clock);
+        var service = new GiveawayService(scheduler, chat, profiles, clock, diagnostics);
+        var venueId = profiles.Current.Id;
+        service.Load(venueId);
+        return new Fixture(service, profiles, store, venueId, clock, scheduler, chat, sent, diagnostics);
+    }
+
+    // =========================================================================================================
+    // Winner Announcement — snapshot semantics (spec §24/§37)
+    // =========================================================================================================
+
+    [Fact]
+    public void Editing_the_saved_preset_winner_channel_and_template_mid_run_does_not_affect_the_current_run()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 2, start: [], closing: []);
+        t.Service.UpdatePreset(preset.Id, p => p with { WinnerAnnouncementChannel = GiveawayChatChannel.Yell, WinnerAnnouncementTemplate = "Template A <name>" });
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        t.Service.HandleRollObservation(new ObservedRandomRoll(new GuestIdentity("A", "Balmung"), 500, GiveawayRollKind.Standard));
+
+        // Operator edits the SAVED preset mid-run (e.g. via the Preset Editor Modal) — must not affect this run.
+        t.Service.UpdatePreset(preset.Id, p => p with { WinnerAnnouncementChannel = GiveawayChatChannel.Shout, WinnerAnnouncementTemplate = "Template B <name>" });
+
+        Tick(t, 2); // completes the current run
+        var result = t.Service.AnnounceWinner();
+        DispatchImmediate(t);
+
+        Assert.True(result.Success);
+        Assert.Contains("/yell Template A A", t.Sent); // current run still used the Start-time snapshot
+        Assert.DoesNotContain(t.Sent, x => x.StartsWith("/shout"));
+    }
+
+    [Fact]
+    public void The_next_run_uses_the_newly_saved_winner_channel_and_template()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 2, start: [], closing: []);
+        t.Service.UpdatePreset(preset.Id, p => p with { WinnerAnnouncementChannel = GiveawayChatChannel.Yell, WinnerAnnouncementTemplate = "Template A <name>" });
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        Tick(t, 2); // completes with no rolls, nothing to announce — just exercising the run boundary
+
+        t.Service.UpdatePreset(preset.Id, p => p with { WinnerAnnouncementChannel = GiveawayChatChannel.Shout, WinnerAnnouncementTemplate = "Template B <name>" });
+        t.Service.ClearResults();
+        t.Service.Start(); // a fresh run — should pick up the newly saved values
+        t.Service.HandleRollObservation(new ObservedRandomRoll(new GuestIdentity("B", "Gilgamesh"), 500, GiveawayRollKind.Standard));
+        Tick(t, 2);
+
+        var result = t.Service.AnnounceWinner();
+        DispatchImmediate(t);
+        Assert.True(result.Success);
+        Assert.Contains("/shout Template B B", t.Sent);
+    }
+
+    [Fact]
+    public void A_live_ephemeral_channel_override_affects_only_the_current_run_never_the_saved_preset()
+    {
+        var t = CompleteWithOneWinner(GiveawayChatChannel.Yell, "Congratulations <name>!");
+        var savedBefore = t.Service.SelectedPreset!.WinnerAnnouncementChannel;
+
+        t.Service.SetRunningWinnerAnnouncementChannel(GiveawayChatChannel.Shout);
+        var result = t.Service.AnnounceWinner();
+        DispatchImmediate(t);
+
+        Assert.True(result.Success);
+        Assert.Contains("/shout Congratulations A!", t.Sent);
+        Assert.Equal(savedBefore, t.Service.SelectedPreset!.WinnerAnnouncementChannel); // Settings never touched
+    }
+
+    [Fact]
+    public void A_live_ephemeral_template_override_affects_only_the_current_run_never_the_saved_preset()
+    {
+        var t = CompleteWithOneWinner(GiveawayChatChannel.Yell, "Congratulations <name>!");
+        var savedTemplateBefore = t.Service.SelectedPreset!.WinnerAnnouncementTemplate;
+
+        t.Service.SetRunningWinnerAnnouncementTemplate("Well played <name>!");
+        var result = t.Service.AnnounceWinner();
+        DispatchImmediate(t);
+
+        Assert.True(result.Success);
+        Assert.Contains("/yell Well played A!", t.Sent);
+        Assert.Equal(savedTemplateBefore, t.Service.SelectedPreset!.WinnerAnnouncementTemplate);
+    }
+
+    [Fact]
+    public void Full_active_run_snapshot_and_ephemeral_override_sequence()
+    {
+        // Exercises the exact sequence from the Winner Announcement QA fix task's own spec, end to end:
+        // Template A selected -> Start -> saved preset edited to Template B (must not affect this run) -> live
+        // panel edited to Template C during the run (ephemeral to this run only) -> Clear Results -> next run
+        // loads the saved Template B, never A or C.
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 2, start: [], closing: []);
+        t.Service.UpdatePreset(preset.Id, p => p with { WinnerAnnouncementTemplate = "Template A <name>" });
+        t.Service.SelectPreset(preset.Id);
+
+        t.Service.Start(); // snapshot captures Template A into RunningPreset
+        t.Service.HandleRollObservation(new ObservedRandomRoll(new GuestIdentity("A", "Balmung"), 500, GiveawayRollKind.Standard));
+        Assert.Equal("Template A <name>", t.Service.RunningPreset!.WinnerAnnouncementTemplate);
+
+        t.Service.UpdatePreset(preset.Id, p => p with { WinnerAnnouncementTemplate = "Template B <name>" }); // via Settings, mid-run
+        Assert.Equal("Template A <name>", t.Service.RunningPreset!.WinnerAnnouncementTemplate); // current run unaffected
+
+        t.Service.SetRunningWinnerAnnouncementTemplate("Template C <name>"); // live panel edit during the active run
+        Assert.Equal("Template C <name>", t.Service.RunningPreset!.WinnerAnnouncementTemplate);
+        Assert.Equal("Template B <name>", t.Service.SelectedPreset!.WinnerAnnouncementTemplate); // saved preset untouched by the live edit
+
+        Tick(t, 2); // completes the run
+        var result = t.Service.AnnounceWinner();
+        DispatchImmediate(t);
+        Assert.True(result.Success);
+        Assert.Contains("/yell Template C A", t.Sent); // the CURRENT run used the live override, not A or B
+
+        Assert.Equal("Template B <name>", t.Service.SelectedPreset!.WinnerAnnouncementTemplate); // still B, untouched
+
+        t.Service.ClearResults();
+        t.Service.Start(); // the NEXT run
+        t.Service.HandleRollObservation(new ObservedRandomRoll(new GuestIdentity("B", "Gilgamesh"), 500, GiveawayRollKind.Standard));
+        Assert.Equal("Template B <name>", t.Service.RunningPreset!.WinnerAnnouncementTemplate); // the next run loads the saved value
+    }
+
+    [Fact]
+    public void The_running_only_ephemeral_setters_are_a_no_op_before_any_giveaway_has_started()
+    {
+        // The RUNNING-specific setters remain a no-op with no RunningPreset to mutate — this is expected and
+        // correct: the live panel calls the SELECTED-preset setters instead in this state (see the
+        // "editable_before_any_giveaway_has_started" tests below), so the field is never actually disabled or
+        // silently dropped — it just routes to a different, persistent method.
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 60, start: []);
+        t.Service.SelectPreset(preset.Id);
+
+        t.Service.SetRunningWinnerAnnouncementChannel(GiveawayChatChannel.Shout);
+        t.Service.SetRunningWinnerAnnouncementTemplate("Should not apply <name>");
+
+        Assert.Null(t.Service.RunningPreset);
+        Assert.Equal(GiveawayChatChannel.Yell, t.Service.SelectedPreset!.WinnerAnnouncementChannel); // untouched default
+    }
+
+    // =========================================================================================================
+    // Winner Announcement — the field/selector are ALWAYS editable (QA fix). ImGui's own enable/disable rendering
+    // is outside this repository's test boundary (NEW_MODULE_GUIDE.md §30 — no VenueOS.Plugin test project), so
+    // these tests prove the closest testable proxy: the underlying data path the operator panel calls into on every
+    // keystroke (SetSelectedPresetWinnerAnnouncementChannel/Template pre-run, SetRunningWinnerAnnouncementChannel/
+    // Template during/after a run) succeeds in EVERY phase, never silently rejecting an edit because of giveaway/
+    // roll state. The button's own separate gating (CanAnnounceWinner) is proved unaffected in the same tests where
+    // relevant, and is otherwise covered by the existing eligibility-lifecycle tests above.
+    // =========================================================================================================
+
+    [Fact]
+    public void No_active_giveaway_template_edit_persists_to_the_selected_preset()
+    {
+        var t = Create();
+        var preset = t.Service.CreatePreset("Idle Preset");
+        t.Service.SelectPreset(preset.Id);
+
+        t.Service.SetSelectedPresetWinnerAnnouncementTemplate("Our winner is <name>!");
+
+        Assert.Equal("Our winner is <name>!", t.Service.SelectedPreset!.WinnerAnnouncementTemplate);
+    }
+
+    [Fact]
+    public void No_active_giveaway_channel_edit_persists_to_the_selected_preset()
+    {
+        var t = Create();
+        var preset = t.Service.CreatePreset("Idle Preset");
+        t.Service.SelectPreset(preset.Id);
+
+        t.Service.SetSelectedPresetWinnerAnnouncementChannel(GiveawayChatChannel.Shout);
+
+        Assert.Equal(GiveawayChatChannel.Shout, t.Service.SelectedPreset!.WinnerAnnouncementChannel);
+    }
+
+    [Fact]
+    public void Before_the_first_run_a_persistent_template_change_is_retained_across_reload()
+    {
+        var t = Create();
+        var preset = t.Service.CreatePreset("Idle Preset");
+        t.Service.SelectPreset(preset.Id);
+        t.Service.SetSelectedPresetWinnerAnnouncementTemplate("Our winner is <name>!");
+        t.Service.SetSelectedPresetWinnerAnnouncementChannel(GiveawayChatChannel.Shout);
+
+        var reloaded = new GiveawayService(new SchedulerService(new Clock()), FakeChat(new Clock()), t.Profiles, new Clock(), FakeDiagnostics(t.Profiles));
+        reloaded.Load(t.VenueId);
+
+        var reloadedPreset = reloaded.Settings.Presets.Single();
+        Assert.Equal("Our winner is <name>!", reloadedPreset.WinnerAnnouncementTemplate);
+        Assert.Equal(GiveawayChatChannel.Shout, reloadedPreset.WinnerAnnouncementChannel);
+    }
+
+    [Fact]
+    public void Field_remains_editable_during_start()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 5, duration: 60, start: ["Line 1", "Line 2"]);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start(); // still Starting
+
+        t.Service.SetRunningWinnerAnnouncementTemplate("Edited during Start <name>");
+        Assert.Equal("Edited during Start <name>", t.Service.RunningPreset!.WinnerAnnouncementTemplate);
+    }
+
+    [Fact]
+    public void Field_remains_editable_during_the_active_roll_period()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 60, start: []);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        Assert.Equal(GiveawayPhase.AcceptingRolls, t.Service.Phase);
+
+        t.Service.SetRunningWinnerAnnouncementChannel(GiveawayChatChannel.Shout);
+        Assert.Equal(GiveawayChatChannel.Shout, t.Service.RunningPreset!.WinnerAnnouncementChannel);
+    }
+
+    [Fact]
+    public void Field_remains_editable_during_midpoint()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 20, start: [], midpoint: ["Halfway!", "Still going!"]);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        Tick(t, 10);
+        Assert.Equal(GiveawayPhase.Midpoint, t.Service.Phase);
+
+        t.Service.SetRunningWinnerAnnouncementTemplate("Edited during Midpoint <name>");
+        Assert.Equal("Edited during Midpoint <name>", t.Service.RunningPreset!.WinnerAnnouncementTemplate);
+    }
+
+    [Fact]
+    public void Field_remains_editable_during_closing()
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 2, duration: 10, start: [], closing: ["C1", "C2"]);
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        Tick(t, 10); // Closing begins, C1 sent, rolls still open, C2 still pending
+        Assert.Equal(GiveawayPhase.Closing, t.Service.Phase);
+
+        t.Service.SetRunningWinnerAnnouncementTemplate("Edited during Closing <name>");
+        Assert.Equal("Edited during Closing <name>", t.Service.RunningPreset!.WinnerAnnouncementTemplate);
+    }
+
+    [Fact]
+    public void Field_remains_editable_at_complete()
+    {
+        var t = CompleteWithOneWinner(GiveawayChatChannel.Yell, "Congratulations <name>!");
+        Assert.Equal(GiveawayPhase.Complete, t.Service.Phase);
+
+        t.Service.SetRunningWinnerAnnouncementTemplate("Edited after Complete <name>");
+        Assert.Equal("Edited after Complete <name>", t.Service.RunningPreset!.WinnerAnnouncementTemplate);
+        Assert.True(t.Service.CanAnnounceWinner); // editing the field never affects button eligibility
+    }
+
+    [Fact]
+    public void Field_remains_editable_after_clear_results_and_falls_back_to_the_selected_presets_persisted_values()
+    {
+        var t = CompleteWithOneWinner(GiveawayChatChannel.Yell, "Congratulations <name>!");
+        t.Service.SetRunningWinnerAnnouncementTemplate("Ephemeral text from the finished run <name>");
+
+        t.Service.ClearResults();
+        Assert.Null(t.Service.RunningPreset);
+
+        // No stale ephemeral value survives — the panel now reads/edits the SELECTED preset again.
+        Assert.Equal("Congratulations <name>!", t.Service.SelectedPreset!.WinnerAnnouncementTemplate);
+
+        t.Service.SetSelectedPresetWinnerAnnouncementTemplate("Prepared ahead of time <name>");
+        Assert.Equal("Prepared ahead of time <name>", t.Service.SelectedPreset!.WinnerAnnouncementTemplate);
+    }
+
+    [Fact]
+    public void Switching_selected_preset_while_idle_immediately_reflects_that_presets_own_persisted_values()
+    {
+        var t = Create();
+        var presetA = t.Service.CreatePreset("Preset A");
+        t.Service.UpdatePreset(presetA.Id, p => p with { WinnerAnnouncementChannel = GiveawayChatChannel.Yell, WinnerAnnouncementTemplate = "A's template <name>" });
+        var presetB = t.Service.CreatePreset("Preset B");
+        t.Service.UpdatePreset(presetB.Id, p => p with { WinnerAnnouncementChannel = GiveawayChatChannel.Shout, WinnerAnnouncementTemplate = "B's template <name>" });
+
+        t.Service.SelectPreset(presetA.Id);
+        Assert.Equal("A's template <name>", t.Service.SelectedPreset!.WinnerAnnouncementTemplate);
+
+        t.Service.SelectPreset(presetB.Id);
+        Assert.Equal("B's template <name>", t.Service.SelectedPreset!.WinnerAnnouncementTemplate);
+        Assert.Equal(GiveawayChatChannel.Shout, t.Service.SelectedPreset!.WinnerAnnouncementChannel);
+
+        t.Service.SelectPreset(presetA.Id); // switch back
+        Assert.Equal("A's template <name>", t.Service.SelectedPreset!.WinnerAnnouncementTemplate);
+        Assert.Equal(GiveawayChatChannel.Yell, t.Service.SelectedPreset!.WinnerAnnouncementChannel);
+    }
+
+    // =========================================================================================================
+    // Winner Announcement — preset persistence (spec §22/§29/§44-§47)
+    // =========================================================================================================
+
+    [Fact]
+    public void Winner_announcement_channel_and_template_survive_a_full_serialize_deserialize_boundary()
+    {
+        var t = Create();
+        var preset = t.Service.CreatePreset("Persisted Preset");
+        t.Service.UpdatePreset(preset.Id, p => p with { WinnerAnnouncementChannel = GiveawayChatChannel.Shout, WinnerAnnouncementTemplate = "Our winners are <name>!" });
+
+        var rebuiltSnapshot = JsonSerializer.Deserialize<VenueStoreSnapshot>(JsonSerializer.Serialize(t.Store.Read()))!;
+        var freshProfiles = new VenueProfileService(new InMemoryVenueStore(rebuiltSnapshot), new ModuleHost());
+        var fresh = new GiveawayService(t.Scheduler, t.Chat, freshProfiles, t.Clock, FakeDiagnostics(freshProfiles));
+        fresh.Load(t.VenueId);
+
+        var reloaded = fresh.Settings.Presets.Single();
+        Assert.Equal(GiveawayChatChannel.Shout, reloaded.WinnerAnnouncementChannel);
+        Assert.Equal("Our winners are <name>!", reloaded.WinnerAnnouncementTemplate);
+    }
+
+    [Fact]
+    public void A_preset_saved_before_the_winner_announcement_feature_existed_deserializes_with_the_documented_defaults()
+    {
+        // Simulates an existing venue's already-persisted preset JSON that predates these two fields entirely —
+        // NEW_MODULE_GUIDE.md §13's additive-schema-evolution concern: this must not throw and must not orphan the
+        // preset, and must land on the documented defaults (Yell / the suggested default template) rather than a
+        // bare CLR default (Shout / null) that could crash a TextField bound to a null string.
+        var store = new InMemoryVenueStore();
+        var profiles = new VenueProfileService(store, new ModuleHost());
+        var venueId = profiles.Current.Id;
+        var legacyPresetId = Guid.NewGuid();
+        var legacyJson = $$"""
+            {"Presets":[{"Id":"{{legacyPresetId}}","Name":"Legacy Preset","Channel":0,"DelayBetweenLinesSeconds":2,"GiveawayDurationSeconds":60,"StartBlock":{"Lines":[]},"MidpointBlock":{"Lines":[]},"ClosingBlock":{"Lines":[]},"WinnerMode":0,"ClosestTargetNumber":500,"AllowedRollsPerPerson":1,"SpecialNumbersRaw":""}],"ActivePresetId":null}
+            """;
+        var snapshot = store.Read();
+        snapshot.ModulePayloads[new VenueModuleConfigKey(venueId, GiveawayService.ModuleId, 1).ToString()] = new ModulePayload(1, legacyJson);
+        store.Write(snapshot);
+
+        var service = new GiveawayService(new SchedulerService(new Clock()), FakeChat(new Clock()), profiles, new Clock(), FakeDiagnostics(profiles));
+        service.Load(venueId);
+
+        var loaded = service.Settings.Presets.Single();
+        Assert.Equal("Legacy Preset", loaded.Name);
+        Assert.Equal(GiveawayChatChannel.Yell, loaded.WinnerAnnouncementChannel);
+        Assert.Equal("Congratulations <name>! You won the giveaway!", loaded.WinnerAnnouncementTemplate);
+    }
+
+    [Fact]
+    public void Editing_winner_announcement_fields_then_cancelling_leaves_the_persisted_preset_unchanged()
+    {
+        var t = Create();
+        var original = t.Service.CreatePreset("Original");
+        var draft = original with { WinnerAnnouncementChannel = GiveawayChatChannel.Shout, WinnerAnnouncementTemplate = "Changed <name>" };
+        // Cancel: draft is simply discarded — no call into the service at all.
+
+        var stillPersisted = t.Service.Settings.Presets.Single(p => p.Id == original.Id);
+        Assert.Equal(GiveawayChatChannel.Yell, stillPersisted.WinnerAnnouncementChannel);
+        Assert.Equal("Congratulations <name>! You won the giveaway!", stillPersisted.WinnerAnnouncementTemplate);
+    }
+
+    [Fact]
+    public void Editing_winner_announcement_fields_then_saving_updates_the_preset()
+    {
+        var t = Create();
+        var original = t.Service.CreatePreset("Original");
+        var draft = original with { WinnerAnnouncementChannel = GiveawayChatChannel.Shout, WinnerAnnouncementTemplate = "Changed <name>" };
+
+        t.Service.UpdatePreset(original.Id, _ => draft with { Id = original.Id }); // exactly what the modal's Save does
+
+        var updated = t.Service.Settings.Presets.Single(p => p.Id == original.Id);
+        Assert.Equal(GiveawayChatChannel.Shout, updated.WinnerAnnouncementChannel);
+        Assert.Equal("Changed <name>", updated.WinnerAnnouncementTemplate);
+    }
+
+    [Fact]
+    public void Winner_announcement_fields_are_isolated_per_venue()
+    {
+        var t = Create();
+        var venueB = t.Profiles.Create("Second Venue").Id;
+
+        var presetA = t.Service.CreatePreset("Venue A Preset");
+        t.Service.SetSelectedPresetWinnerAnnouncementTemplate("nonsense"); // no preset selected yet — no-op
+        t.Service.SelectPreset(presetA.Id);
+        t.Service.SetSelectedPresetWinnerAnnouncementChannel(GiveawayChatChannel.Shout);
+        t.Service.SetSelectedPresetWinnerAnnouncementTemplate("Venue A's winner text <name>");
+
+        t.Service.Load(venueB);
+        var presetB = t.Service.CreatePreset("Venue B Preset");
+        t.Service.SelectPreset(presetB.Id);
+        t.Service.SetSelectedPresetWinnerAnnouncementChannel(GiveawayChatChannel.Yell);
+        t.Service.SetSelectedPresetWinnerAnnouncementTemplate("Venue B's winner text <name>");
+
+        t.Service.Load(t.VenueId);
+        Assert.Equal("Venue A's winner text <name>", t.Service.SelectedPreset!.WinnerAnnouncementTemplate);
+        Assert.Equal(GiveawayChatChannel.Shout, t.Service.SelectedPreset!.WinnerAnnouncementChannel);
+
+        t.Service.Load(venueB);
+        Assert.Equal("Venue B's winner text <name>", t.Service.SelectedPreset!.WinnerAnnouncementTemplate);
+        Assert.Equal(GiveawayChatChannel.Yell, t.Service.SelectedPreset!.WinnerAnnouncementChannel);
+    }
+
+    private static Fixture CompleteWithOneWinner(GiveawayChatChannel channel, string template)
+    {
+        var t = Create();
+        var preset = MakePreset(t, delay: 1, duration: 2, start: [], closing: []);
+        t.Service.UpdatePreset(preset.Id, p => p with { WinnerAnnouncementChannel = channel, WinnerAnnouncementTemplate = template });
+        t.Service.SelectPreset(preset.Id);
+        t.Service.Start();
+        t.Service.HandleRollObservation(new ObservedRandomRoll(new GuestIdentity("A", "Balmung"), 500, GiveawayRollKind.Standard));
+        Tick(t, 2);
+        return t;
+    }
+
+    // =========================================================================================================
     // Test infrastructure
     // =========================================================================================================
 
-    private sealed record Fixture(GiveawayService Service, VenueProfileService Profiles, InMemoryVenueStore Store, Guid VenueId, Clock Clock, SchedulerService Scheduler, ChatCommandService Chat, List<string> Sent);
+    private sealed record Fixture(GiveawayService Service, VenueProfileService Profiles, InMemoryVenueStore Store, Guid VenueId, Clock Clock, SchedulerService Scheduler, ChatCommandService Chat, List<string> Sent, DiagnosticsService Diagnostics);
 
     private static Fixture Create()
     {
@@ -877,13 +1544,17 @@ public sealed class GiveawayServiceTests
         var chat = new ChatCommandService(clock, new InlineFrameworkDispatcher(), command => { sent.Add(command); return true; }, TimeSpan.FromSeconds(1));
         var store = new InMemoryVenueStore();
         var profiles = new VenueProfileService(store, new ModuleHost());
-        var service = new GiveawayService(scheduler, chat, profiles, clock);
+        var diagnostics = FakeDiagnostics(profiles, clock);
+        var service = new GiveawayService(scheduler, chat, profiles, clock, diagnostics);
         var venueId = profiles.Current.Id;
         service.Load(venueId);
-        return new Fixture(service, profiles, store, venueId, clock, scheduler, chat, sent);
+        return new Fixture(service, profiles, store, venueId, clock, scheduler, chat, sent, diagnostics);
     }
 
     private static ChatCommandService FakeChat(Clock clock) => new(clock, new InlineFrameworkDispatcher(), _ => true, TimeSpan.FromSeconds(1));
+
+    private static DiagnosticsService FakeDiagnostics(VenueProfileService profiles) => FakeDiagnostics(profiles, new Clock());
+    private static DiagnosticsService FakeDiagnostics(VenueProfileService profiles, IClock clock) => new(new ModuleHost(), profiles, clock);
 
     private static GiveawayPreset MakePreset(Fixture t, int delay, int duration, IReadOnlyList<string>? start = null, IReadOnlyList<string>? midpoint = null, IReadOnlyList<string>? closing = null)
     {

@@ -1,6 +1,20 @@
-# VenueOS 0.3.2 release
+# VenueOS 0.3.3 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.3 — Giveaways: Announce Winner
+
+A targeted feature addition to Giveaways, followed by a same-release QA correction — no other module's registration, behavior, or persistence changed.
+
+- **Announce Winner panel.** The live Giveaways screen gained a new card, between Controls and the Roll Tracker: a Yell/Shout channel selector, an always-visible **Announce Winner** button, and a one-line announcement template.
+- **`<name>` winner substitution, with grammatical multi-winner/tie handling.** The template's `<name>` placeholder is replaced with the current winner(s) — never their Home World — using normal English list grammar for ties: `Kei Joi` for one winner, `Kei Joi and Rabid Squirrel` for two, and an Oxford-comma list (`Kei Joi, Rabid Squirrel, and Mairwen Kor`) for three or more. A tie is never something the operator has to resolve by hand — every tied participant is announced automatically, in the order they rolled.
+- **Persistent, per-preset configuration.** The Winner Announcement channel and template are saved as part of the Giveaway preset (default: Yell, `Congratulations <name>! You won the giveaway!`), authored in the same dedicated Preset Editor used for every other preset field.
+- **Always-editable channel/template, with an active-run override.** The channel selector and template field can be edited at any time — including with no giveaway running. With no active giveaway, an edit saves directly to the selected preset (surviving preset switches, venue switches, and a plugin reload). While a giveaway is running or has just completed, an edit is a one-off touch-up for that specific announcement only and never overwrites the saved preset; **Clear Results** returns the field to the selected preset's saved values. Only the **Announce Winner button** itself is gated by giveaway state (Complete + at least one winner) — the field and selector are not.
+- **Repeatable, chat-length-safe dispatch.** Announce Winner can be pressed more than once per giveaway. The fully-resolved message (after `<name>` is filled in) is validated against FFXIV's normal chat length limit before sending — VenueOS never truncates names, drops winners, or splits a long announcement into multiple lines; an over-length message is rejected with an on-screen message instead.
+- **QA correction included in this release:** an initial live-test pass found the channel selector and template field were incorrectly locked whenever no giveaway was active, preventing the operator from preparing an announcement ahead of time. Fixed before this release shipped — see `docs/GIVEAWAYS_IMPLEMENTATION.md` §31 for the full before/after.
+- All 13 production modules remain enabled by default; no other module's registration or behavior changed in this release.
+
+See `docs/GIVEAWAYS_IMPLEMENTATION.md` for the full implementation record.
 
 ## 0.3.2 — Bingo automated payout live-verified
 

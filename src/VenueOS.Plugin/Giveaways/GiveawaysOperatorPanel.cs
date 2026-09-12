@@ -40,6 +40,8 @@ internal sealed class GiveawaysOperatorPanel(GiveawayService service, VenueProfi
         ImGui.Spacing();
         DrawControls(theme);
         ImGui.Spacing();
+        DrawAnnounceWinner(theme);
+        ImGui.Spacing();
         DrawTracker(theme);
     }
 
@@ -160,6 +162,89 @@ internal sealed class GiveawaysOperatorPanel(GiveawayService service, VenueProfi
             ImGui.SameLine();
             ImGui.TextUnformatted($"Time remaining: {remaining:mm\\:ss}");
         }
+    }
+
+    // =============================================================================================================
+    // Announce Winner — GIVEAWAYS Winner Announcement feature spec §2–§21/§39. Sits between Controls and the Roll
+    // Tracker in the live module, per spec §39's required layout. The button is ALWAYS visible (spec §12) — its
+    // eligibility is entirely driven by GiveawayService.CanAnnounceWinner, never hidden behind an `if`.
+    //
+    // Live-QA fix (Winner Announcement QA pass): the channel selector and template field are ALWAYS EDITABLE —
+    // never gated by giveaway/roll state. Only the BUTTON is state-gated; the field and selector are two
+    // intentionally separate behaviors from it. The original implementation wrapped both in
+    // `ImGui.BeginDisabled(!editable)` where `editable` required `RunningPreset` to be non-null — meaning the fields
+    // were locked whenever no giveaway was currently active (idle, before the first run, or after Clear Results/
+    // Cancel-then-Clear), which defeated the whole point of being able to prepare an announcement ahead of time.
+    // That gating is removed entirely; which underlying record an edit lands on now depends only on WHETHER a run
+    // is active, never on whether editing is ALLOWED:
+    //  - no active run (RunningPreset is null): edits persist directly to the SELECTED preset via the exact same
+    //    atomic GiveawayService.UpdatePreset path the Preset Editor Modal itself uses
+    //    (GiveawayService.SetSelectedPresetWinnerAnnouncementChannel/Template) — no second/incompatible storage
+    //    path — so a pre-run tweak survives exactly like every other persisted preset field (NEW_MODULE_GUIDE.md
+    //    §13a), across Settings close/reopen, preset switches, venue switches, and plugin reload.
+    //  - an active, completed, or cancelled run (RunningPreset is not null): edits apply only to the RUNNING
+    //    preset snapshot (GiveawayService.SetRunningWinnerAnnouncementChannel/Template) — an intentional, documented,
+    //    ephemeral override for this specific run/announcement that never touches the saved preset (GIVEAWAYS spec
+    //    §24's snapshot isolation, extended to these two fields). Clear Results drops RunningPreset entirely, so the
+    //    panel immediately falls back to (and edits) the selected preset's own persisted values again — no stale
+    //    ephemeral text from the just-cleared run survives.
+    // Reading `preset.WinnerAnnouncementChannel`/`Template` fresh every frame (rather than caching a separate UI-side
+    // copy) is intentional and safe for ImGui's InputText focus/cursor behavior: since every edit is persisted
+    // synchronously in the SAME call that produced it, the next frame's fresh read already reflects exactly what was
+    // just typed — the only way the displayed value legitimately changes without the operator having typed anything
+    // is a genuine context switch (preset selection, Start, Clear Results), at which point the field is not the
+    // actively focused widget anyway, so there's no cursor/focus fight. This mirrors GiveawayPresetEditorModal's own
+    // `draft`-field pattern (read fresh, mutate on change), just against GiveawayService's state instead of a local
+    // draft.
+    // =============================================================================================================
+
+    private string? announceError;
+
+    private void DrawAnnounceWinner(VenueTheme theme)
+    {
+        UiKit.BeginSectionCard("giveaways-announce-winner", theme, "Announce Winner");
+
+        var preset = service.RunningPreset ?? service.SelectedPreset;
+        if (preset is null)
+        {
+            UiKit.EmptyState(theme, "No preset selected", "Select a preset above to configure a winner announcement.");
+            UiKit.EndSectionCard();
+            return;
+        }
+
+        var isRunning = service.RunningPreset is not null;
+
+        var channelIndex = preset.WinnerAnnouncementChannel == GiveawayChatChannel.Yell ? 0 : 1;
+        if (Forms.ComboField(theme, "Channel", ["Yell", "Shout"], ref channelIndex, 140))
+        {
+            var channel = channelIndex == 0 ? GiveawayChatChannel.Yell : GiveawayChatChannel.Shout;
+            if (isRunning) service.SetRunningWinnerAnnouncementChannel(channel);
+            else service.SetSelectedPresetWinnerAnnouncementChannel(channel);
+        }
+
+        ImGui.SameLine();
+        var canAnnounce = service.CanAnnounceWinner;
+        ImGui.BeginDisabled(!canAnnounce);
+        if (UiKit.PrimaryButton(theme, "Announce Winner")) DoAnnounceWinner();
+        ImGui.EndDisabled();
+        if (!canAnnounce) UiKit.Tooltip("No winner is available yet.");
+
+        var template = preset.WinnerAnnouncementTemplate;
+        if (Forms.TextField(theme, "Announcement (use <name> for the winner list)", ref template, 500))
+        {
+            if (isRunning) service.SetRunningWinnerAnnouncementTemplate(template);
+            else service.SetSelectedPresetWinnerAnnouncementTemplate(template);
+        }
+
+        if (!string.IsNullOrEmpty(announceError)) UiKit.ErrorState(theme, announceError);
+
+        UiKit.EndSectionCard();
+    }
+
+    private void DoAnnounceWinner()
+    {
+        var result = service.AnnounceWinner();
+        announceError = result.Success ? null : result.Error;
     }
 
     // =============================================================================================================

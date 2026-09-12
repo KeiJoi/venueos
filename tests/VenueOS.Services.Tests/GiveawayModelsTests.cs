@@ -37,6 +37,8 @@ public sealed class GiveawayModelsTests
         Assert.Empty(preset.StartBlock.Lines);
         Assert.Empty(preset.MidpointBlock.Lines);
         Assert.Empty(preset.ClosingBlock.Lines);
+        Assert.Equal(GiveawayChatChannel.Yell, preset.WinnerAnnouncementChannel);
+        Assert.Equal("Congratulations <name>! You won the giveaway!", preset.WinnerAnnouncementTemplate);
     }
 
     [Fact]

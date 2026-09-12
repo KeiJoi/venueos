@@ -40,7 +40,14 @@ public sealed record GiveawayPreset(
     GiveawayWinnerMode WinnerMode,
     int ClosestTargetNumber,
     int AllowedRollsPerPerson,
-    string SpecialNumbersRaw)
+    string SpecialNumbersRaw,
+    // Winner Announcement feature (added after initial release) — trailing, WITH C# default values so that
+    // deserializing an existing venue's already-persisted preset JSON (which predates these two fields) supplies
+    // these exact defaults for the missing properties, instead of bumping the schema version and orphaning every
+    // venue's existing Giveaways presets (NEW_MODULE_GUIDE.md §13). This relies on System.Text.Json's documented
+    // behavior of using a record constructor parameter's own default value for a JSON property that isn't present.
+    GiveawayChatChannel WinnerAnnouncementChannel = GiveawayChatChannel.Yell,
+    string WinnerAnnouncementTemplate = "Congratulations <name>! You won the giveaway!")
 {
     public static GiveawayPreset CreateNew(string name) => new(
         Guid.NewGuid(),
@@ -54,7 +61,9 @@ public sealed record GiveawayPreset(
         GiveawayWinnerMode.Highest,
         ClosestTargetNumber: 500,
         AllowedRollsPerPerson: 1,
-        SpecialNumbersRaw: "");
+        SpecialNumbersRaw: "",
+        WinnerAnnouncementChannel: GiveawayChatChannel.Yell,
+        WinnerAnnouncementTemplate: "Congratulations <name>! You won the giveaway!");
 
     public IReadOnlyList<int> SpecialNumbers => GiveawaySpecialNumbers.Parse(SpecialNumbersRaw);
 

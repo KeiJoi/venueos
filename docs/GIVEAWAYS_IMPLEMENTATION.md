@@ -646,3 +646,270 @@ No other file was read-modified, and no unrelated in-progress work was altered.
 
 Nothing was staged, committed, pushed, tagged, branched, reset, cleaned, or released during this session. Only
 read-only git commands (`status`, nothing destructive) were run.
+
+## 31. Winner Announcement Feature (targeted addition, added after 0.3.2)
+
+A dedicated **Announce Winner** section was added to the live Giveaways module, between **Controls** and **Roll
+Tracker**. This was a targeted feature addition per its own task spec — it did not touch the roll parser, winner
+calculation, Closing timing, roll-acceptance semantics, Macro, or perform any global UI cleanup, and nothing was
+staged/committed/pushed/released.
+
+### 31.1 UI placement and controls
+
+`GiveawaysOperatorPanel.DrawAnnounceWinner` renders a `UiKit.BeginSectionCard`-titled "Announce Winner" card:
+
+- **Row 1**: a `Forms.ComboField` channel selector ("Yell"/"Shout") beside a `UiKit.PrimaryButton` "Announce Winner".
+  The button is **always visible**, gated only by `ImGui.BeginDisabled(!service.CanAnnounceWinner)` — never hidden
+  behind an `if`. A `UiKit.Tooltip("No winner is available yet.")` appears on the disabled button.
+- **Row 2**: one `Forms.TextField` single-line announcement template (max 500 chars) — no multiline field, no "Add
+  Line" controls.
+
+Both rows use only existing VenueOS `UiKit`/`Forms` components (no raw ImGui controls) and are drawn inside the
+normal live Giveaways screen — no custom/generic ImGui popup.
+
+### 31.2 Channel selector: exactly two choices, Yell/Shout
+
+`GiveawayChatChannel` (pre-existing enum, `Shout`/`Yell`) is reused — no Say/Party/Tell/Alliance option exists.
+
+### 31.3 Persistence location and default
+
+Winner-announcement configuration is stored as two new trailing fields on `GiveawayPreset`
+(`src/VenueOS.Modules.Operations/Giveaways/GiveawayModels.cs`):
+
+```csharp
+GiveawayChatChannel WinnerAnnouncementChannel = GiveawayChatChannel.Yell,
+string WinnerAnnouncementTemplate = "Congratulations <name>! You won the giveaway!"
+```
+
+These are added at the **end** of the positional record and carry C# default values so that deserializing an
+already-persisted preset (which predates this feature) supplies exactly these defaults for the two missing JSON
+properties, instead of requiring a schema-version bump that would orphan every venue's existing Giveaways presets
+(NEW_MODULE_GUIDE.md §13). This is verified by a dedicated test
+(`A_preset_saved_before_the_winner_announcement_feature_existed_deserializes_with_the_documented_defaults`) that
+hand-writes a legacy-shaped JSON payload missing both fields and confirms it loads with `Yell` / the suggested
+default template rather than crashing or silently landing on the bare CLR default (`Shout` / `null`). Schema version
+stayed **1** — no bump was needed or performed.
+
+**Default channel decision**: the *existing* per-preset `Channel` field (used for Start/Midpoint/Closing) defaults to
+`Shout`, but the Winner Announcement channel defaults to **Yell**, matching this feature's own task spec's suggested
+default exactly (§22 of that spec). The two channels are independent fields — an operator can, for example, run the
+regular countdown announcements on Shout while sending the final winner call-out on Yell, or vice versa.
+
+Authoring surface: `GiveawayPresetEditorModal` gained a **"Winner Announcement"** section (a `Forms.Segmented`
+Yell/Shout picker + one `Forms.TextField` template box) placed after the existing "Winner" section, following the
+same draft/Save/Cancel semantics as every other field in that modal — Save persists via the existing
+`SaveNewPreset`/`UpdatePreset` atomic-write methods, Cancel discards the in-memory draft with no service call.
+
+### 31.4 Live panel fields are ALWAYS editable; only the button is state-gated (corrected — QA fix pass)
+
+**Original defect (found in live QA):** the live Draw()-panel channel selector and template field were wrapped in
+`ImGui.BeginDisabled(!editable)` where `editable` required `GiveawayService.RunningPreset` to be non-null — meaning
+both controls were **locked** whenever no giveaway was currently active (idle, before the first run ever started, or
+after Clear Results/Cancel-then-Clear). This defeated the point of letting the operator prepare a winner
+announcement ahead of time, and directly contradicted the intent of the "always visible, only the button is
+state-gated" requirement — the disabling was accidentally applied to the field/selector as well as the button.
+
+**Fix:** the `ImGui.BeginDisabled(!editable)` wrap was removed from both controls entirely — they are now **always**
+interactive, in every giveaway phase, with no exceptions. Only the **Announce Winner button** remains wrapped in
+`ImGui.BeginDisabled(!service.CanAnnounceWinner)` (unchanged — see §31.12). Which underlying record an edit actually
+lands on depends only on whether a run is currently active, never on whether editing is *allowed*:
+
+- **No active run** (`RunningPreset` is `null` — idle, before the first run, or after Clear Results/Cancel-then-
+  Clear): edits call `GiveawayService.SetSelectedPresetWinnerAnnouncementChannel`/`SetSelectedPresetWinnerAnnouncementTemplate`,
+  which persist directly to the **selected preset** through the exact same atomic `UpdatePreset` call the Preset
+  Editor Modal itself uses (§31.3) — no second/incompatible storage path (NEW_MODULE_GUIDE.md §12's "avoid
+  duplicating business logic"). A pre-run tweak therefore genuinely "sticks": it survives Settings close/reopen,
+  switching presets and back, switching venues and back, and a full plugin reload, identically to any other
+  persisted preset field, because it *is* just another persisted preset field.
+- **An active, completed, or cancelled run** (`RunningPreset` is not `null`): edits call the pre-existing
+  `GiveawayService.SetRunningWinnerAnnouncementChannel`/`SetRunningWinnerAnnouncementTemplate`, which mutate **only**
+  the in-memory `RunningPreset` snapshot — never `Settings`/`SaveModuleConfig`. This remains a deliberate,
+  documented, intentionally-ephemeral exception to NEW_MODULE_GUIDE.md §13a's "if editable, must persist" rule: a
+  one-off "final edit before sending" convenience for the operator (e.g. personalizing the message for this specific
+  winner, or fixing a typo just for this run) that must never silently overwrite the saved preset for next time.
+
+**Transition behavior:**
+
+- **Start** captures the selected preset's current (persisted) channel/template into `RunningPreset` — the normal
+  pre-existing snapshot mechanism (§31.15) — after which further edits are ephemeral to that run.
+- **Clear Results** sets `RunningPreset` back to `null`, so the very next `Draw()` call immediately falls back to
+  reading (and editing) the **selected preset's own persisted values** again — no stale ephemeral text from the
+  just-cleared run is ever shown or editable afterward.
+- **Switching the selected preset while idle** (no active run) immediately shows that preset's own persisted
+  channel/template, and further edits land on *that* preset — switching Preset A → B → A returns exactly A's own
+  saved values, unaffected by anything typed while B (or the ephemeral run path) was active.
+- **Switching the selected preset while a run is active/complete** (the ordinary preset dropdown allows this during
+  `Complete`, per its own pre-existing enable condition) has **no effect** on the Announce Winner panel — it stays
+  anchored to `RunningPreset`, since that branch depends only on `RunningPreset` being non-null, never on which
+  preset happens to be selected in the dropdown. A preset switch can never silently change a still-live/still-
+  announceable run's own announcement configuration.
+
+**Focus stability (NEW_MODULE_GUIDE.md-adjacent ImGui concern, not itself a written rule but verified against the
+same principle this codebase already relies on):** both fields read `preset.WinnerAnnouncementChannel`/`Template`
+fresh every frame — no separate UI-side buffer was introduced. This is safe for ImGui's `InputText` focus/cursor
+behavior because every edit is persisted **synchronously**, in the same call that produced it (whether to the
+selected preset or the running snapshot), so the very next frame's fresh read already reflects exactly what was just
+typed — there is nothing for the widget to "fight." The only cases where the displayed value legitimately changes
+without the operator having typed anything are genuine context switches (Start, Clear Results, selecting a different
+preset while idle) — each of those happens through a *different* UI control (the Start button, Clear Results button,
+or the preset dropdown), so the announcement text field is never the actively-focused widget at that exact moment,
+and Dear ImGui accepts the new externally-supplied value with no cursor/focus disruption. This mirrors
+`GiveawayPresetEditorModal`'s own already-live-QA'd `draft`-field pattern (read fresh, mutate on change) — just
+reading from `GiveawayService`'s own state instead of a local draft object.
+
+The durable, reusable-next-time configuration is still authored (in the "formal, not-in-the-moment" sense) through
+the Preset Editor Modal (§31.3) — that modal is unchanged and remains authoritative for bulk/careful preset editing;
+the live panel is simply no longer *locked out* of doing the exact same kind of edit in the moment.
+
+### 31.5 Winner-set authority and tie derivation
+
+`GiveawayService.CurrentWinners` derives the winner set from the SAME `RollBoard.GetLeaderboard()` the Roll Tracker
+already renders (never parsed UI text): every row with `IsLeader == true`, projected to its `GuestIdentity`. This is
+empty unless `Phase == GiveawayPhase.Complete`. No new tie logic was invented — Highest/Lowest/Closest tie detection
+is entirely the pre-existing `GiveawayRollBoard.GetLeaderboard()` behavior; this feature only reads it.
+
+Stable ordering: `GiveawayRollBoard`'s internal `Dictionary<string, GiveawayRollEntry>` preserves first-accepted-
+roll insertion order, and `OrderBy` is a stable sort, so tied rows keep that same order every time — never
+re-sorted, never alphabetical, and never re-shuffled between repeated Announce Winner presses.
+
+### 31.6/31.7/31.8/31.9 Name-list grammar
+
+Implemented as a pure, ImGui-free helper, `GiveawayWinnerNameFormatter.Format`
+(`src/VenueOS.Modules.Operations/Giveaways/GiveawayWinnerAnnouncement.cs`):
+
+- 0 names → `null` (invalid/empty).
+- 1 name → `"Kei Joi"`.
+- Exactly 2 names → `"Kei Joi and Rabid Squirrel"` — **no** comma before "and".
+- 3+ names → Oxford-comma list, `"Kei Joi, Rabid Squirrel, and Mairwen Kor"`.
+- Only `GuestIdentity.Name` is used — HomeWorld is **never** included in the resolved text.
+- A duplicate identity (by `GuestIdentity.Key`) is collapsed to its first occurrence.
+
+### 31.10 `<name>` replacement, templates without the token, and repeated tokens
+
+`GiveawayWinnerAnnouncementResolver.Resolve(template, winners)` replaces **every** occurrence of the literal token
+`<name>` with the formatted list above. A template containing zero occurrences is valid and sent unchanged (no
+placeholder is required). VenueOS only ever formats the inserted name list — it never rewrites the rest of the
+operator's sentence (e.g. subject/verb agreement around the substituted list is the operator's responsibility, per
+the feature's own task spec).
+
+### 31.11 Chat byte-limit / large-tie behavior
+
+The **final resolved message** (never just the template) is measured with the existing shared
+`VenueOS.Modules.Operations.BlockLetters.BlockTextLength.CountBytes`/`BlockLettersLimits.ChatBytes` (500 UTF-8
+bytes) — the same measurement Block Letters already established for this exact FFXIV constraint, not a duplicated
+rule. If the resolved text exceeds the limit (including because a large tie expanded a short template well past
+it), `Resolve` returns a failure with a concrete message; nothing is sent, no names are silently dropped, and
+nothing is auto-split or truncated. The operator panel surfaces this via `UiKit.ErrorState` and the button remains
+enabled for retry after the template is shortened — `CanAnnounceWinner` is entirely independent of message length.
+
+### 31.12 Button enable/disable lifecycle
+
+`GiveawayService.CanAnnounceWinner => CurrentWinners.Count > 0`, and `CurrentWinners` is only ever non-empty when
+`Phase == GiveawayPhase.Complete`. Concretely: disabled before Start, during Starting/AcceptingRolls/Midpoint,
+and during Closing for as long as `IsAcceptingRolls` is still true (i.e. before Closing's final non-empty line is
+enqueued) — becomes enabled the instant `Phase` flips to `Complete` (whether that happens via Closing's final line,
+an empty Closing block closing immediately at duration expiry, or any other existing path to Complete), provided at
+least one winner exists. `Cancel()` moves `Phase` to `Cancelled`, not `Complete`, so a cancelled run is never
+eligible even if rolls were captured — matching the feature's own explicit "Giveaway state is Complete" requirement.
+Empty-template / whitespace-only-template and zero-winner cases are both surfaced as an ineligible/failed resolve
+rather than an empty chat send.
+
+### 31.13 Repeat-announcement behavior
+
+`AnnounceWinner()` never mutates winner state (`RollBoard`, `Phase`, `RunningPreset`'s winner set) — only
+`Clear Results`, a new `Start()`, or a venue switch (`Load`) change eligibility. The operator can press Announce
+Winner as many times as they like after a giveaway completes.
+
+### 31.14 Chat dispatch path
+
+`AnnounceWinner()` sends through the existing shared `ChatCommandService.Enqueue` — never a direct/ad hoc chat
+command call — exactly like every other announcement this module already sends. A dispatch failure (the
+`ChatCommand.OnDispatched` callback reporting `success: false`) is reported through
+`DiagnosticsService.RecordFailure($"{ModuleId}: winner announcement failed to send ({ex.Message})")`, mirroring
+`VenueBingoService.Announce`'s own precedent for chat-dispatch-failure reporting — this required adding
+`DiagnosticsService` as a new constructor dependency of `GiveawayService` (previously unused by this module, whose
+only other failure mode — an invalid preset at Start — is already reported inline via `GiveawayStartResult`). A
+dispatch failure never clears the winner set, never revokes `CanAnnounceWinner`, and never crashes — the operator
+can simply press the button again.
+
+### 31.15 Active-run snapshot semantics
+
+`GiveawayPreset.WinnerAnnouncementChannel`/`WinnerAnnouncementTemplate` are captured into `RunningPreset` at `Start()`
+exactly like every other preset field (§11's pre-existing snapshot rule) and `AnnounceWinner()` always resolves
+against `RunningPreset`, never the live `Settings.Presets` collection. Editing the saved preset via the Preset Editor
+Modal while a giveaway is active or complete never changes what the *current* run announces — only the *next*
+`Start()` on that preset picks up the newly saved values. The live-panel ephemeral override (§31.4) is layered on
+top of this same snapshot (it mutates `RunningPreset` directly), so it is subject to the identical isolation: it can
+never leak into the saved preset, and a concurrent edit to the saved preset can never overwrite an in-progress live
+override.
+
+### 31.16 Tests added
+
+Two new test files plus additions to two existing ones (`tests/VenueOS.Services.Tests/`), across the original
+feature pass and the QA fix pass:
+
+- **`GiveawayWinnerAnnouncementTests.cs`** (21 tests) — pure formatter grammar (0/1/2/3/4 names, Oxford comma
+  rules, HomeWorld exclusion, stable order, dedupe) and template resolution (token replacement — single/repeated/
+  absent, empty/whitespace template, no winners, byte-limit rejection including a large-tie expansion case, and a
+  Unicode multi-byte-character byte-counting regression case). Unchanged by the QA fix pass — grammar/formatting
+  was explicitly out of scope for it.
+- **`GiveawayServiceTests.cs`** (original feature pass, +27 tests) — the full eligibility lifecycle, chat dispatch on
+  Yell/Shout, ineligible-announce-sends-nothing, repeat-announce, a dispatch-failure/Diagnostics test, snapshot-
+  isolation tests, and persistence tests (full serialize/deserialize round-trip, the pre-feature-legacy-JSON
+  default-value test, and Preset Editor Modal-style edit/Cancel/Save draft semantics).
+- **`GiveawayServiceTests.cs`** (QA fix pass, +12 tests) — proves the corrected always-editable data path:
+  `No_active_giveaway_template_edit_persists_to_the_selected_preset`,
+  `No_active_giveaway_channel_edit_persists_to_the_selected_preset`,
+  `Before_the_first_run_a_persistent_template_change_is_retained_across_reload`,
+  `Field_remains_editable_during_start`/`_during_the_active_roll_period`/`_during_midpoint`/`_during_closing`/
+  `_at_complete` (each proving the running-only setters still succeed in that phase — the closest testable proxy for
+  "the field is not gated by phase," since actual ImGui disabling is outside this repository's test boundary,
+  NEW_MODULE_GUIDE.md §30), `Field_remains_editable_after_clear_results_and_falls_back_to_the_selected_presets_persisted_values`,
+  `Switching_selected_preset_while_idle_immediately_reflects_that_presets_own_persisted_values`,
+  `Winner_announcement_fields_are_isolated_per_venue`, and `Full_active_run_snapshot_and_ephemeral_override_sequence`
+  (the exact Template A → Start → edit saved preset to B → live-edit to C → Announce → Clear → next run loads B
+  sequence from this fix's own task spec). The pre-existing
+  `Live_ephemeral_overrides_are_a_no_op_before_any_giveaway_has_started` test was renamed to
+  `The_running_only_ephemeral_setters_are_a_no_op_before_any_giveaway_has_started` with a clarifying comment — the
+  fact it asserts (the RUNNING-only setters no-op with no active run) is still true and unchanged; only the
+  overall-panel-behavior implication of its old name was no longer accurate once the panel started routing pre-run
+  edits to the new selected-preset setters instead.
+- **`GiveawayModelsTests.cs`** (+1 assertion, unchanged by the QA fix) — `GiveawayPreset.CreateNew`'s defaults also
+  assert `WinnerAnnouncementChannel == Yell` and the suggested default template text.
+
+No button-gating test (`CanAnnounceWinner`/`CurrentWinners` lifecycle, chat byte-limit rejection, tie formatting)
+was touched by the QA fix pass — confirmed unchanged by the full suite re-run below.
+
+Final counts after the QA fix pass: `VenueOS.Core.Tests` 4, `VenueOS.Venues.Tests` 23, `VenueOS.Services.Tests` 957
+— total **984 passed, 0 failed, 0 skipped** (972 before this fix, 850 before the Winner Announcement feature
+existed at all). `dotnet build VenueOS.sln -c Debug` and `-c Release` both succeeded with **0 Warning(s), 0
+Error(s)**.
+
+### 31.17 Live QA still required
+
+Automated tests cover every service-level building block above, but — per NEW_MODULE_GUIDE.md §30 — do not prove
+rendered ImGui layout, actual focus/cursor behavior while typing, or real FFXIV chat dispatch. Still required before
+this feature can be considered fully verified in Dalamud:
+
+1. Confirm the Announce Winner card renders between Controls and Roll Tracker, with the channel selector, template
+   field, and a visibly-disabled button before any giveaway completes.
+2. **(QA fix)** With NO giveaway running, confirm the channel selector and template field are genuinely editable
+   (not greyed out) — change both, close/reopen Giveaways, confirm the values remain, then `/xlrestart` and reopen
+   Giveaways to confirm they still remain (a real plugin-reload persistence boundary, not just a window close).
+3. **(QA fix)** With NO giveaway running, select a different saved preset; confirm its own channel/template appear;
+   switch back to the original preset and confirm its own original values return.
+4. Run a single-winner giveaway; confirm the button activates only after the final Closing line (or immediate
+   completion for an empty Closing block) and confirm the actual `/yell`/`/shout` text in FFXIV chat matches the
+   resolved template with the winner's real character name (no `@World`).
+5. Produce a two-way and a three-way tie (or rely on the automated grammar tests plus a manually-constructed
+   `GiveawayRollBoard` tie if a real tie is impractical to produce live) and confirm the grammar in actual sent chat
+   text.
+6. Confirm repeat-press behavior, Clear Results disabling the button (while the field itself stays editable and
+   falls back to the selected preset's persisted values), and a new Start clearing prior eligibility, all live.
+7. **(QA fix)** Start a short giveaway; confirm the channel/template fields remain editable throughout every phase
+   (Start/active rolls/Midpoint/Closing/Complete); type into the template field while a giveaway is running and
+   confirm normal one-line-editor behavior — no focus loss, no cursor jumping, no per-character reset to the old
+   value. Confirm the live edit affects only the current run's outgoing announcement — the saved preset (checked via
+   re-opening the Preset Editor Modal) must show its original, unedited values afterward.
+8. Verify all four themes (Dark, Light, Neon, Midnight) render the new card correctly, and that it does not make the
+   live Giveaways screen unreasonably taller.

@@ -1,6 +1,6 @@
 # VenueOS User Manual
 
-**Current version:** 0.3.2
+**Current version:** 0.3.3
 **What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, live host trivia, Bingo, raffles, tournament brackets, block-letter text composition, timed giveaways, and extended macros.
 **Supported environment:** Windows FFXIV with Dalamud installed (API level 15). VenueOS is unofficial, third-party, and not affiliated with Square Enix or the Dalamud/XIVLauncher project.
 
@@ -114,7 +114,7 @@ You can also switch venues quickly from the toolbar's dropdown, without going in
 Found under **Settings → General**:
 
 - **"Open modules in separate windows"** toggle (Auto Pop-Out). Off by default. When on, launching a module from Home opens (or focuses) its own detached window instead of embedding it in the tablet. This applies the same way for every venue and doesn't change when you switch venues. Settings itself is unaffected by this toggle and always opens embedded.
-- An **About VenueOS** card showing a version line (the actual installed release version, e.g. "VenueOS 0.3.2") and a one-line description of what VenueOS is.
+- An **About VenueOS** card showing a version line (the actual installed release version, e.g. "VenueOS 0.3.3") and a one-line description of what VenueOS is.
 
 **Settings → Modules** is where you enable/disable modules and jump into each one's own settings — see [Basics](#2-venueos-basics) above.
 
@@ -665,6 +665,7 @@ Settings shows a compact list of saved presets (name, channel/winner-mode summar
 - **Winner Mode** — **Highest**, **Lowest**, or **Closest** (with a **Closest Target Number** field when Closest is selected).
 - **Allowed Rolls Per Person** — `1` accepts only a player's first roll; a higher number accepts up to that many rolls per person and keeps their best; `0` means unlimited rolls, taking the best of however many they make.
 - **Special Numbers (comma-separated)** — rolls that land on one of these are highlighted with a distinct "SPECIAL" badge. Special Numbers only take effect when Allowed Rolls Per Person is exactly `1` — with multiple or unlimited rolls allowed, special-number highlighting is turned off entirely, since letting someone re-roll for it would defeat the point.
+- **Winner Announcement** — the **Yell/Shout** channel and one-line template used by the **Announce Winner** button (see below). Default channel is **Yell**, default template is `Congratulations <name>! You won the giveaway!`.
 
 **Save** validates the preset and only closes/persists on success; **Cancel** (or closing the window's X) discards whatever you were editing with no effect on the saved preset. Starting a giveaway snapshots the currently selected preset — editing that same preset afterward in Settings never changes the giveaway already in progress.
 
@@ -673,6 +674,37 @@ Settings shows a compact list of saved presets (name, channel/winner-mode summar
 The live screen shows the active (or, if none is running, currently selected) preset's name in large, unmistakable text, a preset selector (locked while a giveaway is running), **Start**, **Cancel** (confirmed — stops remaining announcements and closes roll acceptance immediately, but never deletes the preset, and captured rolls stay visible until you Clear Results), and **Clear Results**. A separate, independently opened **tracker window** shows the exact same roll tracker outside the main module window, if you want it detached.
 
 **Timeline:** Start's lines send in order; once the last one goes out, the countdown begins and roll acceptance opens. At the halfway point, Midpoint sends. At the full duration, Closing begins sending — but **roll acceptance does not close yet**. Rolls remain accepted through the entire Closing sequence (including between lines), closing only the instant Closing's last non-empty line has actually gone out. If Closing has no lines configured, roll acceptance closes immediately once the duration expires instead. This is deliberate: a Closing announcement that says "last chance to roll!" would otherwise be a lie.
+
+### Announce Winner
+
+Between **Controls** and the **Roll Tracker**, a compact **Announce Winner** card lets you send a personalized winner call-out once the giveaway is done — no need to type the winner's name yourself.
+
+- **Channel selector** (Yell/Shout) and **Announce Winner** button, side by side.
+- Below them, a one-line **announcement template** — write anything you like, using the placeholder `<name>` anywhere you want the winner's name(s) inserted. A template doesn't have to use `<name>` at all if you'd rather send a fixed line.
+
+**The `<name>` placeholder:** it's replaced with the current winner(s), grammatically formatted, and never includes a Home World:
+
+| Winners | `<name>` becomes |
+|---|---|
+| One | `Kei Joi` |
+| Two (tied) | `Kei Joi and Rabid Squirrel` |
+| Three or more (tied) | `Kei Joi, Rabid Squirrel, and Mairwen Kor` |
+
+Ties are never something you have to resolve by hand — every tied participant is included automatically, in the order they rolled. VenueOS only formats the name list itself correctly; it doesn't rewrite the rest of your sentence. For example, the template `Congratulations <name>! You are our winners!` sent to a two-way tie becomes `Congratulations Kei Joi and Rabid Squirrel! You are our winners!` — matching the plural "winners" in that example is up to how you word the template.
+
+**The channel selector and template field are always editable** — before, during, and after a giveaway, whether or not one is even running. What happens to an edit depends on the moment:
+
+- **No giveaway currently running** (including before you've ever started one, or after **Clear Results**): your edit is saved to the **selected preset**, exactly like editing it in the Preset Editor — it's still there next time you open Giveaways, switch presets and back, switch venues and back, or reload the plugin.
+- **A giveaway is running, has completed, or was cancelled:** your edit is a one-off touch-up for *this* giveaway only (e.g. fixing a typo, or personalizing the message right before sending) — it does not change the saved preset. **Clear Results** drops this override; the field then goes back to showing the selected preset's saved channel/template.
+
+**The Announce Winner button** stays visible at all times, but only becomes clickable once:
+
+- the giveaway has reached **Complete** (roll acceptance has genuinely closed — during Start, active rolling, Midpoint, or Closing while rolls are still being accepted, it stays disabled), and
+- there is at least one winner.
+
+You can press it as many times as you like — announcing doesn't consume or clear the winner, so re-sending (or sending on a different channel) is fine. It disables again the moment you **Clear Results** or **Start** a new giveaway.
+
+Pressing it sends exactly one line — `/yell <your resolved message>` or `/shout <your resolved message>` — through VenueOS's normal chat dispatch. The resolved message (after `<name>` is filled in) has to fit FFXIV's normal chat length limit; with a large tie, a long name list can push a short template over that limit. If it does, VenueOS won't truncate names, drop winners, or split the message into multiple lines — it tells you the message is too long so you can shorten the template instead.
 
 ### Rolls and the tracker
 
@@ -748,7 +780,7 @@ Every module can run either **embedded** (inside the main VenueOS tablet) or **d
 |---|---|
 | **Global** (shared by every venue) | Which modules are enabled/disabled, Auto Pop-Out preference, the entire Mair's Editor question library |
 | **Venue-specific** | ShoutRunner settings (and its recovery checkpoint for an interrupted run), Attendance settings and history (including each opening's own Venue Area Type), Greeter presets/hotbar, VIP roster, Party Finder recruitment criteria, Mair's Trivia connection settings and scoring defaults, Bingo room key and default game settings, Raffle connection settings/defaults/raffles, Brackets connection settings, Block Letters' default destination, Giveaways presets, Macro's macro library and hotbar configuration |
-| **Runtime-only** (does not survive a reload) | ShoutRunner's on-screen terminal history, Mair's Editor's Undo history, Mair's Trivia's/Bingo's/Raffle's/Brackets' reference to "which game/room/raffle/tournament is currently open" (though the game/room/raffle/tournament itself survives on its backend and can be resumed), Block Letters' composition text, Giveaways' in-progress timeline/roll board, Macro's currently-running execution state |
+| **Runtime-only** (does not survive a reload) | ShoutRunner's on-screen terminal history, Mair's Editor's Undo history, Mair's Trivia's/Bingo's/Raffle's/Brackets' reference to "which game/room/raffle/tournament is currently open" (though the game/room/raffle/tournament itself survives on its backend and can be resumed), Block Letters' composition text, Giveaways' in-progress timeline/roll board (including any Announce Winner channel/template touch-up made while a giveaway was running — see [Giveaways](#16-giveaways)), Macro's currently-running execution state |
 
 Disabling a module never erases its saved configuration — re-enabling it picks back up exactly where you left off.
 
@@ -783,6 +815,8 @@ Disabling a module never erases its saved configuration — re-enabling it picks
 **Block Letters' Copy button is disabled.** Your composition is over the selected destination's limit — switch to a longer-limit destination, or shorten the text; nothing is ever truncated automatically.
 
 **A Giveaways roll didn't count.** Check whether the giveaway's roll window was actually open (before Start finishes sending, or after Closing's last line has gone out, rolls are ignored), whether the roller was within `/random` chat range of you, and whether they'd already used up their Allowed Rolls Per Person.
+
+**Giveaways' Announce Winner button won't activate.** It only becomes clickable once the giveaway has reached Complete (roll acceptance genuinely closed) AND at least one winner exists — check the status line above the button for the current phase. If the resolved message (after `<name>` is filled in) is too long for chat, sending is blocked with an on-screen message instead of the button disabling — shorten the template and try again.
 
 **Dragging a Macro tile onto a faux hotbar slot doesn't assign it.** Make sure **Edit Hotbars** is enabled first — assignment by drag only works while the bar is in Edit mode (locked bars are click-to-run only, by design, so a plain click can never accidentally move or reassign anything).
 
