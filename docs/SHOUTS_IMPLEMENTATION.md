@@ -8,7 +8,9 @@ a general-purpose "Shouts" module: renamed, expanded from 5 to 15 assignable slo
 only ever shows configured slots. The working execution engine (saved preset model, ordered lines, per-line
 Yell/Shout, `ChatCommandService` dispatch, 2-second pacing, confirmed-dispatch gating, transactional preset editor,
 chat byte-limit validation, timer completion semantics, per-venue persistence) is unchanged from the accepted 0.3.4
-baseline — this pass touches naming, slot count, and live-visibility, not the engine.
+baseline — this pass touches naming, slot count, and live-visibility, not the engine. A follow-up presentation-only
+hotfix, released as **VenueOS 0.3.6**, subsequently fixed the Live grid wrapping to a maximum of 5 slots per row —
+see §12.
 
 ## 1. What changed, and why
 
@@ -249,3 +251,61 @@ Community Presets was not started. No global UI cleanup was performed. No other 
 generalization implementation itself staged/committed/pushed/tagged/released/version-bumped nothing — that all
 happened in the separate 0.3.5 release pass once live QA (§9) had passed, exactly as the release commit/tag/GitHub
 Release for VenueOS 0.3.5 records.
+
+## 12. Live grid layout hotfix (0.3.6, live-QA PASSED)
+
+A targeted follow-up fix after 0.3.5 shipped: the live module's `Draw()` placed every visible Shout slot on one
+unconditional row (`if (i > 0) ImGui.SameLine();` with no cap), so a venue with many configured slots produced one
+excessively wide row instead of a usable grid.
+
+**Fix:** `ShoutsService.VisibleSlots` (§5) remains the sole, unchanged authority for which slots are visible and in
+what order — this hotfix only changes how that already-correct sequence is laid out on screen. A new pure,
+ImGui-free helper, `ShoutsLiveLayout` (`src/VenueOS.Modules.Operations/Shouts/ShoutsLiveLayout.cs`), defines the
+row-wrap rule:
+
+- **`ShoutsLiveLayout.MaxSlotsPerRow = 5`** — a plain constant, not a computed/width-driven value. Deliberately
+  fixed rather than responsive: a future UI-tightening pass may make the per-row count depend on the Live module's
+  actual available width, but that is explicitly out of scope for this hotfix.
+- **`ShoutsLiveLayout.ContinuesRow(index, maxPerRow)`** — true if the item at this zero-based position within the
+  visible sequence should continue the current row (the caller calls `ImGui.SameLine()` before drawing it); false
+  for the first item of every row, including index 0. `ShoutsOperatorPanel.Draw()`'s slot loop now calls
+  `if (ShoutsLiveLayout.ContinuesRow(i)) ImGui.SameLine(0, 8);` in place of the old unconditional `if (i > 0)`
+  check — the only functional change in the panel.
+- **`ShoutsLiveLayout.RowSizes(count, maxPerRow)`** — a pure arithmetic helper (e.g. 6 → `[5, 1]`, 11 → `[5, 5, 1]`)
+  provided so row-grouping has a directly assertable shape in tests without an ImGui context.
+
+**What stayed exactly the same:** `VisibleSlots`' hidden-unassigned filtering and ascending slot-number ordering
+(§5) — a gap in the logical slot numbers (e.g. slots 2, 5, 6 unassigned) never reserves a blank grid position, and
+a slot's identity (its persisted slot number, its assignment, `SelectedSlot`) is completely unaffected by which row
+or column it visually lands in. Selecting/running a slot works identically regardless of row. The Shout button and
+Last Shout timer remain in their own section beneath the grid, untouched by this change. The zero-visible-slots
+empty state (`UiKit.EmptyState`) is unchanged and is never reached by the new row logic, since the slot loop —
+and therefore `ShoutsLiveLayout` — only runs when `visible.Count > 0`.
+
+**Tests:** `tests/VenueOS.Services.Tests/ShoutsLiveLayoutTests.cs` (new) covers `RowSizes` for 1/4/5/6/9/10/11/15
+visible slots, `ContinuesRow` at every row boundary (explicitly asserting no `SameLine` immediately after items 5
+and 10), a zero/negative-count edge case, a custom `maxPerRow` value, and two integration-style tests combining a
+real `ShoutsService` with `ShoutsLiveLayout` to confirm a non-contiguous 7-slot configuration (1, 3, 4, 7, 8, 12, 15)
+groups into exactly `[5, 2]` with row 1 = `[1, 3, 4, 7, 8]` and row 2 = `[12, 15]`, and that slots left unassigned
+between visible ones never consume a grid position. All pre-existing Shouts tests were left untouched.
+
+**Live QA — PASSED.** The operator tested the corrected layout in Dalamud and accepted it, confirming the checklist
+below, the same acceptance-reporting convention used for 0.3.4/0.3.5 (`docs/DJ_SHOUTS_IMPLEMENTATION.md` §22,
+§9 above):
+
+1. Configure 1 visible Shout — one slot appears. **Confirmed.**
+2. Configure 5 — all 5 render on one row. **Confirmed.**
+3. Configure 6 — row 1 has 5, row 2 has 1. **Confirmed.**
+4. Configure 10 — two rows of 5. **Confirmed.**
+5. Configure all 15 — three rows of 5. **Confirmed.**
+6. Configure a non-contiguous set (e.g. 1, 4, 7, 12, 15, 3, 8) — ascending logical order with row 1 = the first 5
+   visible items and row 2 = the remaining 2. **Confirmed.**
+7. Select and run slots on different rows — selection/execution unaffected by row placement. **Confirmed.**
+8. Shout button and Last Shout timer render cleanly below the grid, not inside it. **Confirmed.**
+9. No clipping/overlap at a normal Live module window width. **Confirmed.**
+
+**Accepted behavior, summarized:** a maximum of 5 visible configured Shout slots per row; 1–5 visible slots is one
+row, 6–10 is two rows, 11–15 is three rows; hidden/unassigned slots consume no grid position; logical slot
+identity/order and Shout execution are completely unchanged by this presentation-only fix. This was released as
+**VenueOS 0.3.6** — see `RELEASE.md`'s 0.3.6 entry for the release record. Dynamic/responsive slots-per-row remains
+explicitly deferred to a future UI-tightening pass; this hotfix intentionally did not attempt it.

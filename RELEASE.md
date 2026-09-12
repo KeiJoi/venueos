@@ -1,6 +1,19 @@
-# VenueOS 0.3.5 release
+# VenueOS 0.3.6 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.6 — Shouts Live Layout Hotfix
+
+A targeted, presentation-only hotfix to 0.3.5's Shouts module — no other module's registration, behavior, or persistence changed, and Shouts' own execution/persistence/migration are untouched.
+
+- **Shouts Live now wraps configured hotbar slots at a maximum of five per row.** Previously every visible slot rendered on a single, ever-widening row; a venue with more than five configured slots produced an unusably wide Live screen. Rows now wrap at 5, 10, and 15 visible slots as needed.
+- **Unassigned slots remain hidden**, exactly as in 0.3.5 — a gap in the logical slot numbers never reserves a blank position in the grid.
+- **Slot ordering, identity, and execution are unchanged.** Ascending logical slot order is preserved across row boundaries; a slot's persisted number, its assignment, and `SelectedSlot` are unaffected by which row it visually lands in; selecting and running a Shout behaves identically regardless of row.
+- **Responsive/width-driven row sizing remains deferred** to a future UI-tightening pass — this hotfix uses a simple fixed maximum of 5 slots per row, not a computed column count.
+- **Live-QA verified** and promoted alongside this release — see `docs/SHOUTS_IMPLEMENTATION.md` §12 for the full hotfix record.
+- All 14 production modules remain enabled by default; no other module's registration or behavior changed in this release.
+
+See `docs/SHOUTS_IMPLEMENTATION.md` for the full hotfix record.
 
 ## 0.3.5 — Shouts (generalized from DJ Shouts)
 

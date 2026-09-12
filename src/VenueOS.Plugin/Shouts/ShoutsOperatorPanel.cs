@@ -37,7 +37,9 @@ internal sealed class ShoutsOperatorPanel(ShoutsService service, VenueProfileSer
             for (var i = 0; i < visible.Count; i++)
             {
                 var (slot, preset) = visible[i];
-                if (i > 0) ImGui.SameLine(0, 8);
+                // Fixed at ShoutsLiveLayout.MaxSlotsPerRow (5) per row — see its doc comment for why this is a
+                // deliberately simple, non-responsive hotfix rather than a width-driven column count.
+                if (ShoutsLiveLayout.ContinuesRow(i)) ImGui.SameLine(0, 8);
                 if (Hotbar.Slot(theme, $"shout-slot-{slot}", $"Shout {slot}", preset.Name, slot == service.Settings.SelectedSlot, new Vector2(150, 56)))
                     service.SelectSlot(slot);
             }
