@@ -1,6 +1,21 @@
-# VenueOS 0.3.4 release
+# VenueOS 0.3.5 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.5 — Shouts (generalized from DJ Shouts)
+
+A targeted generalization pass over 0.3.4's DJ Shouts module — its name, slot capacity, and live-screen presentation changed; its accepted execution engine did not. No other module's registration, behavior, or persistence changed.
+
+- **Renamed: DJ Shouts → Shouts.** The module is no longer framed as DJ-specific — it's a general-purpose, operator-triggered venue announcement tool. DJ introductions remain a perfectly good use, just not the only one; venue hype, event notices, reminders, requests, and closing messages are equally at home here. The internal module ID is unchanged (`communication.djshouts`) — see `docs/SHOUTS_IMPLEMENTATION.md` §2 for why a display-name rename doesn't require an ID/persistence-key change, the same pattern ShoutRunner already established.
+- **Slot capacity expanded from 5 to 15.** Settings → Modules → Shouts → Shout Slot Assignments now exposes all 15 rows (Shout 1–Shout 15) at once, each independently assignable to a saved preset.
+- **Live screen shows only configured slots.** Where DJ Shouts always rendered all five slot buttons, Shouts' live screen now renders only the slots that actually have a preset assigned, in their own numeric order (never renumbered) — assigning slots 1, 4, 7, and 12 shows exactly "Shout 1," "Shout 4," "Shout 7," "Shout 12," with no blank placeholders for the other eleven. Visibility updates immediately when Settings changes an assignment, with no restart required. If every slot is unassigned, the live screen shows a plain empty-state message instead of any slot controls, and the Shout button stays disabled.
+- **Safe selection fallback.** Only a currently-configured slot can become selected; if the selected slot's assignment is cleared or its preset deleted, selection safely falls back to another configured slot, or clears if none remain — it can never get stuck on a slot the live screen no longer shows.
+- **Existing 0.3.4 DJ Shouts data migrates automatically, with no user action required.** Saved presets, the original slots 1–5 assignments, and the Last Shout completion timestamp all carry over the first time each venue loads after upgrading; the new slots 6–15 simply start unassigned. Migration is a one-time, idempotent schema upgrade (v1 → v2) — see `docs/SHOUTS_IMPLEMENTATION.md` §4 for the exact mechanism and its test coverage.
+- **Execution engine, pacing, and persistence unchanged.** The Yell/Shout dispatch model, the 2-second pacing between confirmed lines, dispatch-confirmation gating, the transactional preset editor, chat byte-limit validation, and the Last Shout timer's completion-only-on-final-line semantics are all identical to the accepted 0.3.4 baseline. Everything remains per-venue.
+- **Live-QA verified** and promoted alongside this release — see `docs/SHOUTS_IMPLEMENTATION.md` for the full implementation and migration record.
+- All 14 production modules remain enabled by default; no other module's registration or behavior changed in this release.
+
+See `docs/SHOUTS_IMPLEMENTATION.md` for the full implementation record and `docs/DJ_SHOUTS_IMPLEMENTATION.md` for the original 0.3.4 DJ Shouts build/QA record this release generalizes.
 
 ## 0.3.4 — DJ Shouts
 

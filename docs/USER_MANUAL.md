@@ -1,10 +1,10 @@
 # VenueOS User Manual
 
-**Current version:** 0.3.4
-**What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, live host trivia, Bingo, raffles, tournament brackets, block-letter text composition, timed giveaways, extended macros, and manual DJ Shout announcements.
+**Current version:** 0.3.5
+**What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, live host trivia, Bingo, raffles, tournament brackets, block-letter text composition, timed giveaways, extended macros, and manual Shout announcements.
 **Supported environment:** Windows FFXIV with Dalamud installed (API level 15). VenueOS is unofficial, third-party, and not affiliated with Square Enix or the Dalamud/XIVLauncher project.
 
-**Modules covered in this manual:** ShoutRunner, Attendance, Greeter, VIP, Party Finder, Mair's Trivia, Mair's Editor, Bingo, Raffle, Brackets, Block Letters, Giveaways, Macro, DJ Shouts. Every module in this release ships enabled by default and appears on Home.
+**Modules covered in this manual:** ShoutRunner, Attendance, Greeter, VIP, Party Finder, Mair's Trivia, Mair's Editor, Bingo, Raffle, Brackets, Block Letters, Giveaways, Macro, Shouts. Every module in this release ships enabled by default and appears on Home.
 
 You can also read this manual inside VenueOS itself — click the **User Manual** tile on Home (just before Settings), no internet connection required.
 
@@ -41,7 +41,7 @@ This manual describes the current release only. It does not describe planned fea
 | Block Letters | Composes FFXIV block-letter text within real per-destination character limits | No | Default destination only | N/A (pure composing surface; the composition itself is not persisted) |
 | Giveaways | Runs timed venue giveaways with automated announcements and `/random` roll tracking | No | Yes | Yes (the announcement/roll timeline keeps running) |
 | Macro | Runs extended, nestable FFXIV macros from a live launcher and up to four faux hotbars | No | Yes | Yes (a running macro and the faux hotbars keep working) |
-| DJ Shouts | Fires a saved, reusable DJ announcement preset manually to Yell/Shout | No | Yes | Yes (the Last DJ Shout timer keeps counting) |
+| Shouts | Fires a saved, reusable announcement preset manually to Yell/Shout, across up to 15 configurable slots | No | Yes | Yes (the Last Shout timer keeps counting) |
 
 ---
 
@@ -763,50 +763,52 @@ The macro library and all four hotbars' configuration (enabled state, layout, sl
 
 ---
 
-## 18. DJ Shouts
+## 18. Shouts
 
-**Purpose:** reusable, manually-triggered announcement presets for venue DJs and operators — DJ introductions, event hype, requests/reminders, venue announcements, closing announcements, or any other message you want to fire on demand. It is **not** automatic (unlike Greeter), it is **not** ShoutRunner, and it is **not** a scheduled announcement system — the **DJ Shout** button is the only thing that ever sends anything.
+**Purpose:** reusable, manually-triggered announcement presets for any venue operator — DJ introductions, event hype, requests/reminders, general venue announcements, closing messages, or any other message you want ready to fire on demand. Originally released as "DJ Shouts," generalized in this release since nothing about it is actually DJ-specific — DJ use remains a perfectly good example, just not the only one. It is **not** automatic (unlike Greeter), it is **not** ShoutRunner, and it is **not** a scheduled announcement system — the **Shout** button is the only thing that ever sends anything.
 
-### The five DJ slots
+### Up to 15 Shout slots — only the ones you've configured appear
 
-The live DJ Shouts screen shows five slot buttons, **DJ 1**–**DJ 5**, each showing the name of whichever saved preset is assigned to it (or "(Empty)" if none is). Clicking a slot only **selects** it — it does not send anything by itself. Below the slots: a **DJ Shout** button and, to its right, the **Last DJ Shout** timer.
+Shouts has 15 numbered slots (**Shout 1**–**Shout 15**), each independently assignable to a saved preset under **Settings → Modules → Shouts → Shout Slot Assignments**. The live Shouts screen only ever shows the slots that actually have a preset assigned — leave a slot on "(None)" in Settings and it simply never appears live, instead of cluttering the screen with 15 empty buttons. Configured slots always appear in their own numeric order (assigning slots 1, 4, 7, and 12 shows **Shout 1**, **Shout 4**, **Shout 7**, **Shout 12** in that order — they're never renumbered to 1-4), and each button shows the assigned preset's name (e.g. **Shout 4 — Requests**). Clicking a slot only **selects** it — it does not send anything by itself; only a slot you've actually assigned can be selected. If you unassign or delete the preset behind the currently selected slot, selection safely falls back to another configured slot (or clears, if none remain) — it never gets stuck on something no longer there. If every slot is unassigned, the live screen shows a plain "No Shout presets are assigned" message instead of any slot buttons, and the Shout button stays disabled. Below the slots: the **Shout** button and, to its right, the **Last Shout** timer.
 
-Assign which preset sits in which slot under **Settings → Modules → DJ Shouts → DJ Slot Assignments**.
+### Settings (Settings → Modules → Shouts)
 
-### Settings (Settings → Modules → DJ Shouts)
-
-- **DJ Slot Assignments** — five dropdowns (**DJ 1**–**DJ 5**), each assigning one saved DJ Shout preset or "(None)".
-- **Saved Presets** — a search box, a **New DJ Shout** button, and a list of your saved presets with **Edit**/**Delete** per row. Deleting a preset (confirmed) also clears it from any DJ slot it was assigned to.
+- **Shout Slot Assignments** — all 15 dropdowns (**Shout 1**–**Shout 15**) are always shown here (unlike the live screen, which hides unassigned ones), each assigning one saved Shout preset or "(None)".
+- **Saved Presets** — a search box, a **New Shout** button, and a list of your saved presets with **Edit**/**Delete** per row. Deleting a preset (confirmed) also clears it from any of the 15 Shout slots it was assigned to.
 
 There is deliberately no Behavior section here — no Auto Greet, no repeat-greet timer, no Command After Greeting, and no guest/target logic of any kind.
 
 ### The preset editor
 
-**New DJ Shout**/**Edit** opens a dedicated editor window. Each preset has:
+**New Shout**/**Edit** opens a dedicated editor window. Each preset has:
 
-- **DJ Shout Name**
+- **Shout Name**
 - Any number of ordered **lines**, each with its own text and an independent **Yell** / **Shout** channel selector directly beside it. Every newly added line defaults to **Yell**. Lines can be reordered (**Up**/**Dn**) or removed individually, and **+ Line** adds another.
 
 **Save** validates the preset and only closes/persists on success; **Cancel** (or closing the window's X) discards whatever you were editing with no effect on the saved preset.
 
-### Running a DJ Shout
+### Running a Shout
 
-Select the DJ slot you want, then press **DJ Shout**. Every non-empty line in that preset's saved order is sent, each through its own line's channel (**Yell** → `/yell`, **Shout** → `/shout`), about two seconds apart — the same established pacing Greeter uses between its own lines, so nothing bursts into the game in a single frame. Blank lines are simply skipped.
+Select the slot you want, then press **Shout**. Every non-empty line in that preset's saved order is sent, each through its own line's channel (**Yell** → `/yell`, **Shout** → `/shout`), about two seconds apart — the same established pacing Greeter uses between its own lines, so nothing bursts into the game in a single frame. Blank lines are simply skipped.
 
-The **DJ Shout** button is unavailable when:
-- no preset is assigned to the currently selected slot,
+The **Shout** button is unavailable when:
+- no configured slot is selected,
 - the assigned preset has no non-empty lines to send, or
-- a DJ Shout is already in progress.
+- a Shout is already in progress.
 
-### Last DJ Shout timer
+### Last Shout timer
 
-To the right of the button: **Last DJ Shout: Never** until you've completed one, then an elapsed readout like **Last DJ Shout: 00:42 ago**, **03:18 ago**, or **1h 12m ago**, updating live while the screen is open.
+To the right of the button: **Last Shout: Never** until you've completed one, then an elapsed readout like **Last Shout: 00:42 ago**, **03:18 ago**, or **1h 12m ago**, updating live while the screen is open.
 
 This timer resets **only** once the preset's **final** non-empty line has been confirmed actually sent — never merely from pressing the button, and never from a run that fails partway through or that you cancel. It's saved per Venue Profile, so it keeps its value across closing/reopening the module, switching to another module and back, and a plugin reload or `/xlrestart`.
 
 ### Chat length
 
 Each line's full outgoing command (including its `/yell `/`/shout `) has to fit FFXIV's normal chat length limit, using the same byte-accurate check VenueOS uses everywhere else. An oversized line is flagged right in the editor with its exact byte count and blocks Save — VenueOS never silently truncates it.
+
+### Upgrading from DJ Shouts (0.3.4)
+
+If you used DJ Shouts before this release, your saved presets, your original slots 1–5 assignments, and your Last Shout timer all carry over automatically the first time this venue loads after upgrading — there is nothing to redo. The new slots 6–15 simply start unassigned, same as any other blank slot.
 
 ---
 
@@ -827,8 +829,8 @@ Every module can run either **embedded** (inside the main VenueOS tablet) or **d
 | Scope | Examples |
 |---|---|
 | **Global** (shared by every venue) | Which modules are enabled/disabled, Auto Pop-Out preference, the entire Mair's Editor question library |
-| **Venue-specific** | ShoutRunner settings (and its recovery checkpoint for an interrupted run), Attendance settings and history (including each opening's own Venue Area Type), Greeter presets/hotbar, VIP roster, Party Finder recruitment criteria, Mair's Trivia connection settings and scoring defaults, Bingo room key and default game settings, Raffle connection settings/defaults/raffles, Brackets connection settings, Block Letters' default destination, Giveaways presets, Macro's macro library and hotbar configuration, DJ Shouts' presets, DJ slot assignments, and Last DJ Shout timestamp |
-| **Runtime-only** (does not survive a reload) | ShoutRunner's on-screen terminal history, Mair's Editor's Undo history, Mair's Trivia's/Bingo's/Raffle's/Brackets' reference to "which game/room/raffle/tournament is currently open" (though the game/room/raffle/tournament itself survives on its backend and can be resumed), Block Letters' composition text, Giveaways' in-progress timeline/roll board (including any Announce Winner channel/template touch-up made while a giveaway was running — see [Giveaways](#16-giveaways)), Macro's currently-running execution state, DJ Shouts' in-progress send state (which line it's currently on) |
+| **Venue-specific** | ShoutRunner settings (and its recovery checkpoint for an interrupted run), Attendance settings and history (including each opening's own Venue Area Type), Greeter presets/hotbar, VIP roster, Party Finder recruitment criteria, Mair's Trivia connection settings and scoring defaults, Bingo room key and default game settings, Raffle connection settings/defaults/raffles, Brackets connection settings, Block Letters' default destination, Giveaways presets, Macro's macro library and hotbar configuration, Shouts' presets, its 15 slot assignments, and its Last Shout timestamp |
+| **Runtime-only** (does not survive a reload) | ShoutRunner's on-screen terminal history, Mair's Editor's Undo history, Mair's Trivia's/Bingo's/Raffle's/Brackets' reference to "which game/room/raffle/tournament is currently open" (though the game/room/raffle/tournament itself survives on its backend and can be resumed), Block Letters' composition text, Giveaways' in-progress timeline/roll board (including any Announce Winner channel/template touch-up made while a giveaway was running — see [Giveaways](#16-giveaways)), Macro's currently-running execution state, Shouts' in-progress send state (which line it's currently on) |
 
 Disabling a module never erases its saved configuration — re-enabling it picks back up exactly where you left off.
 
@@ -868,7 +870,7 @@ Disabling a module never erases its saved configuration — re-enabling it picks
 
 **Dragging a Macro tile onto a faux hotbar slot doesn't assign it.** Make sure **Edit Hotbars** is enabled first — assignment by drag only works while the bar is in Edit mode (locked bars are click-to-run only, by design, so a plain click can never accidentally move or reassign anything).
 
-**The DJ Shout button is disabled.** Either the currently selected DJ slot has no preset assigned (assign one in Settings → Modules → DJ Shouts), the assigned preset has no non-empty lines, or a DJ Shout is already sending — wait for it to finish or use **Cancel**.
+**The Shout button is disabled.** Either no configured slot is currently selected (assign a preset to a slot in Settings → Modules → Shouts, then select it live), the assigned preset has no non-empty lines, or a Shout is already sending — wait for it to finish or use **Cancel**.
 
 Anything logged as an error or warning also appears in **Settings → Diagnostics**, filterable by module/level, with a **Copy** button if you need to share the log.
 

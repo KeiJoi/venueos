@@ -2,7 +2,7 @@
   {
     "Author": "VenueOS",
     "Name": "VenueOS",
-    "Description": "Venue-scoped operations, promotion, and backend-compatible venue games. Working modules: Attendance, Greeter, VIP, ShoutRunner, Party Finder, Mair's Trivia, Mair's Editor, Bingo, Raffle, Brackets, Block Letters, Giveaways, Macro, DJ Shouts.",
+    "Description": "Venue-scoped operations, promotion, and backend-compatible venue games. Working modules: Attendance, Greeter, VIP, ShoutRunner, Party Finder, Mair's Trivia, Mair's Editor, Bingo, Raffle, Brackets, Block Letters, Giveaways, Macro, Shouts.",
     "InternalName": "VenueOS",
     "AssemblyVersion": "0.3.4.0",
     "TestingAssemblyVersion": null,

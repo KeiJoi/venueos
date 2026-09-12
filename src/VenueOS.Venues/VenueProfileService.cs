@@ -101,6 +101,15 @@ public sealed class VenueProfileService(IVenueStore store, ModuleHost modules)
         var snapshot = store.Read(); var key = new VenueModuleConfigKey(venueId, moduleId, schemaVersion).ToString();
         snapshot.ModulePayloads[key] = new ModulePayload(schemaVersion, JsonSerializer.Serialize(config)); store.Write(snapshot);
     }
+    /// <summary>True only if a payload was actually saved under this exact (venueId, moduleId, schemaVersion) key —
+    /// unlike <see cref="GetModuleConfig{T}"/>, this never falls back to a default, so a module can distinguish
+    /// "never saved" from "saved and happens to equal the default" when deciding whether an in-place schema
+    /// migration still needs to run (see, e.g., a module's own <c>SchemaVersion</c>-bump migration, per
+    /// NEW_MODULE_GUIDE.md §13's "that module owns writing it" guidance). Checking this before writing under the new
+    /// schema version, and never re-checking the old version once the new one exists, is what makes such a migration
+    /// idempotent.</summary>
+    public bool HasModuleConfig(Guid venueId, string moduleId, int schemaVersion) =>
+        store.Read().ModulePayloads.ContainsKey(new VenueModuleConfigKey(venueId, moduleId, schemaVersion).ToString());
     public VenueOperationResult SetTheme(Guid venueId, VenueTheme theme)
     {
         var snapshot = store.Read(); var index = snapshot.Venues.FindIndex(x => x.Id == venueId); if (index < 0) return new(false, "Venue was not found."); snapshot.Venues[index] = snapshot.Venues[index] with { Theme = theme }; store.Write(snapshot); return new(true);

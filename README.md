@@ -4,7 +4,7 @@ VenueOS is a [Dalamud](https://dalamud.dev) plugin for Final Fantasy XIV: a sing
 
 ## Modules
 
-**Working, live-tested:** Attendance, Greeter, VIP, ShoutRunner, Party Finder, Mair's Trivia, Mair's Editor, Bingo, Raffle, Brackets, Block Letters, Giveaways, Macro, DJ Shouts.
+**Working, live-tested:** Attendance, Greeter, VIP, ShoutRunner, Party Finder, Mair's Trivia, Mair's Editor, Bingo, Raffle, Brackets, Block Letters, Giveaways, Macro, Shouts.
 
 Every module VenueOS currently ships is production-ready and enabled by default, including Bingo's automated payout — see the User Manual's Bingo section and `BINGO_PAYOUT_AUTOMATION_DEFERRED.md` for its live-verified status.
 
@@ -12,7 +12,7 @@ Each module is a small application inside VenueOS — see [NEW_MODULE_GUIDE.md](
 
 ## User Manual
 
-**[docs/USER_MANUAL.md](docs/USER_MANUAL.md)** — the practical, step-by-step guide for venue operators: installing VenueOS, Venue Profiles, Settings, and full instructions for every module (ShoutRunner, Attendance, Greeter, VIP, Party Finder, Mair's Trivia, Mair's Editor, Bingo, Raffle, Brackets, Block Letters, Giveaways, Macro, DJ Shouts). It's also bundled with the plugin itself and readable offline from VenueOS's Home screen — click the **User Manual** tile, just before Settings.
+**[docs/USER_MANUAL.md](docs/USER_MANUAL.md)** — the practical, step-by-step guide for venue operators: installing VenueOS, Venue Profiles, Settings, and full instructions for every module (ShoutRunner, Attendance, Greeter, VIP, Party Finder, Mair's Trivia, Mair's Editor, Bingo, Raffle, Brackets, Block Letters, Giveaways, Macro, Shouts). It's also bundled with the plugin itself and readable offline from VenueOS's Home screen — click the **User Manual** tile, just before Settings.
 
 ## Installing
 
