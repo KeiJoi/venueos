@@ -1,6 +1,19 @@
-# VenueOS 0.3.3 release
+# VenueOS 0.3.4 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.4 — DJ Shouts
+
+A new, greenfield production module — no other module's registration, behavior, or persistence changed.
+
+- **DJ Shouts (new).** A simple, operator-triggered announcement utility for venue DJs: prepare reusable DJ Shout presets ahead of time in Settings, then fire the currently selected one manually during an event. Not automated, not ShoutRunner, and not a Greeter behavior replacement — the **DJ Shout** button is the only execution trigger.
+- **Five assignable DJ preset slots (DJ 1–DJ 5).** Mirrors Greeter's five-slot hotbar concept, with its own independent per-venue configuration — selecting a slot never sends anything by itself.
+- **Ordered, reusable presets with a per-line Yell/Shout channel.** Unlike Greeter (one destination for the whole preset) or Giveaways (one channel per block), every DJ Shout line has its own independent Yell/Shout selector, defaulting to Yell. Lines can be reordered, added, and removed in a dedicated transactional preset editor.
+- **Manual execution with safe pacing.** Pressing DJ Shout sends every non-empty line in order, about two seconds apart — the same established pacing Greeter uses between its own lines — gated on each line actually being confirmed sent before the next one goes out.
+- **Last DJ Shout elapsed timer.** Shown beside the DJ Shout button (`Never` / `00:42 ago` / `1h 12m ago`), it updates only once a run's final line is confirmed dispatched — never on button press, and never for a failed or cancelled run — and persists per Venue Profile across a panel close/reopen or a plugin reload.
+- **Per-venue persistence throughout.** Saved presets, slot assignments, the selected slot, and the Last DJ Shout timestamp are all isolated per Venue Profile.
+- **Live-QA verified** and promoted to production alongside this release — see `docs/DJ_SHOUTS_IMPLEMENTATION.md` for the full implementation record.
+- All 14 production modules remain enabled by default; no other module's registration or behavior changed in this release.
 
 ## 0.3.3 — Giveaways: Announce Winner
 

@@ -33,6 +33,7 @@ internal static class AppIcons
             case "block-letters": DrawBlockLetters(drawList, center, radius, color); break;
             case "gift": DrawGift(drawList, center, radius, color, thickness); break;
             case "macro": DrawMacro(drawList, center, radius, color, thickness); break;
+            case "microphone": DrawMicrophone(drawList, center, radius, color, thickness); break;
             default: drawList.AddCircle(center, radius * 0.6f, color, 0, thickness); break;
         }
     }
@@ -296,6 +297,28 @@ internal static class AppIcons
                 d.AddTriangleFilled(min + new Vector2(pad, pad), min + new Vector2(pad, slot - pad), min + new Vector2(slot - pad, slot / 2f), color);
             }
         }
+    }
+
+    /// <summary>DJ Shouts' glyph — a microphone: a capsule head with a couple of grille lines, cradled by an open
+    /// stand arc, on a short post with a small foot. Reads as "a live spoken announcement" — distinct from
+    /// "megaphone" (ShoutRunner's icon, a physical bullhorn/routing concept) and "message" (Greeter's chat-bubble
+    /// icon, a different communication shape entirely).</summary>
+    private static void DrawMicrophone(ImDrawListPtr d, Vector2 c, float r, uint color, float t)
+    {
+        var headCenter = c + new Vector2(0, -r * 0.15f);
+        var headHalfWidth = r * 0.26f;
+        var headTop = headCenter.Y - r * 0.45f;
+        var headBottom = headCenter.Y + r * 0.25f;
+        d.AddRect(new Vector2(headCenter.X - headHalfWidth, headTop), new Vector2(headCenter.X + headHalfWidth, headBottom), color, headHalfWidth, ImDrawFlags.None, t);
+        for (var frac = 0.35f; frac <= 0.7f; frac += 0.35f)
+        {
+            var y = headTop + (headBottom - headTop) * frac;
+            d.AddLine(new Vector2(headCenter.X - headHalfWidth + t, y), new Vector2(headCenter.X + headHalfWidth - t, y), color, t * 0.8f);
+        }
+        d.PathArcTo(headCenter + new Vector2(0, r * 0.05f), r * 0.42f, 0.5f, MathF.PI - 0.5f, 10);
+        d.PathStroke(color, ImDrawFlags.None, t);
+        d.AddLine(headCenter + new Vector2(0, r * 0.4f), headCenter + new Vector2(0, r * 0.62f), color, t);
+        d.AddLine(headCenter + new Vector2(-r * 0.22f, r * 0.62f), headCenter + new Vector2(r * 0.22f, r * 0.62f), color, t);
     }
 
     private static void DrawPopout(ImDrawListPtr d, Vector2 c, float r, uint color, float t)
