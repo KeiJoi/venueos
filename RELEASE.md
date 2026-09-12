@@ -1,6 +1,38 @@
-# VenueOS 0.3.1 release
+# VenueOS 0.3.2 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.2 — Bingo automated payout live-verified
+
+A three-phase targeted hotfix series took Bingo's automated payout from its first live-test failure through a
+complete, successful live end-to-end payout, with no changes to module registration, backend accounting
+architecture, or any other module's behavior:
+
+- **Main-thread dispatch fix** — pinned-target verification (and every other Dalamud/FFXIVClientStructs touch in
+  the payout engine) was being reached after an awaited HTTP call had already hopped off the framework thread,
+  throwing `Not on main thread!`. Fixed by routing every such call through the existing `IFrameworkDispatcher`
+  abstraction. See `docs/BINGO_PAYOUT_MAIN_THREAD_HOTFIX.md`.
+- **Gil-entry fix** — the engine's original gil-entry mechanism (a rendered-text button search plus a raw
+  component-field write) never actually staged anything in the real Trade window. Replaced with the donor Bingo
+  plugin's own proven-in-production mechanism (`ECommons.Automation.Callback.Fire`, the game's native
+  addon-callback protocol), plus a new mandatory positive read-back of the staged amount before ever proceeding.
+  See `docs/BINGO_PAYOUT_GIL_ENTRY_HOTFIX.md`.
+- **Ready/Confirm fix** — the same class of defect one stage later: the Trade window's Ready/Confirm control was
+  also not discoverable by rendered text. Fixed using the donor's own proven fixed-node-index discovery, and the
+  immediately-following SelectYesno confirmation step was hardened to verify the dialog's own prompt content
+  (matching the game's localized Trade-confirmation string) before ever confirming it, so an unrelated Yes/No
+  dialog can never be clicked. See `docs/BINGO_PAYOUT_READY_CONFIRM_HOTFIX.md`.
+- **Result:** a full live test subsequently paid out a real 6,500,000-gil obligation end to end — six confirmed
+  1,000,000-gil chunks plus one correctly-derived 500,000-gil remainder, reconciled through the server-authoritative
+  ledger to `paid: 6,500,000`, `outstanding: 0` — with an earlier `failed · 1,000,000` attempt correctly retained
+  in transaction history without ever counting toward paid. See `BINGO_PAYOUT_AUTOMATION_DEFERRED.md` for the
+  consolidated current status.
+- Throughout all three phases: ambiguous outcomes are still never treated as unpaid, never auto-retried, and still
+  require manual reconciliation (`Mark Paid`/`Mark Not Paid`); the backend/server ledger remains the sole
+  authoritative source for paid/outstanding — VenueOS never adopted the donor's own historical in-memory accounting
+  approach. Existing historical `ambiguous` transaction records were left untouched.
+- All 13 production modules remain enabled by default; no module's registration or behavior changed in this
+  release beyond the Bingo payout engine fixes above.
 
 ## 0.3.1 maintenance release
 
@@ -103,8 +135,9 @@ VenueOS never automatically imports, consumes, or overwrites standalone plugin c
 
 ## Deferred capabilities
 
-- Bingo automated trade/payout operations remain experimental — see `BINGO_PAYOUT_AUTOMATION_DEFERRED.md` (a live self-trade abuse test confirmed no false-success/unintended payout, but the automation engine's game-facing assumptions are still not fully live-verified).
 - Any addon-memory automation not separately version-gated and in-game validated.
+
+Bingo automated trade/payout operations are no longer deferred as of 0.3.2 — a full live end-to-end test (target verification, Trade UI interaction, actual gil transfer, multi-chunk payout, and server-ledger reconciliation) completed successfully; see `BINGO_PAYOUT_AUTOMATION_DEFERRED.md` for the current status and the three `BINGO_PAYOUT_*_HOTFIX.md` reports for what was fixed to get there.
 
 ShoutRunner's own travel/World-Visit/teleport/Lifestream automation is no longer deferred as of 0.2.0 (crash recovery and the same-Data-Center reliability fix above were both live-tested). See `PARTY_FINDER_PHASE_2D.md` for Party Finder's own deferred items.
 

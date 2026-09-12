@@ -14,6 +14,26 @@ public sealed record BingoTradeResult(BingoTradeOutcome Outcome, string? Observe
     public static BingoTradeResult Ambiguous(string detail) => new(BingoTradeOutcome.Ambiguous, Detail: detail);
 }
 
+/// <summary>Pure, unit-testable derivation of the terminal, human-readable engine status text for any
+/// <see cref="BingoTradeResult"/>. Exists specifically to guarantee the live engine's own operator-visible
+/// <see cref="IBingoPayoutAutomation.Status"/> always reflects a finished outcome once an attempt has actually
+/// ended — never left showing a stale in-progress message (e.g. "Verifying pinned target...") after the attempt
+/// returned or threw. This was a live-QA-confirmed defect: a self-trade test's target verification threw
+/// "Not on main thread!" (see docs/BINGO_PAYOUT_MAIN_THREAD_HOTFIX.md), the attempt correctly resolved to
+/// Ambiguous, but the engine's <c>Status</c> field was never updated on that path and kept showing
+/// "Verifying pinned target ..." even though the attempt had already ended — producing the internally
+/// inconsistent "Idle" / "Verifying pinned target ..." double-status the operator panel displayed at once.</summary>
+public static class BingoTradeResultStatusText
+{
+    public static string Describe(BingoTradeResult result) => result.Outcome switch
+    {
+        BingoTradeOutcome.Confirmed => "Trade complete.",
+        BingoTradeOutcome.Canceled => string.IsNullOrWhiteSpace(result.Detail) ? "Canceled." : $"Canceled — {result.Detail}",
+        BingoTradeOutcome.Failed => $"Failed — {result.Detail}",
+        _ => $"Ambiguous — {result.Detail}",
+    };
+}
+
 /// <summary>The boundary around unsafe, game-version-sensitive Bingo payout (in-game trade) automation — mirrors
 /// <c>VenueOS.Modules.Operations.PartyFinder.IPartyFinderAutomation</c>'s shape and role exactly (see
 /// PARTY_FINDER_RECONSTRUCTION.md / NEW_MODULE_GUIDE.md §30). Implemented by the real, unsafe

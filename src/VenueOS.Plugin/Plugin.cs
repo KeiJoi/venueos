@@ -170,7 +170,7 @@ public sealed class Plugin : IDalamudPlugin
         // unsafe in-game payout-trade automation engine (VenueOS.Plugin.Bingo.BingoPayoutAutomationService),
         // mirroring exactly how Party Finder's automation is wired above — see that engine's own doc comment for
         // the full list of LIVE VERIFICATION REQUIRED assumptions it makes (never exercised against a live client).
-        var bingoClient = new VenueBingoClient(new HttpClient { Timeout = TimeSpan.FromSeconds(10) }); var bingoService = new VenueBingoService(bingoClient, venues, diagnostics, chat); bingoService.DiagnosticEvent += msg => Log.Debug($"[Bingo] {msg}"); bingoPayoutAutomation = new VenueOS.Plugin.Bingo.BingoPayoutAutomationService(ClientState, ChatGui, TargetManager, Log, diagnostics); var bingoPayoutOrchestrator = new BingoPayoutOrchestrator(bingoPayoutAutomation, bingoClient);
+        var bingoClient = new VenueBingoClient(new HttpClient { Timeout = TimeSpan.FromSeconds(10) }); var bingoService = new VenueBingoService(bingoClient, venues, diagnostics, chat); bingoService.DiagnosticEvent += msg => Log.Debug($"[Bingo] {msg}"); bingoPayoutAutomation = new VenueOS.Plugin.Bingo.BingoPayoutAutomationService(ClientState, ChatGui, TargetManager, DataManager, Log, diagnostics, new DalamudFrameworkDispatcher(Framework)); var bingoPayoutOrchestrator = new BingoPayoutOrchestrator(bingoPayoutAutomation, bingoClient);
         // Party Finder is VenueOS-owned end to end: no live reference to the donor project. The unsafe automation
         // engine (VenueOS.Plugin.PartyFinder.PartyFinderAutomationService) depends only on VenueOS's own Dalamud
         // service instances and DiagnosticsService — never the donor's static Service locator or PluginConfiguration.
@@ -403,6 +403,30 @@ internal sealed class DalamudObjectSnapshotProvider(IObjectTable objects, IClien
 internal sealed class DalamudSessionStateProvider(IClientState clientState) : VenueOS.Services.ISessionStateProvider
 {
     public bool IsLoggedIn => clientState.IsLoggedIn;
+}
+
+/// <summary>Production <see cref="IFrameworkDispatcher"/> backed by Dalamud's real <see cref="IFramework.RunOnFrameworkThread(Action)"/>
+/// — the established mechanism this codebase already uses for marshaling unsafe/addon/target-table touches onto
+/// the game's main/framework thread (see <c>ShoutRunnerAutomationService</c>'s own hand-rolled equivalent of this
+/// exact TaskCompletionSource-plus-cancellation-registration pattern). Wired up for
+/// <c>VenueOS.Plugin.Bingo.BingoPayoutAutomationService</c> (BINGO_PAYOUT_MAIN_THREAD_HOTFIX.md) so its async
+/// payout-attempt flow never touches Dalamud game-state APIs from whatever arbitrary thread-pool thread an awaited
+/// network call happened to resume on. <see cref="VenueOS.Services.InlineFrameworkDispatcher"/> remains the
+/// Dalamud-free fake used by anything under test — this class is the only real implementation and, like every
+/// other Dalamud-touching adapter in this file, is never itself unit-tested (NEW_MODULE_GUIDE.md §30).</summary>
+internal sealed class DalamudFrameworkDispatcher(IFramework framework) : IFrameworkDispatcher
+{
+    public async Task<T> InvokeAsync<T>(Func<T> action, CancellationToken cancellationToken)
+    {
+        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var reg = cancellationToken.Register(() => tcs.TrySetCanceled(cancellationToken));
+        _ = framework.RunOnFrameworkThread(() =>
+        {
+            try { tcs.TrySetResult(action()); }
+            catch (Exception ex) { tcs.TrySetException(ex); }
+        });
+        return await tcs.Task.ConfigureAwait(false);
+    }
 }
 
 /// <summary>Backs VIP's "Use Current Target" autofill via Dalamud's supported <see cref="ITargetManager"/> — never

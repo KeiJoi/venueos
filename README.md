@@ -6,7 +6,7 @@ VenueOS is a [Dalamud](https://dalamud.dev) plugin for Final Fantasy XIV: a sing
 
 **Working, live-tested:** Attendance, Greeter, VIP, ShoutRunner, Party Finder, Mair's Trivia, Mair's Editor, Bingo, Raffle, Brackets, Block Letters, Giveaways, Macro.
 
-Every module VenueOS currently ships is production-ready and enabled by default. (Bingo's automated payout remains a separate, still-experimental convenience feature within an otherwise release-ready module — see the User Manual's Bingo section — and Macro's live tile-to-hotbar drag/drop has one known, non-blocking issue; both are documented in the User Manual's Known Issues.)
+Every module VenueOS currently ships is production-ready and enabled by default, including Bingo's automated payout — see the User Manual's Bingo section and `BINGO_PAYOUT_AUTOMATION_DEFERRED.md` for its live-verified status.
 
 Each module is a small application inside VenueOS — see [NEW_MODULE_GUIDE.md](NEW_MODULE_GUIDE.md) for the full architecture if you're extending it.
 

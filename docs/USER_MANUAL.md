@@ -1,6 +1,6 @@
 # VenueOS User Manual
 
-**Current version:** 0.3.1
+**Current version:** 0.3.2
 **What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, live host trivia, Bingo, raffles, tournament brackets, block-letter text composition, timed giveaways, and extended macros.
 **Supported environment:** Windows FFXIV with Dalamud installed (API level 15). VenueOS is unofficial, third-party, and not affiliated with Square Enix or the Dalamud/XIVLauncher project.
 
@@ -114,7 +114,7 @@ You can also switch venues quickly from the toolbar's dropdown, without going in
 Found under **Settings → General**:
 
 - **"Open modules in separate windows"** toggle (Auto Pop-Out). Off by default. When on, launching a module from Home opens (or focuses) its own detached window instead of embedding it in the tablet. This applies the same way for every venue and doesn't change when you switch venues. Settings itself is unaffected by this toggle and always opens embedded.
-- An **About VenueOS** card showing a version line (the actual installed release version, e.g. "VenueOS 0.3.1") and a one-line description of what VenueOS is.
+- An **About VenueOS** card showing a version line (the actual installed release version, e.g. "VenueOS 0.3.2") and a one-line description of what VenueOS is.
 
 **Settings → Modules** is where you enable/disable modules and jump into each one's own settings — see [Basics](#2-venueos-basics) above.
 
@@ -538,7 +538,7 @@ When a player's card completes the pattern, a detached **Bingo Call Alert** wind
 
 **Sync Payouts** is the only way a payout obligation gets created — VenueOS never lets you manually pick a "winner" to pay. Once synced, each obligation shows who's owed what, how much has been confirmed paid, and how much remains outstanding.
 
-**Automatic payout is an optional, experimental convenience feature — not a fully verified path.** Pressing **Attempt Payout** requires first checking an "I understand this requires live testing" acknowledgment and entering a target (with its own Use Current Target button). A live self-trade test intentionally tried to abuse this: the attempt did **not** falsely report success — it came back **Ambiguous**, and no unintended payout occurred. An ambiguous result is explicitly *not* the same as unpaid — it always needs manual reconciliation, never an automatic retry. Use **Mark Paid** / **Mark Not Paid** (each behind its own confirmation) once you've independently confirmed what actually happened, or simply hand out winnings through a normal in-game trade and reconcile the ledger manually — either is a supported way to run payouts today.
+**Automatic payout uses server-backed transaction tracking and has completed successful live end-to-end testing** — target verification, the real Trade window, gil staging, Ready/Confirm, confirmation handling, actual gil transfer, multi-chunk payouts, and the correctly-derived final remainder chunk all passed live QA (see `docs/BINGO_PAYOUT_READY_CONFIRM_HOTFIX.md`). Pressing **Attempt Payout** still requires first checking an "I understand this requires live testing" acknowledgment each session and entering a target (with its own Use Current Target button) — payout automation always moves real gil, so this deliberate per-session confirmation stays in place regardless of how well-tested the engine is. An **Ambiguous** result — the automation being honest that it could not confirm the outcome either way — is explicitly *not* the same as unpaid and always needs manual reconciliation, never an automatic retry. Use **Mark Paid** / **Mark Not Paid** (each behind its own confirmation) once you've independently confirmed what actually happened, or simply hand out winnings through a normal in-game trade and reconcile the ledger manually — either is a supported way to run payouts today.
 
 ### Leaving / Resuming / Closing
 
@@ -811,7 +811,7 @@ Once VenueOS is installed from the Experimental Plugin Repository, updates arriv
 
 These are documented, non-blocking caveats in the current release — none of them require the affected module to be disabled or treated as unfinished.
 
-- **Bingo's automated payout remains an experimental convenience feature**, not a fully verified path — see the [Bingo](#12-bingo) section and [Troubleshooting](#20-troubleshooting) above. Manual reconciliation via Mark Paid/Mark Not Paid, or a normal in-game trade, is always available and fully supported.
+- **Bingo's automated payout has completed live end-to-end testing** and uses server-backed transaction tracking as its source of truth for paid/outstanding — see the [Bingo](#12-bingo) section and [Troubleshooting](#20-troubleshooting) above. An ambiguous outcome is still not the same as unpaid and always requires manual reconciliation, never an automatic retry; Mark Paid/Mark Not Paid, or a normal in-game trade, remain fully supported.
 
 ---
 

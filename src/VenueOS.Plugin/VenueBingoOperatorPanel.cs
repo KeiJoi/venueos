@@ -26,8 +26,13 @@ namespace VenueOS.Plugin;
 ///
 /// Payout automation (<see cref="payoutOrchestrator"/>/<see cref="payoutAutomation"/>) is deliberately NOT reachable
 /// without the operator explicitly checking "I understand this requires live testing" every session (never
-/// persisted) — this reconstruction's engine has never been exercised against a live game client (see
-/// BingoPayoutAutomationService's doc comment for the full list of LIVE VERIFICATION REQUIRED assumptions).</summary>
+/// persisted) — kept as a standing per-session confirmation because this path always moves real gil, not because
+/// the engine is unverified: as of 0.3.2 it has completed successful live end-to-end testing across target
+/// verification, Trade UI interaction, multi-chunk payout, and server-ledger reconciliation (see
+/// docs/BINGO_PAYOUT_MAIN_THREAD_HOTFIX.md, docs/BINGO_PAYOUT_GIL_ENTRY_HOTFIX.md, and
+/// docs/BINGO_PAYOUT_READY_CONFIRM_HOTFIX.md for the full history, and BingoPayoutAutomationService's own doc
+/// comment for the handful of narrow LIVE VERIFICATION REQUIRED assumptions that remain, e.g. non-English chat/UI
+/// text).</summary>
 internal sealed class VenueBingoOperatorPanel
 {
     private readonly VenueBingoService service;
@@ -649,7 +654,7 @@ internal sealed class VenueBingoOperatorPanel
     private void DrawPayoutSection(VenueTheme theme)
     {
         UiKit.BeginSectionCard("bingo-payouts", theme, "Payout Ledger");
-        ImGui.TextWrapped("Automatic in-game trade payout has never been verified against a live client — see Settings → Diagnostics for engine errors. An ambiguous outcome is NOT the same as unpaid: it always requires manual reconciliation below, never an automatic retry.");
+        ImGui.TextWrapped("Automatic in-game trade payout uses server-backed transaction tracking and has completed successful live end-to-end testing — see Settings → Diagnostics for engine errors. An ambiguous outcome is NOT the same as unpaid: it always requires manual reconciliation below, never an automatic retry.");
         ImGui.Spacing();
 
         DrawCallerStatus(theme);
