@@ -26,7 +26,7 @@ internal sealed class GiveawaysTrackerWindow(Action onOpenSettings)
         var closeRequested = false;
         if (ImGui.Begin("###venueos-giveaways-tracker", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse))
         {
-            ModuleWindowHeader.Draw(theme, "gift", "Giveaways — Roll Tracker", onOpenSettings, () => closeRequested = true);
+            ModuleWindowHeader.Draw(theme, "gift", "Giveaways — Roll Tracker", "giveaways-roll-tracker", onOpenSettings, () => closeRequested = true);
             ImGui.BeginChild("giveaways-tracker-window-content", ImGui.GetContentRegionAvail(), false);
             panel.DrawTracker(theme);
             ImGui.EndChild();

@@ -1,3 +1,4 @@
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Plugin.Services;
 using ECommons.Automation.NeoTaskManager;
 using FFXIVClientStructs.FFXIV.Client.System.Memory;
@@ -67,6 +68,7 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
     private static readonly TimeSpan CheckboxSyncSoftTimeout = TimeSpan.FromSeconds(2);
 
     private readonly IClientState clientState;
+    private readonly ICondition condition;
     private readonly IPluginLog log;
     private readonly DiagnosticsService diagnostics;
 
@@ -86,9 +88,10 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
 
     private enum AutomationState { Idle, Running, Ending }
 
-    public PartyFinderAutomationService(IClientState clientState, IPluginLog log, DiagnosticsService diagnostics)
+    public PartyFinderAutomationService(IClientState clientState, ICondition condition, IPluginLog log, DiagnosticsService diagnostics)
     {
         this.clientState = clientState;
+        this.condition = condition;
         this.log = log;
         this.diagnostics = diagnostics;
         taskManager = CreateTaskManager();
@@ -219,24 +222,64 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
 
     private bool PrepareOperation(bool requireExistingListing)
     {
-        if (!clientState.IsLoggedIn)
+        if (TryGetContextInvalidReason(out var invalidReason))
         {
-            SetStatus("Not logged in.");
-            return true;
+            return StopGracefully($"Party Finder automation skipped — {invalidReason}. It will retry on the next request.");
         }
 
         if (requireExistingListing && !HasOwnListing)
         {
-            SetStatus("Refresh requested, but no own listing is active.");
-            return true;
+            return StopGracefully("Refresh requested, but no own listing is active.");
         }
 
         SetStatus("Preparing Party Finder automation.");
         return true;
     }
 
+    /// <summary>Reliability hardening (production symptom: intermittent refresh failures): a character mid-zone-
+    /// transition, mid-logout, or genuinely logged out cannot have its Party Finder addon meaningfully opened —
+    /// retrying <see cref="EnsureMainAddonReady"/>'s normal addon-discovery loop against that state can only ever
+    /// burn through the full <see cref="MainAddonOpenTimeout"/> and end in a confusing "Failed to detect a visible
+    /// Party Finder window" diagnostic, even though the real cause (a loading screen that legitimately took longer
+    /// than 8 seconds, or the player logging out) was never a compatibility/addon problem at all. Checked once at
+    /// the start of every operation (<see cref="PrepareOperation"/>) and again on every tick of the longest-running
+    /// wait (<see cref="EnsureMainAddonReady"/>, shared by Create/Edit/Refresh's "open_pf" step and End Party
+    /// Finder's "end_open_pf" step) so an attempt that starts clean but the player then zones mid-wait stops
+    /// promptly instead of waiting out the clock. Mirrors the same <c>ConditionFlag.BetweenAreas</c>/
+    /// <c>BetweenAreas51</c>/<c>LoggingOut</c> signals <c>ShoutRunnerAutomationService</c> already uses for this
+    /// exact purpose (NEW_MODULE_GUIDE.md §6's "use the current established framework-thread/game-state patterns"),
+    /// not an invented signal.</summary>
+    private bool TryGetContextInvalidReason(out string reason)
+    {
+        if (!clientState.IsLoggedIn)
+        {
+            reason = "not logged in";
+            return true;
+        }
+
+        if (condition[ConditionFlag.LoggingOut])
+        {
+            reason = "logging out";
+            return true;
+        }
+
+        if (condition[ConditionFlag.BetweenAreas] || condition[ConditionFlag.BetweenAreas51])
+        {
+            reason = "zoning";
+            return true;
+        }
+
+        reason = string.Empty;
+        return false;
+    }
+
     private bool EnsureMainAddonReady()
     {
+        if (TryGetContextInvalidReason(out var invalidReason))
+        {
+            return StopGracefully($"Party Finder automation stopped — {invalidReason}. It will retry on the next request.");
+        }
+
         var now = DateTime.UtcNow;
         if (mainAddonOpenStartedUtc == DateTime.MinValue)
         {
@@ -1171,6 +1214,22 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
         Status = status;
         log.Error("[{Module}] {Status}", ModuleId, status);
         diagnostics.RecordFailure($"{ModuleId}: {status}");
+        taskManager.Abort();
+        state = AutomationState.Idle;
+        return true;
+    }
+
+    /// <summary>Like <see cref="FailAndAbort"/> — stops the in-flight chain and returns automation to
+    /// <see cref="AutomationState.Idle"/> — but for an expected, non-alarming reason (context temporarily invalid,
+    /// no active listing to refresh) rather than a real automation defect. Deliberately never calls
+    /// <see cref="DiagnosticsService.RecordFailure"/>: NEW_MODULE_GUIDE.md §24a is explicit that an expected
+    /// cancellation/precondition-not-met outcome must not be routed through Diagnostics as if it were a scary
+    /// operator-facing error. The next normal trigger (the native 5-minute warning, or an explicit operator click)
+    /// retries cleanly — nothing here poisons future attempts.</summary>
+    private bool StopGracefully(string status)
+    {
+        Status = status;
+        log.Information("[{Module}] {Status}", ModuleId, status);
         taskManager.Abort();
         state = AutomationState.Idle;
         return true;

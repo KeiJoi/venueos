@@ -1,6 +1,70 @@
-# VenueOS 0.3.6 release
+# VenueOS 0.3.7 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.7 — Maintenance, Module Launcher & Window Management
+
+A maintenance release covering three areas: Party Finder refresh/lifecycle hardening, Mair's Trivia gameplay
+behavior documentation, and a new Module Launcher with shared window Collapse/Minimize management. No module's
+core operational behavior beyond Party Finder's refresh handling changed in this release.
+
+### Party Finder
+
+Hardening pass over Party Finder's refresh/lifecycle handling, prompted by an intermittent refresh-failure report:
+
+- **Overlapping refresh handling hardened.** The Create/Refresh/Edit buttons are now disabled while a refresh
+  is already in progress, and a redundant trigger (a second click, or the automatic 5-minute warning landing
+  mid-manual-edit) is ignored instead of aborting and restarting the in-flight attempt.
+- **Manual/automatic refresh collisions prevented**, in both directions — a manual action in progress blocks an
+  automatic refresh, and an automatic refresh in progress blocks a manual action.
+- **Improved busy-state behavior** — clear on-screen feedback (disabled buttons) while a refresh is running,
+  rather than silently allowing another to queue behind it.
+- **Graceful handling of invalid game context** during zoning, logout, or between-areas transitions — an attempt
+  that starts or continues during an invalid context now stops quietly instead of burning a timeout and reporting
+  a confusing diagnostic error.
+- **Corrected chat-event lifecycle cleanup** — a leaked chat-message subscription on plugin reload/unload (which
+  could leave a stale handler registered against a disposed service) is fixed.
+
+This is refresh/lifecycle **hardening**, not a claim that the historical intermittent refresh symptom has been
+conclusively eliminated — that symptom was intermittent by nature and benefits from continued real-world
+observation. See `docs/PARTY_FINDER_HARDENING.md` for the full technical record.
+
+### Mair's Trivia
+
+Three gameplay-scoring/UX behaviors, fixed on the backend and now live-QA confirmed end to end through VenueOS's
+operator console:
+
+- **Unanswered questions now receive the configured incorrect-answer scoring** — a player can no longer avoid
+  being scored by simply not answering.
+- **Answer changes are supported while a question remains open** — a player's first answer submits immediately;
+  changing it afterward asks for confirmation (or **Keep Current** to leave it as-is), and can be repeated as many
+  times as time allows.
+- **Changing an answer resets timing credit to the new answer's authoritative submission time** — the final
+  answer at question close is what's scored, including its own timing for the first-correct bonus.
+- **Series Answer Reveal now shows current-game standings**, not cumulative Series standings, during a multi-Game
+  Series.
+
+These behaviors are backed by the separately updated Mair's Trivia backend service; VenueOS itself required no
+source changes, since it already displayed the corrected, authoritative data without modification — see
+`docs/MAIRS_TRIVIA_GAMEPLAY_HARDENING.md` for the full architectural trace and live-QA record.
+
+### Module Launcher / Window Management
+
+- **New compact, icon-only Module Launcher** — a small, always-available hotbar, independent of the main tablet,
+  for opening, focusing, and restoring any eligible module's window.
+- **Hover tooltips** identify each launcher icon's full module name.
+- **Custom launcher order and per-module visibility**, configured from **Settings → Launcher**.
+- **Configurable Buttons Per Row**, wrapping into horizontal, grid, or vertical layouts as needed.
+- **Launcher move/resize/lock**, with position/size/lock state persisted globally across reloads.
+- **`/venueos launcher`** toggles the launcher directly from chat.
+- **Collapse/Minimize/Restore for detached module windows** — Collapse shrinks a window to a compact header
+  strip; Minimize hides it entirely (restore it from the Launcher); both are purely presentational and never
+  affect the module's actual operation (an active Party Finder refresh, a running Macro, a live Trivia game, and
+  so on all keep running normally while collapsed or hidden).
+- **Main VenueOS tablet Collapse/Expand** — the main tablet can now also collapse to a compact header and expand
+  back to its previous size, independent of the Module Launcher and any detached windows.
+
+Live-QA verified in Dalamud — see `docs/MODULE_LAUNCHER_WINDOW_MANAGEMENT.md` for the full implementation record.
 
 ## 0.3.6 — Shouts Live Layout Hotfix
 

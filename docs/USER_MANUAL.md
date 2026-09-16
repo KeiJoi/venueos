@@ -1,6 +1,6 @@
 # VenueOS User Manual
 
-**Current version:** 0.3.6
+**Current version:** 0.3.7
 **What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, live host trivia, Bingo, raffles, tournament brackets, block-letter text composition, timed giveaways, extended macros, and manual Shout announcements.
 **Supported environment:** Windows FFXIV with Dalamud installed (API level 15). VenueOS is unofficial, third-party, and not affiliated with Square Enix or the Dalamud/XIVLauncher project.
 
@@ -8,7 +8,7 @@
 
 You can also read this manual inside VenueOS itself — click the **User Manual** tile on Home (just before Settings), no internet connection required.
 
-This manual describes the current release only. It does not describe planned features, and it does not describe how any donor/standalone plugin VenueOS was built from used to behave where VenueOS now differs. See [Known Issues](#24-known-issues) for the small number of documented, non-blocking caveats in this release.
+This manual describes the current release only. It does not describe planned features, and it does not describe how any donor/standalone plugin VenueOS was built from used to behave where VenueOS now differs. See [Known Issues](#25-known-issues) for the small number of documented, non-blocking caveats in this release.
 
 ---
 
@@ -91,7 +91,7 @@ VenueOS presents itself as a tablet with one persistent toolbar and a content ar
 
 ## 3. Venue Profiles
 
-A **Venue Profile** represents one venue identity: a name and a theme, plus whichever module settings are stored per-venue (most of them are — see the [Persistence](#20-persistence) table).
+A **Venue Profile** represents one venue identity: a name and a theme, plus whichever module settings are stored per-venue (most of them are — see the [Persistence](#21-persistence) table).
 
 Manage venues under **Settings → Venue**:
 
@@ -106,7 +106,7 @@ You can also switch venues quickly from the toolbar's dropdown, without going in
 
 **Switching away from an active Mair's Trivia game:** if Mair's Trivia has a game running in the venue you're leaving, switching shows a confirmation: *"Mair's Trivia has an active game ("<game name>") running in this venue. Switching venues will end this game for all connected players. This will not end the Series it may belong to."* Confirming ends that game (but never the Series it's part of, which stays resumable). No other module currently has a venue-switch warning.
 
-**Global vs. venue-specific:** module enabled/disabled state, the Auto Pop-Out preference, and the Mair's Editor question library are global (shared across every venue). Everything else module-specific — connection settings, presets, rosters, recruitment criteria — is per-venue. See [Persistence](#20-persistence) for the full breakdown.
+**Global vs. venue-specific:** module enabled/disabled state, the Auto Pop-Out preference, the Module Launcher's configuration, every module's remembered window geometry, and the Mair's Editor question library are global (shared across every venue). Everything else module-specific — connection settings, presets, rosters, recruitment criteria — is per-venue. See [Persistence](#21-persistence) for the full breakdown.
 
 ---
 
@@ -119,7 +119,9 @@ Found under **Settings → General**:
 
 **Settings → Modules** is where you enable/disable modules and jump into each one's own settings — see [Basics](#2-venueos-basics) above.
 
-**Settings → Diagnostics** shows a filterable log of recent errors and configuration-recovery warnings (filters: **Log Level** — All Levels/Errors/Warnings, **Module**, and a **Search** box), plus **Clear** and **Copy** buttons and small stat tiles (Total Entries, Errors, Warnings, Last Update). Useful for troubleshooting — see [Troubleshooting](#21-troubleshooting).
+**Settings → Diagnostics** shows a filterable log of recent errors and configuration-recovery warnings (filters: **Log Level** — All Levels/Errors/Warnings, **Module**, and a **Search** box), plus **Clear** and **Copy** buttons and small stat tiles (Total Entries, Errors, Warnings, Last Update). Useful for troubleshooting — see [Troubleshooting](#22-troubleshooting).
+
+**Settings → Launcher** configures the Module Launcher — see [Module Launcher & Window Management](#20-module-launcher--window-management) below.
 
 ---
 
@@ -329,6 +331,8 @@ The main action button reads **Recruit Members** when nothing is posted yet, and
 - **Abort** — cancels whatever automation is currently doing, without withdrawing your listing or touching Auto Refresh.
 - **End Party Finder** (red button) — turns off Auto Refresh for this venue *and* withdraws the active listing. Auto Refresh stays off afterward until you turn it back on yourself in Settings.
 
+**Refresh reliability hardening:** the Create/Refresh/Edit buttons are now disabled while a refresh is already in progress, so clicking again mid-refresh can't restart or collide with it — a redundant click (or an automatic 5-minute warning landing mid-manual-edit) is simply ignored rather than aborting your in-flight attempt. If you zone, log out, or are between areas when a refresh would run, it now stops quietly instead of showing a confusing "Failed to detect a visible Party Finder window" error; the next warning or manual click retries normally once you're back in a valid state. Abort is always available regardless.
+
 ### What you'll see happen
 
 Party Finder automation visibly opens the native FFXIV Party Finder window (and its sub-screens) to do its work, then closes it again when done — this is expected, not an error. A status line shows what's happening ("Opening Party Finder.", etc.), and a **Compatibility verified / Compatibility pending** badge indicates whether VenueOS has confirmed it can see the Party Finder UI correctly yet. It keeps working (refreshing, ending) even if you close the Party Finder module's own window.
@@ -398,7 +402,7 @@ Configured in **Settings → Modules → Mair's Trivia**:
 - **Username**
 - **Password**
 
-All four fields are plain, visible, readable text — none are password-masked. This is a deliberate product decision so venue staff can copy/share connection configuration easily. Treat your VenueOS configuration accordingly (see [Data / Privacy notes](#22-data--privacy--credential-notes)).
+All four fields are plain, visible, readable text — none are password-masked. This is a deliberate product decision so venue staff can copy/share connection configuration easily. Treat your VenueOS configuration accordingly (see [Data / Privacy notes](#23-data--privacy--credential-notes)).
 
 These settings are saved per venue. If you've previously signed in and a stored session token exists, VenueOS reconnects automatically when you switch to that venue — no manual sign-in needed. If your session expires while working, VenueOS tries to silently renew it, and if that fails, quietly falls back to signing in again with your stored username/password. Only if *both* fail do you see an error badge (*"Session expired and automatic sign-in failed."*) — at that point sign in again manually via Settings.
 
@@ -423,7 +427,9 @@ Only sets marked **READY** in Mair's Editor can be selected. When you create a g
 
 **Game standings:** rank, name, correct/answered, and points.
 
-**Timer:** a pre-game "Question timer (0–20s, 0 = untimed)" setting controls how long a question stays open once set at game creation; there's no live countdown display in the operator panel itself, and exactly how answer-locking works at timer expiry is backend behavior VenueOS doesn't expose further detail on.
+**Timer:** a pre-game "Question timer (0–20s, 0 = untimed)" setting controls how long a question stays open once set at game creation; there's no live countdown display in the operator panel itself.
+
+**Answering and changing answers:** a player's first answer submits immediately. While the question is still open, they can change their answer — the player web page asks them to confirm the change (or **Keep Current** to leave their existing answer as-is), and this can be repeated as many times as time allows. Whatever their answer is at the moment you Close the question is what's scored, including the timing credit for a first-correct bonus, which is based on that final submission. A player who never answers before you Close the question is scored as incorrect, using your configured Incorrect answer points (see Scoring below) — they can no longer avoid scoring by simply not answering.
 
 ### Scoring
 
@@ -435,6 +441,8 @@ Configured under **Settings → Modules → Mair's Trivia → Defaults**, applie
 | Incorrect answer points | 0 |
 | First-correct bonus | 50 |
 | Time bonus multiplier | 5 |
+
+A question closed with no answer from a player now applies **Incorrect answer points** to them, exactly as a wrong answer would — see "Answering and changing answers" above.
 
 "Answered" is always **correct + incorrect** — never a raw question count, so a player who joined late isn't penalized for questions they never saw.
 
@@ -452,6 +460,8 @@ A Series is a persistent, multi-Game competition: each Game inside it keeps its 
 - **Back to Setup** on a finished Series is local navigation only, same as for a standalone game.
 
 **Series Players** vs. **Game Players**: Series Players is the full roster of everyone who's joined the Series (including someone who hasn't played a Game yet); Game Players is only whoever's in the currently active Game. **Series standings** are cumulative across every Game in the Series; **Game standings** cover only the current Game. Both show rank, name, correct/answered, and points.
+
+**Answer Reveal during a Series** shows the **current Game's** standings, not the cumulative Series standings — the separate Series standings card elsewhere on screen is where you see the cumulative view.
 
 ### Player management
 
@@ -824,11 +834,44 @@ Every module can run either **embedded** (inside the main VenueOS tablet) or **d
 
 ---
 
-## 20. Persistence
+## 20. Module Launcher & Window Management
+
+**Purpose:** a compact, always-available Module Launcher for opening/restoring any module's own window, plus Collapse/Minimize controls for detached module windows and the main VenueOS tablet itself — independent of, and in addition to, the pop-out behavior described above.
+
+### The Module Launcher
+
+The Module Launcher is a small, separate hotbar window, independent of the main tablet — it can be open whether or not the tablet is. It shows one icon-only button per eligible module.
+
+- **Icon-only buttons.** Each button shows only the module's icon, keeping the launcher compact. Hover any button to see a tooltip with that module's full name.
+- **Show/hide per module.** Configure which modules appear on the launcher from **Settings → Launcher** — a module not shown here is simply skipped, everything else about it is unaffected.
+- **Launcher order.** Reorder launcher buttons independently of Home's own grid, from **Settings → Launcher**.
+- **Buttons Per Row** controls how many buttons appear before the launcher wraps to a new row — set it low for a tall, narrow vertical strip, or high for a wide horizontal bar. If the launcher window is narrower than the configured count actually needs, the row scrolls horizontally instead of silently changing the column count.
+- **Move / resize / lock.** While unlocked, drag the launcher anywhere and resize it like any other window. Lock it (the default) to prevent accidentally moving or resizing it later. Unlock/lock and **Reset Launcher Position** are both in **Settings → Launcher**.
+- **Persistence.** The launcher's position, size, lock state, button order, per-module visibility, and Buttons Per Row are all saved globally (not per-venue) and survive a plugin reload.
+- **`/venueos launcher`** toggles the launcher on/off directly from chat, without needing to open VenueOS itself.
+
+Clicking a launcher button opens that module's window if it's closed, or brings it to front/restores it if it's already open, collapsed, or hidden.
+
+### Collapse and Minimize for detached module windows
+
+Any module running in its own detached window (see [Detached Windows / Auto Pop-Out](#19-detached-windows--auto-pop-out) above) can now be **Collapsed** or **Minimized**, in addition to being closed:
+
+- **Collapse** shrinks the window down to a compact header strip — just the module's icon, name, and its Expand/Minimize/Close buttons — while keeping it visible and in place. Expanding it again restores it at its full size, remembering whatever size it was at before you collapsed it.
+- **Minimize** hides the window entirely. Use the Module Launcher to bring a minimized module back — clicking its launcher button restores it to whichever state (expanded or collapsed) it was in before you minimized it.
+- **Collapse and Minimize are purely presentational.** A module's actual operation — Party Finder's refresh cycle, a running Macro, an active ShoutRunner route, a live Mair's Trivia game — keeps running exactly as normal while its window is collapsed or hidden. Collapsing or minimizing a module's window never pauses, stops, or otherwise affects what it's doing.
+- **Remembered geometry.** Every detached module window's position and (while expanded) size are remembered globally and restored the next time you open it, including across a plugin reload.
+
+### Main VenueOS tablet Collapse/Expand
+
+The main VenueOS tablet itself can now also Collapse, the same way a detached module window can: its header gained a Collapse button that shrinks the whole tablet down to a compact header strip, and Expand restores it to its previous full size and position. This is presentation-only, exactly like collapsing a module window — whatever's running (an active module operation, a detached window, the Module Launcher) is completely unaffected by whether the main tablet is currently collapsed, expanded, or closed. The tablet's Collapsed/Expanded state and geometry are remembered across a plugin reload, the same as everything else in this section.
+
+---
+
+## 21. Persistence
 
 | Scope | Examples |
 |---|---|
-| **Global** (shared by every venue) | Which modules are enabled/disabled, Auto Pop-Out preference, the entire Mair's Editor question library |
+| **Global** (shared by every venue) | Which modules are enabled/disabled, Auto Pop-Out preference, the Module Launcher's configuration (position, size, lock state, button order, per-module visibility, Buttons Per Row), every module window's (and the main tablet's) remembered position/size/Collapsed-or-Expanded state, the entire Mair's Editor question library |
 | **Venue-specific** | ShoutRunner settings (and its recovery checkpoint for an interrupted run), Attendance settings and history (including each opening's own Venue Area Type), Greeter presets/hotbar, VIP roster, Party Finder recruitment criteria, Mair's Trivia connection settings and scoring defaults, Bingo room key and default game settings, Raffle connection settings/defaults/raffles, Brackets connection settings, Block Letters' default destination, Giveaways presets, Macro's macro library and hotbar configuration, Shouts' presets, its 15 slot assignments, and its Last Shout timestamp |
 | **Runtime-only** (does not survive a reload) | ShoutRunner's on-screen terminal history, Mair's Editor's Undo history, Mair's Trivia's/Bingo's/Raffle's/Brackets' reference to "which game/room/raffle/tournament is currently open" (though the game/room/raffle/tournament itself survives on its backend and can be resumed), Block Letters' composition text, Giveaways' in-progress timeline/roll board (including any Announce Winner channel/template touch-up made while a giveaway was running — see [Giveaways](#16-giveaways)), Macro's currently-running execution state, Shouts' in-progress send state (which line it's currently on) |
 
@@ -836,11 +879,15 @@ Disabling a module never erases its saved configuration — re-enabling it picks
 
 ---
 
-## 21. Troubleshooting
+## 22. Troubleshooting
 
 **VenueOS doesn't open by itself.** That's expected — it never opens automatically. Run `/venueos`.
 
 **A module I expect is missing from Applications.** Check **Settings → Modules** — it's probably disabled.
+
+**The Module Launcher isn't showing up.** Run `/venueos launcher` to toggle it on, or check **Settings → Launcher**. If it was recently moved offscreen, use **Reset Launcher Position** there. A module missing from the launcher specifically (but present on Home) means it's hidden from the launcher in Settings → Launcher, not disabled.
+
+**A module's window seems to have vanished.** It's probably Minimized rather than closed — click its icon on the Module Launcher to restore it.
 
 **ShoutRunner won't travel between Worlds.** Confirm Lifestream is installed and working — ShoutRunner depends on it for all world travel but doesn't check for it before letting you press Start. Also check that at least one Data Center and one destination are configured, and check the Run Terminal for the actual failure reason.
 
@@ -876,7 +923,7 @@ Anything logged as an error or warning also appears in **Settings → Diagnostic
 
 ---
 
-## 22. Data / Privacy / Credential Notes
+## 23. Data / Privacy / Credential Notes
 
 - Mair's Trivia's Server-access password/Username/Password, Bingo's Room Key, Raffle's Backend Access Key, and Brackets' Server access password/Organizer key are all stored and displayed **in plain, readable text** by design, so venue staff can easily copy/share connection details. Don't casually share your VenueOS configuration file with people you don't want to see them.
 - Mair's Trivia player/game/Series data, Bingo room/player/payout data, Raffle roster/spin data, and Brackets tournament/bracket data all live on their respective remote backends, not just locally.
@@ -885,7 +932,7 @@ Anything logged as an error or warning also appears in **Settings → Diagnostic
 
 ---
 
-## 23. Updates
+## 24. Updates
 
 Once VenueOS is installed from the Experimental Plugin Repository, updates arrive the normal Dalamud way — the Plugin Installer checks configured repositories periodically (or via Settings → Experimental → "Check for Updates") and offers an update when a newer version is published. You should not need to manually replace any files for a normal release.
 
@@ -893,11 +940,12 @@ Once VenueOS is installed from the Experimental Plugin Repository, updates arriv
 
 ---
 
-## 24. Known Issues
+## 25. Known Issues
 
 These are documented, non-blocking caveats in the current release — none of them require the affected module to be disabled or treated as unfinished.
 
-- **Bingo's automated payout has completed live end-to-end testing** and uses server-backed transaction tracking as its source of truth for paid/outstanding — see the [Bingo](#12-bingo) section and [Troubleshooting](#21-troubleshooting) above. An ambiguous outcome is still not the same as unpaid and always requires manual reconciliation, never an automatic retry; Mark Paid/Mark Not Paid, or a normal in-game trade, remain fully supported.
+- **Bingo's automated payout has completed live end-to-end testing** and uses server-backed transaction tracking as its source of truth for paid/outstanding — see the [Bingo](#12-bingo) section and [Troubleshooting](#22-troubleshooting) above. An ambiguous outcome is still not the same as unpaid and always requires manual reconciliation, never an automatic retry; Mark Paid/Mark Not Paid, or a normal in-game trade, remain fully supported.
+- **Party Finder refresh/lifecycle hardening** (0.3.7) has been implementation-accepted and short-QA'd, but the historical intermittent refresh symptom has not yet been through an extended real-session soak test. If you notice a refresh not going out as expected, a manual **Refresh Active Listing** click remains the reliable fallback — see [Troubleshooting](#22-troubleshooting).
 
 ---
 

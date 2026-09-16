@@ -10,6 +10,10 @@ Every module VenueOS currently ships is production-ready and enabled by default,
 
 Each module is a small application inside VenueOS — see [NEW_MODULE_GUIDE.md](NEW_MODULE_GUIDE.md) for the full architecture if you're extending it.
 
+## Module Launcher & Window Management
+
+A compact, icon-only Module Launcher gives quick access to any module's window independent of the main tablet, with configurable order, visibility, and layout. Detached module windows (and the main tablet itself) support Collapse and Minimize in addition to Close — both are purely presentational and never affect a module's actual running operation. See the User Manual's [Module Launcher & Window Management](docs/USER_MANUAL.md#20-module-launcher--window-management) section for details.
+
 ## User Manual
 
 **[docs/USER_MANUAL.md](docs/USER_MANUAL.md)** — the practical, step-by-step guide for venue operators: installing VenueOS, Venue Profiles, Settings, and full instructions for every module (ShoutRunner, Attendance, Greeter, VIP, Party Finder, Mair's Trivia, Mair's Editor, Bingo, Raffle, Brackets, Block Letters, Giveaways, Macro, Shouts). It's also bundled with the plugin itself and readable offline from VenueOS's Home screen — click the **User Manual** tile, just before Settings.

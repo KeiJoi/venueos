@@ -46,7 +46,7 @@ internal sealed class BingoCallAlertWindow(VenueBingoService service, Action<str
         {
             // The header's own close button dismisses EVERY pending caller — there is no other way to make this
             // window go away, since its visibility is driven entirely by PendingAlertCallers being non-empty.
-            ModuleWindowHeader.Draw(theme, "star", "Bingo Call Alert", onOpenBingo, service.DismissAllBingoAlerts);
+            ModuleWindowHeader.Draw(theme, "star", "Bingo Call Alert", "bingo-call-alert", onOpenBingo, service.DismissAllBingoAlerts);
             ImGui.BeginChild("bingo-call-alert-content", ImGui.GetContentRegionAvail(), false);
             DrawContent(theme, pending);
             ImGui.EndChild();

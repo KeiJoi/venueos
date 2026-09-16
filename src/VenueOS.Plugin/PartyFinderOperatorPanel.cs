@@ -95,7 +95,12 @@ internal sealed class PartyFinderOperatorPanel(PartyFinderService service, Party
 
         ImGui.Spacing();
 
-        var actionsDisabled = service.IsEnding;
+        // Reliability hardening: also disabled while IsBusy (a chain is already in flight — automatic or manual) so
+        // the operator can't repeatedly click these while waiting and unintentionally spam a request that
+        // PartyFinderService now ignores anyway (NEW_MODULE_GUIDE.md-style "require positive readiness before
+        // firing the UI action; do not repeatedly spam the control"). Abort (below) stays enabled at all times as
+        // the explicit way to cancel.
+        var actionsDisabled = service.IsEnding || service.IsBusy;
         ImGui.BeginDisabled(actionsDisabled);
         if (UiKit.PrimaryButton(theme, service.HasOwnListing ? "Edit / Apply Changes" : "Recruit Members")) service.CreateOrUpdate("operator panel");
         ImGui.SameLine();

@@ -50,17 +50,28 @@ public sealed class PartyFinderService(IPartyFinderAutomation automation, VenueP
 
     /// <summary>Donor: <c>PartyFinderAutomation.QueueOperation</c> updates <c>LastRefreshAttemptUtc</c> on every
     /// Create/Edit/Refresh call — manual or automatic — so a manual action also resets the 4-minute auto-refresh
-    /// throttle. Reproduced here identically.</summary>
+    /// throttle. Reproduced here identically.
+    ///
+    /// Reliability hardening: ignored while <see cref="IPartyFinderAutomation.IsBusy"/> — the single-active-refresh
+    /// ownership guard. The automation engine previously accepted a second Create/Edit/Refresh request at any time
+    /// by aborting whatever chain was already in flight and starting over, which meant repeatedly clicking the
+    /// operator panel's action button (a natural response to no immediate visual feedback) could restart the chain
+    /// indefinitely and never let a single attempt reach completion — a plausible, timing-dependent explanation for
+    /// production reports of Party Finder refresh "never working." Both requests apply the identical current preset,
+    /// so skipping a redundant request loses nothing: the attempt already in flight already carries the latest data.
+    /// <see cref="Abort"/> remains available at all times as the explicit, immediate way to cancel and start over.</summary>
     public void CreateOrUpdate(string reason)
     {
-        if (automation.IsEnding) return;
+        if (automation.IsEnding || automation.IsBusy) return;
         MarkRefreshAttempt();
         automation.QueueCreateOrUpdate(Settings.Preset, reason);
     }
 
+    /// <summary>See <see cref="CreateOrUpdate"/>'s doc comment for why a request is ignored (not queued as a second
+    /// attempt) while one is already in flight.</summary>
     public void Refresh(string reason)
     {
-        if (automation.IsEnding) return;
+        if (automation.IsEnding || automation.IsBusy) return;
         MarkRefreshAttempt();
         automation.QueueRefresh(Settings.Preset, reason);
     }
@@ -89,7 +100,12 @@ public sealed class PartyFinderService(IPartyFinderAutomation automation, VenueP
             return;
         }
 
-        if (!Settings.AutoRefreshEnabled || automation.IsEnding)
+        // The IsBusy guard here is the other half of CreateOrUpdate/Refresh's single-active-refresh ownership: the
+        // native 5-minute warning can arrive while the operator is mid-manual Create/Edit/Refresh. Skipping it in
+        // that case (rather than aborting the operator's in-flight action to restart an automatic refresh with the
+        // exact same preset data) never loses the renewal — the manual action in flight already re-submits the
+        // current preset, which resets the listing's visibility exactly like a refresh would.
+        if (!Settings.AutoRefreshEnabled || automation.IsEnding || automation.IsBusy)
         {
             return;
         }

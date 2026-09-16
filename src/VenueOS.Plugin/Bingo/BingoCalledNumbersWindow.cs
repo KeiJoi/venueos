@@ -40,7 +40,7 @@ internal sealed class BingoCalledNumbersWindow(VenueBingoService service, Action
         var closeRequested = false;
         if (ImGui.Begin("###venueos-bingo-called-numbers", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse))
         {
-            ModuleWindowHeader.Draw(theme, "grid", "Bingo — Called Numbers", onOpenBingoSettings, () => closeRequested = true);
+            ModuleWindowHeader.Draw(theme, "grid", "Bingo — Called Numbers", "bingo-called-numbers", onOpenBingoSettings, () => closeRequested = true);
             ImGui.BeginChild("bingo-called-content", ImGui.GetContentRegionAvail(), false);
             DrawContent(theme);
             ImGui.EndChild();

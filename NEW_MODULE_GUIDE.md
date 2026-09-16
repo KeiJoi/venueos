@@ -321,6 +321,137 @@ exactly as documented elsewhere in this guide (§23) regardless of login state �
 configuration and maintain internal state while logged out; it simply doesn't draw anything until the gate allows
 it.
 
+## 20b. Module Launcher & Window Management (0.3.7, hard requirement — automatic, no module code needed)
+
+Every normal module (§28's "Participate" classification below) gets, for free, once it's registered normally
+(§6, §23) and rendered through the standard embedded/detached paths (§18–§20): a Module Launcher button, and a
+detached window that can be Expanded, Collapsed (a compact header-only strip), or Hidden (Minimized) in addition to
+Closed. **This only applies to a module's detached representation** — an embedded module has no separate
+collapse/hide concept; switching away from it is already Home navigation. A new module writes zero code for any of
+this.
+
+**State model** — `VenueOS.Core.ModulePresentationState { Expanded, Collapsed, Hidden }`. A module id absent from
+`VenueOS.Core.ModuleWindowManager`'s tracked set means Closed, matching the original `HashSet<string>` semantics
+exactly — there is no separate `IsClosed` bool. `VenueOS.Core.ModuleWindowPreference(LastState, PosX, PosY, Width,
+Height)` is what gets persisted (`GlobalSettings.ModuleWindowPreferences`, keyed by module id) and what seeds the
+next `Open` — `LastState` is always `Expanded` or `Collapsed`, never `Hidden` (Hidden is not a persisted "opening
+default": opening a module implies wanting to see it).
+
+**Two layers**, exactly like every other piece of ImGui-adjacent state in this codebase (§30's "put as much logic as
+possible below the ImGui boundary" applied to shell infrastructure itself):
+
+1. `VenueOS.Core.ModuleWindowManager` — pure, ImGui-free state machine (unit-tested in
+   `tests/VenueOS.Core.Tests/ModuleWindowManagerTests.cs`): `Open(id, preference?)` → `bool` (idempotent — re-opening
+   an already-open module just requests focus, never applies a stale/late preference to an already-positioned
+   window), `Evict(id)` → `ModuleWindowPreference?` (stops tracking entirely — used for both an explicit Close and
+   disabled-module eviction; the returned snapshot is what the caller persists so eviction never silently discards
+   geometry), `Collapse(id)`, `Expand(id)`, `Hide(id)` (keeps the module tracked, remembers whichever of
+   Expanded/Collapsed it was via an internal `PreHideState`), `Restore(id)` (returns to that remembered state),
+   `RequestFocus(id)`/`ConsumeFocusRequest(id)`, `IsOpen(id)`, `GetState(id)` → `ModulePresentationState?`,
+   `ReportPosition(id, x, y)` (every frame regardless of state), `ReportExpandedSize(id, w, h)` (only while
+   Expanded, so collapsing never overwrites the remembered expanded size), `GetSnapshot(id)` →
+   `ModuleWindowPreference?`. This class has **zero** constructor parameters and no dependency on `IVenueModule` or
+   any service — that's the structural proof (also asserted by a reflection test) that Collapse/Hide/Restore/Close
+   can never reach into a module's operational state.
+2. `VenueOS.Plugin.Shell.ModuleWindowManager` (same class name, different namespace, deliberately — every existing
+   call site (`windowManager.Open(id)` etc. in `HomeScreen`/`AppFrame`/`Plugin.cs`) stays valid unchanged) — wraps
+   one Core instance with the actual `ImGui.Begin`/`End` calls and `GlobalSettingsService` persistence. Per open
+   module id, every frame: `Hidden` → skipped with **no `ImGui.Begin` call at all**. `Collapsed` → fixed compact
+   size forced every frame (`ImGuiCond.Always`, plus `NoResize`), header only, no module content, still draggable via
+   the header's own drag handle. `Expanded` → today's full window + content, with continuous
+   `ReportPosition`/`ReportExpandedSize`. On the single frame a Collapsed window transitions to Expanded (or a fresh
+   `Open` seeds from a persisted preference), position + the remembered size are forced once
+   (`ImGuiCond.Always`), then ImGui resumes normal free move/resize for every subsequent frame.
+
+**Header controls** (`Shell/ModuleWindowHeader.cs`, shared by every detached window and every auxiliary popout —
+see the classification below): an Expanded window shows Collapse, Minimize, Settings, Close; a Collapsed one shows
+only Expand, Minimize, Close — no Settings gear, since a collapsed header draws nothing to configure. Every button's
+id is built from the module's stable `Descriptor.Id`, never the display name (`##detached-collapse-{moduleId}` etc.)
+— an "opt out" auxiliary popout (see below) calls the same `Draw` method with `onToggleCollapse`/`onMinimize` left
+null and gets exactly the original two-button Settings+Close chrome, since it has no presentation state to back new
+buttons for. **Close vs. Minimize are genuinely different, not a redefinition**: Close evicts the module from the
+tracked set entirely (today's exact Close behavior, unchanged) — Minimize keeps it tracked as Hidden so the Launcher
+can restore it and its remembered position/size stays live.
+
+**Persistence & reload semantics.** The hard existing rule (§7, a fixed bug) — no VenueOS window may auto-open on
+load — is unchanged: reload/disable never calls `Open` on anything. The **next explicit** `Open` (a tile click, the
+embedded pop-out button, or a Launcher click) seeds the Core manager from the module's persisted
+`ModuleWindowPreference` instead of a hardcoded default, so a module that was collapsed before reload reopens
+collapsed, at its last position/size. `Shell.ModuleWindowManager` persists a module's snapshot to
+`GlobalSettingsService` at every explicit Collapse/Expand toggle and at Evict (Close or disabled eviction); a final
+`PersistAllOpenGeometry()` flush runs once from `Plugin.Dispose()` so a window that was only ever dragged/resized
+(never explicitly toggled) still remembers its true last position across `/xlreload`.
+
+**Module Launcher** (`Shell/ModuleLauncherWindow.cs`) — a small, always-available hotbar, independent of the main
+tablet, drawn unconditionally every frame gated only on the same central `sessionGate.CanRenderGeneralUi` every
+other VenueOS window already uses (this **is** the documented future Global UI Login Gate attachment point — no new
+gate was built) and on `GlobalSettings.Launcher.Enabled`. Eligible entries = enabled modules, excluding any module id
+with an explicit `ShowOnLauncher[id] == false` — **absence of an entry means shown** (default-on/opt-out), ordered by
+`GlobalSettings.Launcher.ModuleOrder` (falling back to `ModuleHost.Modules` display order for anything not yet
+explicitly ordered) — both are pure, unit-tested functions, `VenueOS.Core.LauncherEntries.Eligible`/`FullOrder`. Row
+wrapping is `VenueOS.Core.LauncherLayout` — a `ButtonsPerRow`-driven column count, deliberately independent of
+`VenueOS.Modules.Operations.Shouts.ShoutsLiveLayout.MaxSlotsPerRow` (unrelated, still fixed at 5). Click routing uses
+only the shared `ModuleWindowManager`'s public surface: Closed → `Open(id)`; Hidden → `Restore(id)`;
+Collapsed/Expanded → `RequestFocus(id)` only (never auto-expands a deliberately collapsed window). A module not
+enabled is never shown as a launcher button at all, matching `HomeScreen.DrawGrid`'s existing precedent of fully
+omitting disabled modules' tiles. Locked (default) forces position/size from `GlobalSettings.Launcher` every frame
+(`ImGuiCond.Always`) with `NoMove|NoResize`; unlocked removes both flags for free native drag/resize, reading
+`ImGui.GetWindowPos()/GetWindowSize()` back into `GlobalSettings.Launcher` every frame they actually change.
+`ButtonsPerRow` stays authoritative and independent of pixel size — a too-narrow window scrolls horizontally
+(`ImGuiWindowFlags.HorizontalScrollbar`) rather than silently changing the column count. `Scale` is a separate,
+secondary density control (`ImGui.SetWindowFontScale` plus explicit icon/button-size scaling), independent of
+`Width`/`Height`. An empty eligible list renders the exact guidance text "No modules are shown on the launcher.
+Configure Launcher in VenueOS Settings." instead of a zero-size window. **Live QA follow-up:** the launcher is
+icon-only by convention now, always — this is no longer a toggleable mode (the original icon+name layout consumed
+too much screen space); the module's full display name is carried entirely by each button's hover tooltip instead.
+
+**Settings → Launcher** (`Shell/LauncherSettingsPage.cs`, wired into `SettingsScreen`'s nav next to Settings →
+Modules): Enable/Show, Lock/Edit, Buttons Per Row, Scale, Reset Launcher Position (resets only
+position/size/scale — never `ButtonsPerRow`/`Locked`/`ModuleOrder`/`ShowOnLauncher`), and a
+per-eligible-module Show-on-Launcher toggle with up/down reorder buttons (no in-launcher drag-reorder — see the
+ordering rationale in `docs/MODULE_LAUNCHER_WINDOW_MANAGEMENT.md`). All changes take effect immediately — every
+control writes straight through `GlobalSettingsService`, and the launcher reads it live every frame; no `/xlreload`
+required.
+
+**`/venueos launcher`** toggles `GlobalSettings.Launcher.Enabled`; turning it on also applies the same offscreen-safe
+default-position fallback "Reset Launcher Position" uses (`LauncherLayout.LooksOffscreen`) if the stored position
+looks invalid, since a chat command runs outside an ImGui frame and can't query `ImGui.GetMainViewport()`.
+
+**Global, not per-venue** — `GlobalSettings.Launcher`/`GlobalSettings.ModuleWindowPreferences` are application
+preferences independent of which venue is active, following §12's own "Auto Pop-Out Modules" precedent exactly:
+never venue-scoped, never reset on a venue switch.
+
+**Classification (§28-style):** every normal operator panel hosted through the generic `AppFrame`/
+`ModuleWindowManager` path gets Launcher + Collapse/Hide support automatically with zero code changes, since none of
+them own their own `ImGui.Begin` — Party Finder, ShoutRunner, Macro (main panel only), Mair's Trivia, Giveaways (main
+panel only), Bingo (main panel only), Raffle, Shouts, Attendance, Greeter, VIP, Brackets/Tournament, Mair's Editor.
+**Opt out, unchanged** — already independent, hand-rolled `IsOpen`-pattern popouts, never registered with
+`ModuleWindowManager`: `BingoCalledNumbersWindow`, `BingoPlayerCardViewerWindow`, `BingoCallAlertWindow`,
+`GiveawaysTrackerWindow`, `MacroEditorWindow`, `GiveawayPresetEditorModal`, `ShoutPresetEditorModal` — no launcher
+entries, no collapse/hide, though the four that use `ModuleWindowHeader.Draw` for chrome consistency get exactly the
+original two-button Settings+Close treatment. Macro's faux hotbars (`MacroHotbarRenderer.cs`) are untouched HUD
+overlays, structurally outside this system entirely. ShoutRunner's own travel-exception gate
+(`SessionPresentationGateService.CanRenderShoutRunnerUi`) stays layered **underneath** presentation state,
+unmodified — a Hidden ShoutRunner window still just means "don't call `ImGui.Begin`," which never touches the gate,
+`IsActive`, or the automation service.
+
+**Live QA follow-up — main tablet Collapse/Expand:** the main VenueOS tablet (`Plugin.cs`'s own `ImGui.Begin`, not a
+module) now also has Collapse/Expand, reusing the exact same `VenueOS.Core.ModuleWindowManager` state-machine class
+and the exact same persisted `GlobalSettings.ModuleWindowPreferences` dictionary as every module window — under a
+reserved key (`"__venueos.tablet__"`) that can never collide with a real module id (real ids are dotted, lowercase,
+namespaced, e.g. `core.attendance`, never leading-underscore). It is tracked through its own separate
+`VenueOS.Core.ModuleWindowManager` instance inside `Shell.ModuleWindowManager` — deliberately **not** the same
+instance/`OpenModuleIds` set the Launcher and `DrawAll` iterate against modules, since that set is cross-checked
+against `ModuleHost.Modules` every frame and would otherwise evict an entry with no matching module id. The tablet is
+never registered with `ModuleHost`/`LauncherEntries`/the Launcher UI, so it never gains a launcher entry and
+collapsing/expanding it never touches module/service/venue state. Its own `open`/`focusRequested` fields are
+unchanged and remain the sole gate on whether the tablet renders at all; Collapse/Expand is a new, independent axis
+layered on top, only meaningful while `open == true`. See `docs/MODULE_LAUNCHER_WINDOW_MANAGEMENT.md`'s "Live QA
+Follow-Up" section for the full design rationale.
+
+See `docs/MODULE_LAUNCHER_WINDOW_MANAGEMENT.md` for the full design rationale, every decision's justification, the
+complete test list, and the live-QA checklist.
+
 ## 21. Known current inconsistencies (documented, not fixed here)
 
 Per the task's documentation-first instruction, these are noted rather than silently corrected:
@@ -791,7 +922,7 @@ A module is not visually complete merely because every control exists and the te
 - [ ] Confirmation dialogs use the shared `ConfirmDialog`, not a raw ImGui modal
 - [ ] Scrolling works and long content doesn't overlap (§35)
 - [ ] Tables/lists remain usable at the minimum supported window size
-- [ ] The detached view works correctly if the module supports it (§19–§20)
+- [ ] The detached view works correctly if the module supports it (§19–§20), including Collapse/Expand and Minimize/Restore (§20b) — a collapsed header shows no module content and no Settings gear, only Expand/Minimize/Close
 - [ ] All four themes (Dark, Light, Neon, Midnight) are respected — no hard-coded colors breaking the visual language (§16, §17)
 - [ ] No important control is clipped at any supported window size
 - [ ] Nothing uses raw/default ImGui presentation where a `UiKit`/`Forms` equivalent exists (§15)
@@ -843,6 +974,8 @@ A module is not visually complete merely because every control exists and the te
 - [ ] Resizing works, no overlap at wide/normal/minimum sizes (§35)
 - [ ] Dark, Light, Neon, Midnight all tested (§17)
 - [ ] Full Visual Definition of Done walked (§41a)
+- [ ] Module Launcher button appears (once enabled) with correct icon/name, opens/focuses/restores correctly for every presentation state (§20b) — no module-specific code required, verify only that nothing about this module blocks the generic path
+- [ ] Detached window's Collapse/Expand and Minimize/Restore controls work correctly and never affect module operational state while hidden (§20b)
 
 **Security**
 - [ ] No credential logged or shown outside Settings' plain-text UI (§9a, §26)

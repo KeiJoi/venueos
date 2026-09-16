@@ -53,7 +53,7 @@ internal sealed class BingoPlayerCardViewerWindow(VenueBingoService service, Act
         var closeRequested = false;
         if (ImGui.Begin("###venueos-bingo-card-viewer", ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoCollapse))
         {
-            ModuleWindowHeader.Draw(theme, "grid", "Bingo — Player Cards", onOpenBingoSettings, () => closeRequested = true);
+            ModuleWindowHeader.Draw(theme, "grid", "Bingo — Player Cards", "bingo-player-cards", onOpenBingoSettings, () => closeRequested = true);
             ImGui.BeginChild("bingo-card-viewer-content", ImGui.GetContentRegionAvail(), false);
             DrawContent(theme);
             ImGui.EndChild();

@@ -18,6 +18,7 @@ internal sealed class SettingsScreen
         new("venue", "home", "Venue", "Profile & identity"),
         new("appearance", "palette", "Appearance", "Themes & colors"),
         new("modules", "grid", "Modules", "Enable & configure"),
+        new("launcher", "launcher", "Launcher", "Quick-access hotbar"),
         new("general", "gear", "General", "System behavior"),
         new("diagnostics", "terminal", "Diagnostics", "Logs & troubleshooting"),
     ];
@@ -27,6 +28,7 @@ internal sealed class SettingsScreen
     private readonly VenueSettingsPage venuePage;
     private readonly AppearanceSettingsPage appearancePage;
     private readonly ModulesSettingsPage modulesPage;
+    private readonly LauncherSettingsPage launcherPage;
     private readonly GeneralSettingsPage generalPage;
     private readonly DiagnosticsSettingsPage diagnosticsPage;
     private int activeCategory;
@@ -36,6 +38,7 @@ internal sealed class SettingsScreen
         venuePage = new VenueSettingsPage(venues, switchCoordinator);
         appearancePage = new AppearanceSettingsPage(venues);
         modulesPage = new ModulesSettingsPage(modules, diagnostics, globalSettings, venues);
+        launcherPage = new LauncherSettingsPage(modules, globalSettings);
         generalPage = new GeneralSettingsPage(diagnostics, globalSettings);
         diagnosticsPage = new DiagnosticsSettingsPage(modules, diagnostics);
     }
@@ -101,6 +104,7 @@ internal sealed class SettingsScreen
             case "venue": venuePage.Draw(theme); break;
             case "appearance": appearancePage.Draw(theme); break;
             case "modules": modulesPage.Draw(theme); break;
+            case "launcher": launcherPage.Draw(theme); break;
             case "general": generalPage.Draw(theme); break;
             default: diagnosticsPage.Draw(theme); break;
         }

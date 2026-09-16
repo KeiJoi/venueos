@@ -180,6 +180,80 @@ public sealed class PartyFinderServiceTests
         Assert.NotEqual(DateTime.MinValue, service.Settings.LastRefreshAttemptUtc);
     }
 
+    // ---- Single active refresh ownership (reliability hardening) ------------------------------------------------
+
+    [Fact] public void A_second_create_or_update_is_ignored_while_the_first_is_still_in_flight()
+    {
+        var (service, _, venueId, automation) = Create();
+        service.Load(venueId);
+
+        service.CreateOrUpdate("first click");
+        service.CreateOrUpdate("second click");
+
+        Assert.Single(automation.CreateOrUpdateCalls);
+    }
+
+    [Fact] public void A_second_refresh_is_ignored_while_the_first_is_still_in_flight()
+    {
+        var (service, _, venueId, automation) = Create();
+        service.Load(venueId);
+        automation.HasOwnListing = true;
+
+        service.Refresh("first click");
+        service.Refresh("second click");
+
+        Assert.Single(automation.RefreshCalls);
+    }
+
+    [Fact] public void Automatic_five_minute_warning_is_ignored_while_a_manual_operation_is_in_flight()
+    {
+        var (service, _, venueId, automation) = Create();
+        service.Load(venueId);
+        automation.HasOwnListing = true;
+
+        service.CreateOrUpdate("operator panel"); // leaves automation.IsBusy true, per the fake
+        service.HandleChatText("Your party recruitment closes in five minutes.");
+
+        Assert.Empty(automation.RefreshCalls);
+    }
+
+    [Fact] public void A_manual_refresh_click_is_ignored_while_an_automatic_refresh_is_in_flight()
+    {
+        var (service, _, venueId, automation) = Create();
+        service.Load(venueId);
+        automation.HasOwnListing = true;
+
+        service.HandleChatText("Your party recruitment closes in five minutes."); // leaves automation.IsBusy true
+        service.Refresh("operator panel");
+
+        Assert.Single(automation.RefreshCalls);
+    }
+
+    [Fact] public void Once_the_in_flight_attempt_completes_a_new_request_is_accepted_normally()
+    {
+        var (service, _, venueId, automation) = Create();
+        service.Load(venueId);
+
+        service.CreateOrUpdate("first click");
+        automation.Abort(); // simulates the real engine's own "finish"/terminal-state step clearing IsBusy
+        service.CreateOrUpdate("second click");
+
+        Assert.Equal(2, automation.CreateOrUpdateCalls.Count);
+    }
+
+    [Fact] public void Cancelling_the_in_flight_attempt_clears_ownership_so_a_new_one_can_start()
+    {
+        var (service, _, venueId, automation) = Create();
+        service.Load(venueId);
+        automation.HasOwnListing = true;
+
+        service.Refresh("first click");
+        automation.Abort();
+        service.Refresh("second click");
+
+        Assert.Equal(2, automation.RefreshCalls.Count);
+    }
+
     [Fact] public void Auto_refresh_is_ignored_while_disabled()
     {
         var (service, _, venueId, automation) = Create();

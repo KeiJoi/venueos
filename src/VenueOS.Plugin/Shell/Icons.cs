@@ -34,6 +34,12 @@ internal static class AppIcons
             case "gift": DrawGift(drawList, center, radius, color, thickness); break;
             case "macro": DrawMacro(drawList, center, radius, color, thickness); break;
             case "microphone": DrawMicrophone(drawList, center, radius, color, thickness); break;
+            case "chevron-down": DrawChevron(drawList, center, radius, color, thickness, down: true); break;
+            case "chevron-up": DrawChevron(drawList, center, radius, color, thickness, down: false); break;
+            case "minimize": DrawMinimize(drawList, center, radius, color, thickness); break;
+            case "lock": DrawLock(drawList, center, radius, color, thickness, locked: true); break;
+            case "unlock": DrawLock(drawList, center, radius, color, thickness, locked: false); break;
+            case "launcher": DrawLauncher(drawList, center, radius, color); break;
             default: drawList.AddCircle(center, radius * 0.6f, color, 0, thickness); break;
         }
     }
@@ -319,6 +325,59 @@ internal static class AppIcons
         d.PathStroke(color, ImDrawFlags.None, t);
         d.AddLine(headCenter + new Vector2(0, r * 0.4f), headCenter + new Vector2(0, r * 0.62f), color, t);
         d.AddLine(headCenter + new Vector2(-r * 0.22f, r * 0.62f), headCenter + new Vector2(r * 0.22f, r * 0.62f), color, t);
+    }
+
+    /// <summary>Module Launcher & Window Management pass — the detached-window header's context-sensitive Collapse
+    /// (points down) / Expand (points up) button, and the Launcher Settings page's up/down reorder buttons (reusing
+    /// the same two keys — "move up" reads naturally as an up chevron, matching Expand's own visual language).</summary>
+    private static void DrawChevron(ImDrawListPtr d, Vector2 c, float r, uint color, float t, bool down)
+    {
+        var half = r * 0.4f;
+        var sign = down ? 1f : -1f;
+        var left = c + new Vector2(-half, -half * 0.5f * sign);
+        var tip = c + new Vector2(0, half * 0.5f * sign);
+        var right = c + new Vector2(half, -half * 0.5f * sign);
+        d.AddLine(left, tip, color, t);
+        d.AddLine(tip, right, color, t);
+    }
+
+    /// <summary>Detached-window header's Minimize/Hide button — a single horizontal underscore, the same "minimize a
+    /// window" convention as a native OS title bar's own minimize glyph, distinct from Close's diagonal X.</summary>
+    private static void DrawMinimize(ImDrawListPtr d, Vector2 c, float r, uint color, float t)
+    {
+        var half = r * 0.4f;
+        var y = c.Y + half * 0.6f;
+        d.AddLine(new Vector2(c.X - half, y), new Vector2(c.X + half, y), color, t * 1.4f);
+    }
+
+    /// <summary>The Module Launcher's lock/edit toggle — a padlock body with a closed loop shackle when locked, or
+    /// an offset/open shackle when unlocked, the same locked/unlocked metaphor used everywhere else in software.</summary>
+    private static void DrawLock(ImDrawListPtr d, Vector2 c, float r, uint color, float t, bool locked)
+    {
+        var bodyMin = c + new Vector2(-r * 0.4f, 0);
+        var bodyMax = c + new Vector2(r * 0.4f, r * 0.55f);
+        d.AddRect(bodyMin, bodyMax, color, r * 0.08f, ImDrawFlags.None, t);
+        d.AddCircleFilled(c + new Vector2(0, r * 0.28f), r * 0.06f, color);
+        var shackleCenter = locked ? c + new Vector2(0, -r * 0.05f) : c + new Vector2(-r * 0.12f, -r * 0.08f);
+        d.PathArcTo(shackleCenter, r * 0.28f, MathF.PI, MathF.Tau, 12);
+        d.PathStroke(color, ImDrawFlags.None, t);
+    }
+
+    /// <summary>The Module Launcher's own glyph (Settings nav entry) — four small filled squares in a row, reading
+    /// as "a row of quick-access buttons," distinct from "macro" (three outlined slots plus a play triangle) and
+    /// "grid" (an even 3x3 outline, Bingo's/Settings→Modules' concept).</summary>
+    private static void DrawLauncher(ImDrawListPtr d, Vector2 c, float r, uint color)
+    {
+        var slot = r * 0.36f;
+        var gap = r * 0.14f;
+        var totalWidth = slot * 4 + gap * 3;
+        var originX = c.X - totalWidth / 2f;
+        var top = c.Y - slot / 2f;
+        for (var i = 0; i < 4; i++)
+        {
+            var min = new Vector2(originX + i * (slot + gap), top);
+            d.AddRectFilled(min, min + new Vector2(slot, slot), color, r * 0.06f);
+        }
     }
 
     private static void DrawPopout(ImDrawListPtr d, Vector2 c, float r, uint color, float t)

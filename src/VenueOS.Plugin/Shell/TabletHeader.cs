@@ -15,8 +15,9 @@ namespace VenueOS.Plugin.Shell;
 /// Built as three explicit, structurally separated regions so overlap is impossible by construction:
 /// <list type="bullet">
 /// <item><b>Left</b> — Home, brand mark, active venue name (truncated with a tooltip if it can't fit).</item>
-/// <item><b>Right</b> — venue selector, Settings, Close, in that left-to-right order. Reserved and positioned in
-/// absolute screen space <i>before</i> anything else is drawn, so nothing in Left can ever push or overlap them.</item>
+/// <item><b>Right</b> — venue selector, Collapse, Settings, Close, in that left-to-right order (Collapse added in
+/// the Live QA follow-up pass). Reserved and positioned in absolute screen space <i>before</i> anything else is
+/// drawn, so nothing in Left can ever push or overlap them.</item>
 /// <item><b>Flex</b> — just the drag handle, filling whatever's left between Left and Right.</item>
 /// </list>
 ///
@@ -33,7 +34,13 @@ internal static class TabletHeader
     private const float MinVenueNameWidth = 40f;
     private const float MinDragGap = 8f;
 
-    public static void Draw(VenueTheme theme, VenueProfileService venues, VenueShell shell, Action requestClose, VenueSwitchCoordinator switchCoordinator)
+    /// <summary><paramref name="onCollapse"/> (Live QA follow-up) invokes the tablet's own Collapse transition —
+    /// added to the right region, before Settings, matching the same <c>UiKit.IconButton</c> pattern every other
+    /// button here already uses. The tablet's Collapsed-state chrome itself is drawn separately by
+    /// <see cref="ModuleWindowHeader"/> (reused for that one state only — this method remains the tablet's own
+    /// bespoke Expanded-state header, unchanged otherwise); see <c>Plugin.Draw</c> for how the two are switched
+    /// between.</summary>
+    public static void Draw(VenueTheme theme, VenueProfileService venues, VenueShell shell, Action requestClose, VenueSwitchCoordinator switchCoordinator, Action onCollapse)
     {
         var current = venues.Current;
         var start = ImGui.GetCursorScreenPos();
@@ -45,10 +52,11 @@ internal static class TabletHeader
         var rowY = start.Y + (HeaderHeight - 28) / 2f;
 
         // ================= RIGHT REGION — reserved and positioned first, in absolute screen space. =================
-        var rightWidth = ComboWidth + gap + IconButtonWidth + gap + IconButtonWidth;
+        var rightWidth = ComboWidth + gap + IconButtonWidth + gap + IconButtonWidth + gap + IconButtonWidth;
         var rightRegionStartX = start.X + contentWidth - RightMargin - rightWidth;
         var comboX = rightRegionStartX;
-        var settingsX = comboX + ComboWidth + gap;
+        var collapseX = comboX + ComboWidth + gap;
+        var settingsX = collapseX + IconButtonWidth + gap;
         var closeX = settingsX + IconButtonWidth + gap;
 
         ImGui.SetCursorScreenPos(new Vector2(comboX, rowY));
@@ -59,6 +67,8 @@ internal static class TabletHeader
                 if (ImGui.Selectable(profile.DisplayName, profile.Id == current.Id)) switchCoordinator.RequestSwitch(profile.Id);
             ImGui.EndCombo();
         }
+        ImGui.SetCursorScreenPos(new Vector2(collapseX, rowY));
+        if (UiKit.IconButton(theme, "tablet-collapse", "chevron-down", IconButtonWidth, "Collapse")) onCollapse();
         ImGui.SetCursorScreenPos(new Vector2(settingsX, rowY));
         if (UiKit.IconButton(theme, "settings", "gear", IconButtonWidth, "Settings", shell.IsSettingsSelected)) shell.SelectSettings();
         ImGui.SetCursorScreenPos(new Vector2(closeX, rowY));
