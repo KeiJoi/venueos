@@ -44,6 +44,12 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
     // remaining entries are defensive fallbacks for a different game version/locale showing a different label.
     private static readonly string[] EndButtonTexts = ["End", "Withdraw Recruitment", "Withdraw", "End Recruitment", "Cancel Recruitment"];
 
+    // The submit control on the Recruitment Criteria editor (LookingForGroupCondition). "Recruit Members" when creating,
+    // "Apply Changes" when editing an existing listing — same native button, same id (live-verified in earlier passes).
+    private const uint SubmitButtonId = 111;
+    private static readonly string[] UpdateSubmitTexts = ["Apply Changes", "Update", "Save"];
+    private static readonly string[] CreateSubmitTexts = ["Recruit Members", "Register", "Create Listing"];
+
     private const string ModuleId = "promotion.partyfinder";
 
     private static readonly TimeSpan MainAddonOpenTimeout = TimeSpan.FromSeconds(8);
@@ -84,7 +90,18 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
     private BoundedWait mainActionWait;
     private BoundedWait submitEditorWait;
     private BoundedWait checkboxSyncWait;
+    private BoundedWait editorReadyWait;
+    private BoundedWait editButtonWait;
     private AutomationState state = AutomationState.Idle;
+
+    // Post-0.3.7 first-refresh investigation (docs/PARTY_FINDER_FIRST_REFRESH_INVESTIGATION.md): single-owner
+    // operation bookkeeping (identity, current step, milestone timeline, completed-update count) and the final-submit
+    // decision logic both live in tested pure code in VenueOS.Modules.Operations; this engine only gathers native
+    // observations and performs the native actions those decisions call for.
+    private readonly PartyFinderOperationTracker operations = new();
+    private PartyFinderApplyTracker apply = new(isUpdate: false);
+    private int detailNavigationClicks;
+    private string lastScanLogKey = string.Empty;
 
     private enum AutomationState { Idle, Running, Ending }
 
@@ -103,9 +120,89 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
 
     public bool IsCompatibilityVerified { get; private set; }
 
-    public bool IsBusy => state == AutomationState.Running;
+    // Both ownership flags reconcile against the TaskManager first: ECommons' TaskManager aborts its chain SILENTLY on a
+    // per-task timeout or an exception inside a step, and neither path runs this class's own FailAndAbort/
+    // StopGracefully. Before the 0.3.7 IsBusy guard that was benign (the next request simply aborted and restarted);
+    // with the guard, a silently-dead chain would leave state == Running forever and every later manual/automatic
+    // refresh would be ignored until the operator pressed Abort. Reading either flag detects that and releases
+    // ownership with an attributable Diagnostics entry naming the step that died.
+    public bool IsBusy
+    {
+        get
+        {
+            ReconcileLostChain();
+            return state == AutomationState.Running;
+        }
+    }
 
-    public bool IsEnding => state == AutomationState.Ending;
+    public bool IsEnding
+    {
+        get
+        {
+            ReconcileLostChain();
+            return state == AutomationState.Ending;
+        }
+    }
+
+    private void ReconcileLostChain()
+    {
+        if (state == AutomationState.Idle || taskManager.IsBusy)
+        {
+            return;
+        }
+
+        var step = operations.Current?.Step ?? "unknown";
+        var message = $"Party Finder automation stopped unexpectedly during step '{step}': the task chain ended without finishing (a native step timed out or threw — see the Dalamud log). Ownership released; the next request will retry.";
+        Status = message;
+        log.Error("[{Module}] {Status}", ModuleId, message);
+        diagnostics.RecordFailure($"{ModuleId}: {message}{DescribeCurrentOperation()}");
+        EndOperation(PartyFinderOperationOutcome.ChainLost, message);
+    }
+
+    private void BeginOperation(PartyFinderOperationKind kind, string reason)
+    {
+        var superseded = operations.Current;
+        var op = operations.Begin(kind, reason, DateTime.UtcNow);
+        if (superseded is not null)
+        {
+            log.Information("[{Module}] op#{Id} superseded by op#{NewId}.", ModuleId, superseded.Id, op.Id);
+        }
+
+        state = kind == PartyFinderOperationKind.End ? AutomationState.Ending : AutomationState.Running;
+    }
+
+    /// <summary>Every path that releases ownership (success, failure, graceful stop, abort, lost chain) funnels through
+    /// here, so there is exactly one place where <c>state</c> returns to Idle and one place that writes the operation's
+    /// summary line — including the milestone timeline that shows how long each native transition took.</summary>
+    private void EndOperation(PartyFinderOperationOutcome outcome, string detail)
+    {
+        state = AutomationState.Idle;
+        var record = operations.Finish(outcome, detail, DateTime.UtcNow);
+        if (record is null)
+        {
+            return;
+        }
+
+        log.Information("[{Module}] op#{Id} {Kind} ({Reason}) {Outcome} after {Elapsed}ms; firstUpdateForListing={First}; lastStep='{Step}'; timeline: {Timeline}",
+            ModuleId, record.Id, record.Kind, record.Reason, record.Outcome, (long)record.Elapsed.TotalMilliseconds, record.IsFirstUpdateForListing, record.LastStep, record.Timeline);
+    }
+
+    private long CurrentOperationId => operations.Current?.Id ?? 0;
+
+    private string DescribeCurrentOperation()
+    {
+        var op = operations.Current;
+        return op is null
+            ? string.Empty
+            : $" [op #{op.Id} {op.Kind}{(op.IsFirstUpdateForListing ? ", first update for this listing" : string.Empty)}, step '{op.Step}', {(long)(DateTime.UtcNow - op.StartedUtc).TotalMilliseconds}ms in]";
+    }
+
+    private void EnqueueStep(string name, Func<bool> step) =>
+        taskManager.Enqueue(() =>
+        {
+            operations.EnterStep(name, DateTime.UtcNow);
+            return step();
+        }, name);
 
     public bool HasOwnListing
     {
@@ -137,26 +234,33 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
         mainActionWait.Reset();
         submitEditorWait.Reset();
         checkboxSyncWait.Reset();
+        editorReadyWait.Reset();
+        editButtonWait.Reset();
+        detailNavigationClicks = 0;
+        apply = new PartyFinderApplyTracker(isUpdate: false);
         IsCompatibilityVerified = false;
-        state = AutomationState.Idle;
+        EndOperation(PartyFinderOperationOutcome.Aborted, "venue reset");
+        operations.ResetListingHistory();
         SetStatus("Idle");
     }
 
     public void Abort()
     {
         taskManager.Abort();
-        state = AutomationState.Idle;
+        EndOperation(PartyFinderOperationOutcome.Aborted, "operator abort");
         SetStatus("Aborted");
     }
 
     public void NotifyListingEnded()
     {
         observedActiveListing = false;
+        operations.ResetListingHistory();
         SetStatus("Party Finder listing ended.");
     }
 
     public void QueueCreateOrUpdate(PartyFinderPreset preset, string reason)
     {
+        ReconcileLostChain();
         if (state == AutomationState.Ending)
         {
             SetStatus("Party Finder is ending — try again once it finishes.");
@@ -168,6 +272,7 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
 
     public void QueueRefresh(PartyFinderPreset preset, string reason)
     {
+        ReconcileLostChain();
         if (state == AutomationState.Ending)
         {
             SetStatus("Party Finder is ending — try again once it finishes.");
@@ -195,29 +300,41 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
         mainActionWait.Reset();
         submitEditorWait.Reset();
         checkboxSyncWait.Reset();
-        state = AutomationState.Running;
+        editorReadyWait.Reset();
+        editButtonWait.Reset();
+        detailNavigationClicks = 0;
+        BeginOperation(requireExistingListing ? PartyFinderOperationKind.Update : PartyFinderOperationKind.Create, reason);
+        apply = new PartyFinderApplyTracker(isUpdate: requireExistingListing);
         SetStatus($"Queued {(requireExistingListing ? "refresh" : "create/update")} from {reason}.");
 
-        taskManager.Enqueue(() => PrepareOperation(requireExistingListing), $"prepare_{reason}");
-        taskManager.Enqueue(EnsureMainAddonReady, "open_pf");
-        taskManager.Enqueue(() => ApplyPresetToAgent(preset), "apply_preset");
-        taskManager.Enqueue(() => ClickMainAction(requireExistingListing), "open_editor");
+        EnqueueStep("prepare", () => PrepareOperation(requireExistingListing));
+        EnqueueStep("open_pf", EnsureMainAddonReady);
+        EnqueueStep("apply_preset", () => ApplyPresetToAgent(preset));
+        EnqueueStep("open_editor", () => ClickMainAction(requireExistingListing));
+
+        // First-refresh fix (docs/PARTY_FINDER_FIRST_REFRESH_INVESTIGATION.md): every pacing delay below used to be
+        // measured from the Edit/Create CLICK, on the unverified assumption that the Recruitment Criteria editor
+        // exists a few hundred milliseconds later. A cold first open of that addon can take longer, in which case the
+        // preset re-apply ran before the editor existed and Apply Changes was dispatched ~150ms after the editor first
+        // appeared. This gate observes the editor actually being visible and ready first; the donor-parity pacing
+        // that follows is now measured from that observed event.
+        EnqueueStep("wait_editor_ready", WaitForEditorReady);
         taskManager.EnqueueDelay(300, false, taskManager.DefaultConfiguration);
-        taskManager.Enqueue(() => ApplyPresetToAgent(preset), "reapply_preset_in_editor");
+        EnqueueStep("reapply_preset_in_editor", () => ApplyPresetToAgent(preset));
         taskManager.EnqueueDelay(200, false, taskManager.DefaultConfiguration);
-        taskManager.Enqueue(() => SyncEditorCheckboxes(preset), "sync_editor_checkboxes");
+        EnqueueStep("sync_editor_checkboxes", () => SyncEditorCheckboxes(preset));
         taskManager.EnqueueDelay(150, false, taskManager.DefaultConfiguration);
-        taskManager.Enqueue(() => SubmitEditor(requireExistingListing), "submit_editor");
+        EnqueueStep("submit_editor", () => SubmitEditor(requireExistingListing));
         taskManager.EnqueueDelay(300, false, taskManager.DefaultConfiguration);
-        taskManager.Enqueue(ConfirmYesNoIfNeeded, "confirm_yesno");
-        taskManager.Enqueue(() => VerifySubmission(requireExistingListing), "verify_submission");
-        taskManager.Enqueue(ClosePartyFinderWindowIfVisible, "close_pf");
-        taskManager.Enqueue(() =>
+        EnqueueStep("confirm_yesno", ConfirmYesNoIfNeeded);
+        EnqueueStep("verify_submission", () => VerifySubmission(requireExistingListing));
+        EnqueueStep("close_pf", ClosePartyFinderWindowIfVisible);
+        EnqueueStep("finish", () =>
         {
-            state = AutomationState.Idle;
             SetStatus("Automation sequence finished.");
+            EndOperation(PartyFinderOperationOutcome.Completed, "sequence finished");
             return true;
-        }, "finish");
+        });
     }
 
     private bool PrepareOperation(bool requireExistingListing)
@@ -232,8 +349,31 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
             return StopGracefully("Refresh requested, but no own listing is active.");
         }
 
+        var op = operations.Current;
+        if (op is not null)
+        {
+            // One line per operation (not per frame): which request this is, whether it is the first update this
+            // listing has had, and the native addons' load state at the start. "Not loaded" for the detail/editor
+            // addons means this operation will be their first open since the game last unloaded them.
+            log.Information("[{Module}] op#{Id} {Kind} ({Reason}) starting; firstUpdateForListing={First}; updatesCompletedForListing={Updates}; addons: {Addons}",
+                ModuleId, op.Id, op.Kind, op.Reason, op.IsFirstUpdateForListing, operations.UpdatesCompletedForListing, DescribeAddonStates());
+        }
+
         SetStatus("Preparing Party Finder automation.");
         return true;
+    }
+
+    private string DescribeAddonStates()
+    {
+        var parts = new List<string>();
+        foreach (var name in MainAddonNames.Concat(DetailAddonNames).Concat(EditorAddonNames))
+        {
+            parts.Add(TryGetAddonByName(name, out var addon)
+                ? $"{name}[ready={addon->IsReady},visible={addon->IsVisible}]"
+                : $"{name}[not loaded]");
+        }
+
+        return string.Join(", ", parts);
     }
 
     /// <summary>Reliability hardening (production symptom: intermittent refresh failures): a character mid-zone-
@@ -386,7 +526,8 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
         }
 
         recruit.CommentString = PartyFinderPreset.TruncateCommentUtf8(preset.Comment);
-        log.Information("[{Module}] Wrote recruitment fields: limitToWorldRaw={LimitToWorld} passwordRaw={Password}", ModuleId, recruit.LimitRecruitingToWorld, recruit.Password);
+        // The party password is deliberately not logged (only whether one is set).
+        log.Information("[{Module}] Wrote recruitment fields: limitToWorldRaw={LimitToWorld} passwordSet={PasswordSet}", ModuleId, recruit.LimitRecruitingToWorld, recruit.Password != ushort.MaxValue);
         SetStatus("Applied preset to PF recruitment struct.");
         return true;
     }
@@ -405,6 +546,16 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
     {
         if (TryGetAddonByName("LookingForGroupDetail", out var detailAddon) && detailAddon->IsReady && detailAddon->IsVisible)
         {
+            if (detailNavigationClicks > 0)
+            {
+                // Evidence for the live log: how many times node 46 was activated before the detail screen appeared.
+                // This route re-activates node 46 on every tick until the detail addon is visible (unchanged behavior);
+                // a count above 1 on a cold first open would show the repeated-activation pattern directly.
+                operations.Mark($"detail-visible(node46-clicks={detailNavigationClicks})", DateTime.UtcNow);
+                log.Information("[{Module}] op#{Id} listing detail visible after {Clicks} node-46 activation(s).", ModuleId, CurrentOperationId, detailNavigationClicks);
+                detailNavigationClicks = 0;
+            }
+
             return onReached(detailAddon);
         }
 
@@ -412,6 +563,12 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
         {
             if (TryClickButtonById(mainAddon, 46, out var detailsClicked))
             {
+                detailNavigationClicks++;
+                if (detailNavigationClicks == 1)
+                {
+                    operations.Mark("node46-clicked", DateTime.UtcNow);
+                }
+
                 SetStatus($"Opened active listing details: {detailsClicked}.");
                 return false;
             }
@@ -445,13 +602,28 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
             {
                 if (TryClickButton(detailAddon, EditButtonTexts, RejectPrimaryTexts, allowPrimaryFallback: false, out var editClicked))
                 {
+                    operations.Mark("edit-clicked", DateTime.UtcNow);
                     SetStatus($"Clicked active listing edit button: {editClicked}.");
                     return true;
                 }
 
-                SetStatus("Waiting for active listing Edit button to become available.");
-                log.Information("[{Module}] Active listing detail buttons: {Buttons}", ModuleId, ListButtons(detailAddon));
-                return false;
+                // Previously unbounded here: with the detail screen visible but no enabled Edit button, this step
+                // polled until ECommons' 15s per-task limit silently aborted the chain (no Diagnostics entry, and —
+                // since 0.3.7's IsBusy guard — no way to start another refresh). Bounded like its peers (End's
+                // ClickEndButton on the same screen) so a genuine miss is reported with the visible buttons.
+                var firstMiss = !editButtonWait.HasStarted;
+                if (editButtonWait.Poll(DateTime.UtcNow, UiElementReadinessTimeout))
+                {
+                    SetStatus("Waiting for active listing Edit button to become available.");
+                    if (firstMiss)
+                    {
+                        log.Information("[{Module}] Active listing detail buttons (Edit not yet found): {Buttons}", ModuleId, ListButtons(detailAddon));
+                    }
+
+                    return false;
+                }
+
+                return FailAndAbort($"Listing-detail screen became ready but the Edit button did not become available after {UiElementReadinessTimeout.TotalSeconds:0}s. Visible buttons: {ListButtons(detailAddon)}");
             });
         }
 
@@ -471,6 +643,7 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
 
         if (TryClickButtonById(addon, 46, out var clickedById))
         {
+            operations.Mark("create-clicked", DateTime.UtcNow);
             SetStatus($"Clicked main PF action: {clickedById}.");
             return true;
         }
@@ -478,12 +651,14 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
         var desired = requireExistingListing ? EditButtonTexts : CreateButtonTexts;
         if (TryClickButton(addon, desired, RejectPrimaryTexts, allowPrimaryFallback: !requireExistingListing, out var clicked))
         {
+            operations.Mark("create-clicked", DateTime.UtcNow);
             SetStatus($"Clicked main PF action: {clicked}.");
             return true;
         }
 
         if (!requireExistingListing && TryClickButton(addon, EditButtonTexts, RejectPrimaryTexts, allowPrimaryFallback: false, out clicked))
         {
+            operations.Mark("create-clicked", DateTime.UtcNow);
             SetStatus($"Clicked fallback PF action: {clicked}.");
             return true;
         }
@@ -499,48 +674,197 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
         return FailAndAbort($"Timed out waiting for the main PF action button to become available. Visible buttons: {ListButtons(addon)}");
     }
 
-    private bool SubmitEditor(bool requireExistingListing)
+    /// <summary>Gate between "the Edit/Create click was dispatched" and everything that touches the editor: the
+    /// Recruitment Criteria editor must actually be observed visible and ready (bounded by
+    /// <see cref="UiElementReadinessTimeout"/>, with a context check so a zone change stops it quietly). Identical
+    /// predicate and failure text to what <see cref="SubmitEditor"/> previously applied at the very end of the chain —
+    /// this only moves the observation to where the pacing that depends on it starts.</summary>
+    private bool WaitForEditorReady()
     {
-        if (TryFindVisibleEditorAddon(out var addonName, out var addon))
+        if (TryGetContextInvalidReason(out var invalidReason))
         {
-            string[] desiredTexts = requireExistingListing
-                ? ["Apply Changes", "Update", "Save"]
-                : ["Recruit Members", "Register", "Create Listing"];
-
-            if (string.Equals(addonName, "LookingForGroupCondition", StringComparison.OrdinalIgnoreCase)
-                && TryClickButtonById(addon, 111, out var clickedById))
-            {
-                SetStatus($"Clicked submit button '{clickedById}' on {addonName}.");
-                return true;
-            }
-
-            if (TryClickButton(addon, desiredTexts, RejectPrimaryTexts, allowPrimaryFallback: false, out var clicked))
-            {
-                SetStatus($"Clicked submit button '{clicked}' on {addonName}.");
-                return true;
-            }
-
-            // Reliability hardening: the editor addon being found/ready doesn't guarantee its submit button is
-            // enabled/populated on this exact tick yet — retry within a bounded window before failing.
-            if (submitEditorWait.Poll(DateTime.UtcNow, UiElementReadinessTimeout))
-            {
-                SetStatus($"Waiting for the submit button to become available on {addonName}.");
-                return false;
-            }
-
-            return FailAndAbort($"Timed out waiting for a submit button on {addonName}. Visible buttons: {ListButtons(addon)}");
+            return StopGracefully($"Party Finder automation stopped — {invalidReason}. It will retry on the next request.");
         }
 
-        if (submitEditorWait.Poll(DateTime.UtcNow, UiElementReadinessTimeout))
+        if (TryFindVisibleEditorAddon(out var addonName, out _))
+        {
+            operations.Mark($"editor-visible({addonName})", DateTime.UtcNow);
+            SetStatus($"Recruitment editor {addonName} is visible and ready.");
+            return true;
+        }
+
+        if (editorReadyWait.Poll(DateTime.UtcNow, UiElementReadinessTimeout))
         {
             SetStatus("Waiting for the Party Finder editor to appear.");
             return false;
         }
 
-        return FailAndAbort("Timed out waiting for the Party Finder editor to appear after opening the recruitment screen.");
+        return FailAndAbort($"Timed out waiting for the Party Finder editor to appear after opening the recruitment screen. Addons: {DescribeAddonStates()}");
+    }
+
+    /// <summary>Final-submit stage 1 of 2: wait for an authoritative "submit control ready" observation, then dispatch
+    /// exactly once. Readiness is decided by <see cref="PartyFinderApplyTracker"/> (pure, unit-tested) from what
+    /// <see cref="ObserveSubmitControl"/> reads natively; every distinct not-ready state (no editor / no button /
+    /// hidden / disabled / no click event / still the create-mode action) is named in the log on first observation and
+    /// in the failure report if it never clears. Stage 2 (confirming the game accepted it) is
+    /// <see cref="VerifySubmission"/>.</summary>
+    private bool SubmitEditor(bool requireExistingListing)
+    {
+        if (!IsCompatibilityVerified)
+        {
+            return FailAndAbort("Party Finder layout has not been verified; refusing to click an unknown addon.");
+        }
+
+        var observation = ObserveSubmitControl(requireExistingListing, out var addon, out var addonName, out var button, out var mechanism);
+        var decision = apply.EvaluateReadiness(DateTime.UtcNow, observation);
+        if (decision.ReadinessChanged)
+        {
+            log.Information("[{Module}] op#{Id} submit control on {Addon}: {Readiness} ({Detail}); label='{Label}' via {Mechanism}.",
+                ModuleId, CurrentOperationId, string.IsNullOrEmpty(addonName) ? "<none>" : addonName, decision.Readiness, PartyFinderApplyTracker.Describe(decision.Readiness), observation.ButtonLabel, mechanism);
+        }
+
+        switch (decision.Action)
+        {
+            case PartyFinderApplyAction.Dispatch:
+                operations.Mark("submit-ready", DateTime.UtcNow);
+                if (button == null || !DispatchApply(addon, button, addonName, mechanism, observation.ButtonLabel, recovery: false))
+                {
+                    return FailAndAbort($"Found the submit control on {addonName} but could not activate it.");
+                }
+
+                SetStatus($"Clicked submit button '{DisplayLabel(observation.ButtonLabel)}' on {addonName}.");
+                return true;
+
+            case PartyFinderApplyAction.Wait:
+                SetStatus(decision.Readiness == PartyFinderSubmitReadiness.EditorMissing
+                    ? "Waiting for the Party Finder editor to appear."
+                    : $"Waiting for the submit button on {addonName}: {decision.Reason}.");
+                return false;
+
+            default:
+                return decision.Readiness == PartyFinderSubmitReadiness.EditorMissing
+                    ? FailAndAbort($"Timed out waiting for the Party Finder editor to appear after opening the recruitment screen. Addons: {DescribeAddonStates()}")
+                    : FailAndAbort($"Timed out waiting for a usable submit button on {addonName}: {decision.Reason}. Visible buttons: {ListButtons(addon)}");
+        }
+    }
+
+    private static string DisplayLabel(string label) => string.IsNullOrWhiteSpace(label) ? "<unlabelled>" : label;
+
+    /// <summary>Reads the editor's submit control. Selection is exactly what the previous <c>SubmitEditor</c> did — the
+    /// by-id control (<see cref="SubmitButtonId"/>, Condition editor only) when enabled and visible, else the best
+    /// enabled text match — so which control gets activated is unchanged; what is new is that a control which is
+    /// present but not usable is now reported as such (disabled / hidden / no click event / wrong-mode label) instead
+    /// of being indistinguishable from "not found".</summary>
+    private PartyFinderSubmitObservation ObserveSubmitControl(bool isUpdate, out AtkUnitBase* addon, out string addonName, out AtkComponentButton* button, out string mechanism)
+    {
+        button = null;
+        mechanism = "none";
+        if (!TryFindVisibleEditorAddon(out addonName, out addon))
+        {
+            addonName = string.Empty;
+            return new(EditorVisible: false, ButtonFound: false, ButtonVisible: false, ButtonEnabled: false, ButtonActivatable: false, ButtonLabel: string.Empty);
+        }
+
+        IReadOnlyList<string> desiredTexts = isUpdate ? UpdateSubmitTexts : CreateSubmitTexts;
+
+        AtkComponentButton* idButton = null;
+        if (string.Equals(addonName, "LookingForGroupCondition", StringComparison.OrdinalIgnoreCase))
+        {
+            var candidate = addon->GetComponentButtonById(SubmitButtonId);
+            if (candidate != null && candidate->AtkResNode != null)
+            {
+                idButton = candidate;
+            }
+        }
+
+        if (idButton != null && idButton->IsEnabled && idButton->AtkResNode->IsVisible())
+        {
+            button = idButton;
+            mechanism = $"id:{SubmitButtonId}";
+            return ObservationOf(button, enabled: true, visible: true);
+        }
+
+        var candidates = CollectButtons(addon, quiet: true);
+        var enabled = candidates
+            .Where(b => b.Enabled)
+            .OrderByDescending(b => ScoreButton(b.Text, desiredTexts, RejectPrimaryTexts, false))
+            .ThenByDescending(b => b.ScreenY)
+            .ThenByDescending(b => b.ScreenX)
+            .FirstOrDefault();
+        if (enabled is not null && ScoreButton(enabled.Text, desiredTexts, RejectPrimaryTexts, false) > 0)
+        {
+            button = enabled.Button;
+            mechanism = "text";
+            return ObservationOf(button, enabled: true, visible: true);
+        }
+
+        // Nothing usable. Report the most informative unusable control so the failure names its real state.
+        if (idButton != null)
+        {
+            mechanism = $"id:{SubmitButtonId}";
+            return ObservationOf(idButton, idButton->IsEnabled, idButton->AtkResNode->IsVisible());
+        }
+
+        var present = candidates
+            .OrderByDescending(b => ScoreButton(b.Text, desiredTexts, RejectPrimaryTexts, false))
+            .FirstOrDefault();
+        if (present is not null && ScoreButton(present.Text, desiredTexts, RejectPrimaryTexts, false) > 0)
+        {
+            mechanism = "text";
+            return ObservationOf(present.Button, present.Enabled, visible: true);
+        }
+
+        return new(EditorVisible: true, ButtonFound: false, ButtonVisible: false, ButtonEnabled: false, ButtonActivatable: false, ButtonLabel: string.Empty);
+    }
+
+    private PartyFinderSubmitObservation ObservationOf(AtkComponentButton* button, bool enabled, bool visible)
+    {
+        var ownerNode = (AtkResNode*)button->AtkComponentBase.OwnerNode;
+        var activatable = ownerNode != null && ownerNode->AtkEventManager.Event != null;
+        return new(EditorVisible: true, ButtonFound: true, ButtonVisible: visible, ButtonEnabled: enabled, ButtonActivatable: activatable, ButtonLabel: GetButtonText(button));
+    }
+
+    /// <summary>Activates the submit control and records exactly what was sent, so a live failure can say "dispatch
+    /// #N was sent to X via Y with event type/param Z" rather than leave dispatch-versus-never-sent to inference.
+    /// Mechanism (unchanged): replay of the control's own registered native click event through
+    /// <c>AtkUnitBase.ReceiveEvent</c> — see <see cref="ActivateButton(AtkUnitBase*, AtkComponentButton*)"/>. A true
+    /// return means "dispatched", never "accepted"; acceptance is <see cref="VerifySubmission"/>'s job.</summary>
+    private bool DispatchApply(AtkUnitBase* addon, AtkComponentButton* button, string addonName, string mechanism, string label, bool recovery)
+    {
+        var ownerNode = (AtkResNode*)button->AtkComponentBase.OwnerNode;
+        var evt = ownerNode != null ? (AtkEvent*)ownerNode->AtkEventManager.Event : null;
+        var eventDescription = evt != null ? $"type={evt->State.EventType}, param={evt->Param}" : "no event";
+
+        if (!ActivateButton(addon, button))
+        {
+            log.Warning("[{Module}] op#{Id} submit dispatch on {Addon} FAILED: control has no activatable native event.", ModuleId, CurrentOperationId, addonName);
+            return false;
+        }
+
+        if (apply.IsUpdate && PartyFinderApplyTracker.IsCreateModeLabel(label))
+        {
+            // Diagnostic only — never blocks (see PartyFinderApplyTracker.Classify).
+            log.Warning("[{Module}] op#{Id} updating an existing listing but the submit control is labelled '{Label}' (a create-mode label).", ModuleId, CurrentOperationId, label);
+        }
+
+        var now = DateTime.UtcNow;
+        apply.RecordDispatch(now);
+        operations.Mark(recovery ? $"apply-redispatch#{apply.DispatchCount}" : $"apply-dispatch#{apply.DispatchCount}", now);
+        log.Information("[{Module}] op#{Id} submit dispatch #{Count}{Recovery} on {Addon} via {Mechanism}: label='{Label}', ReceiveEvent({Event}).",
+            ModuleId, CurrentOperationId, apply.DispatchCount, recovery ? " (recovery after observed non-transition)" : string.Empty, addonName, mechanism, DisplayLabel(label), eventDescription);
+        return true;
     }
 
     private bool ConfirmYesNoIfNeeded()
+    {
+        TryHandleConfirmPopup();
+        return true;
+    }
+
+    /// <summary>Clicks any native confirmation popup (SelectYesno / SelectOk) that is up. Returns whether one was
+    /// present — the final-submit confirmation uses that so a pending popup is never mistaken for an ignored
+    /// Apply Changes.</summary>
+    private bool TryHandleConfirmPopup()
     {
         if (!TryGetAddonByName("SelectYesno", out var addon) || !ECommons.GenericHelpers.IsAddonReady(addon))
         {
@@ -550,9 +874,11 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
                 {
                     SetStatus($"Confirmed popup with '{okClicked}'.");
                 }
+
+                return true;
             }
 
-            return true;
+            return false;
         }
 
         if (TryClickButton(addon, ConfirmYesTexts, ["No"], allowPrimaryFallback: true, out var clicked))
@@ -603,38 +929,54 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
         return true;
     }
 
+    /// <summary>Final-submit stage 2 of 2: confirm the game actually accepted the dispatch. The authoritative
+    /// transition is the editor closing (created listing observed, for Create). Success is never inferred from
+    /// "a click was sent" or from elapsed time. If the editor is still open after the acceptance grace, the control is
+    /// still enabled and no native popup is pending, <see cref="PartyFinderApplyTracker"/> authorises exactly one
+    /// bounded re-dispatch (updates only — see its class doc for why that is safe); otherwise the failure names the
+    /// exact observed state and how many dispatches were sent.</summary>
     private bool VerifySubmission(bool requireExistingListing)
     {
-        if (submissionVerificationStartedUtc == DateTime.MinValue)
-        {
-            submissionVerificationStartedUtc = DateTime.UtcNow;
-        }
-
         if (!requireExistingListing && HasOwnListing)
         {
             observedActiveListing = true;
+            operations.Mark("listing-observed", DateTime.UtcNow);
             SetStatus("Party Finder listing is active.");
             return true;
         }
 
-        ConfirmYesNoIfNeeded();
+        var popupPending = TryHandleConfirmPopup();
+        var observation = ObserveSubmitControl(requireExistingListing, out var addon, out var addonName, out var button, out var mechanism);
+        var decision = apply.EvaluateConfirmation(DateTime.UtcNow, new PartyFinderConfirmationObservation(observation.EditorVisible, observation.ButtonFound && observation.ButtonEnabled && observation.ButtonActivatable, popupPending));
 
-        if (!TryFindVisibleEditorAddon(out _, out _))
+        switch (decision.Action)
         {
-            observedActiveListing = true;
-            SetStatus(requireExistingListing ? "Party Finder refresh submitted." : "Party Finder listing is active.");
-            return true;
-        }
+            case PartyFinderApplyAction.Confirmed:
+                observedActiveListing = true;
+                operations.Mark("editor-closed", DateTime.UtcNow);
+                log.Information("[{Module}] op#{Id} submit confirmed: editor closed after {Count} dispatch(es).", ModuleId, CurrentOperationId, apply.DispatchCount);
+                SetStatus(requireExistingListing ? "Party Finder refresh submitted." : "Party Finder listing is active.");
+                return true;
 
-        if (DateTime.UtcNow - submissionVerificationStartedUtc < SubmissionVerificationTimeout)
-        {
-            SetStatus("Waiting for Party Finder to finish submitting.");
-            return false;
-        }
+            case PartyFinderApplyAction.Redispatch:
+                log.Warning("[{Module}] op#{Id} {Reason}; re-dispatching (dispatch {Next} of at most {Max}).", ModuleId, CurrentOperationId, decision.Reason, apply.DispatchCount + 1, PartyFinderApplyTimings.Default.MaxDispatches);
+                if (button == null || !DispatchApply(addon, button, addonName, mechanism, observation.ButtonLabel, recovery: true))
+                {
+                    return FailAndAbort($"Apply Changes was not accepted and could not be re-dispatched ({decision.Reason}).");
+                }
 
-        return requireExistingListing
-            ? FailAndAbort("Submitted Party Finder refresh, but the editor did not close.")
-            : FailAndAbortCreate("Submitted Party Finder, but no active listing was detected.");
+                SetStatus("Apply Changes had no effect yet; re-sent once.");
+                return false;
+
+            case PartyFinderApplyAction.Fail:
+                return requireExistingListing
+                    ? FailAndAbort($"Submitted Party Finder refresh, but the editor did not close. {decision.Reason}. Dispatches sent: {apply.DispatchCount}.")
+                    : FailAndAbortCreate($"Submitted Party Finder, but no active listing was detected. {decision.Reason}. Dispatches sent: {apply.DispatchCount}.");
+
+            default:
+                SetStatus("Waiting for Party Finder to finish submitting.");
+                return false;
+        }
     }
 
     private bool ClosePartyFinderWindowIfVisible()
@@ -716,6 +1058,7 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
 
     public void EndPartyFinder(string reason)
     {
+        ReconcileLostChain();
         if (state == AutomationState.Ending)
         {
             SetStatus("Party Finder is already ending.");
@@ -733,33 +1076,34 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
         submissionVerificationStartedUtc = DateTime.MinValue;
         endButtonWait.Reset();
         detailNavigationWait.Reset();
-        state = AutomationState.Ending;
+        detailNavigationClicks = 0;
+        BeginOperation(PartyFinderOperationKind.End, reason);
         SetStatus($"Ending Party Finder ({reason})...");
 
         // Step 4: no own listing at all — treat as already ended, no false failure.
         if (!HasOwnListing)
         {
-            state = AutomationState.Idle;
             observedActiveListing = false;
             SetStatus("Party Finder ended — Auto Refresh disabled");
+            EndOperation(PartyFinderOperationOutcome.Completed, "no own listing to end");
             return;
         }
 
         // end_open_pf / end_open_details: identical to Refresh's "open_pf" + the requireExistingListing branch of
         // ClickMainAction — the same EnsureMainAddonReady and the same NavigateToOwnListingDetail helper, so any
         // future fix to that proven route benefits both flows and can never drift apart again.
-        taskManager.Enqueue(EnsureMainAddonReady, "end_open_pf");
-        taskManager.Enqueue(() => NavigateToOwnListingDetail(ClickEndButton, "reach the active listing screen to end recruitment"), "end_open_details");
+        EnqueueStep("end_open_pf", EnsureMainAddonReady);
+        EnqueueStep("end_open_details", () => NavigateToOwnListingDetail(ClickEndButton, "reach the active listing screen to end recruitment"));
         taskManager.EnqueueDelay(300, false, taskManager.DefaultConfiguration);
-        taskManager.Enqueue(ConfirmYesNoIfNeeded, "end_confirm_yesno");
-        taskManager.Enqueue(VerifyEnded, "end_verify");
-        taskManager.Enqueue(ClosePartyFinderWindowIfVisible, "end_close_pf");
-        taskManager.Enqueue(() =>
+        EnqueueStep("end_confirm_yesno", ConfirmYesNoIfNeeded);
+        EnqueueStep("end_verify", VerifyEnded);
+        EnqueueStep("end_close_pf", ClosePartyFinderWindowIfVisible);
+        EnqueueStep("end_finish", () =>
         {
-            state = AutomationState.Idle;
             SetStatus("Party Finder ended — Auto Refresh disabled");
+            EndOperation(PartyFinderOperationOutcome.Completed, "listing withdrawn");
             return true;
-        }, "end_finish");
+        });
     }
 
     /// <summary>Step 6/7: End Party Finder's own scoped button search on the reached <c>LookingForGroupDetail</c>
@@ -915,7 +1259,7 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
     private string ListButtons(AtkUnitBase* addon)
     {
         var buttons = CollectButtons(addon);
-        var texts = buttons.Select(b => string.IsNullOrWhiteSpace(b.Text) ? $"<Node {b.NodeId}>" : b.Text).Distinct().ToArray();
+        var texts = buttons.Select(b => (string.IsNullOrWhiteSpace(b.Text) ? $"<Node {b.NodeId}>" : b.Text) + (b.Enabled ? string.Empty : " [disabled]")).Distinct().ToArray();
         return texts.Length == 0 ? "none" : string.Join(", ", texts);
     }
 
@@ -933,7 +1277,7 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
         return texts.Length == 0 ? "none" : string.Join(", ", texts);
     }
 
-    private List<ButtonCandidate> CollectButtons(AtkUnitBase* addon)
+    private List<ButtonCandidate> CollectButtons(AtkUnitBase* addon, bool quiet = false)
     {
         var buttons = new List<ButtonCandidate>();
         var seenNodes = new HashSet<nint>();
@@ -956,8 +1300,22 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
             }
         }
 
-        log.Information("[{Module}] Scanned {Count} button candidates on {Addon}.", ModuleId, buttons.Count, addon->NameString);
+        LogScan("button", buttons.Count, addon->NameString, quiet);
         return buttons;
+    }
+
+    /// <summary>Scan results are polled every framework tick while a wait is in progress; logging each one flooded the
+    /// Dalamud log (one line per frame per wait). Now logs only when the (kind, addon, count) result changes.</summary>
+    private void LogScan(string kind, int count, string addonName, bool quiet)
+    {
+        var key = $"{kind}:{addonName}:{count}";
+        if (quiet || string.Equals(key, lastScanLogKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        lastScanLogKey = key;
+        log.Information("[{Module}] Scanned {Count} {Kind} candidates on {Addon}.", ModuleId, count, kind, addonName);
     }
 
     private List<CheckboxCandidate> CollectCheckboxes(AtkUnitBase* addon)
@@ -983,7 +1341,7 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
             }
         }
 
-        log.Information("[{Module}] Scanned {Count} checkbox candidates on {Addon}.", ModuleId, checkboxes.Count, addon->NameString);
+        LogScan("checkbox", checkboxes.Count, addon->NameString, quiet: false);
         return checkboxes;
     }
 
@@ -1213,9 +1571,11 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
     {
         Status = status;
         log.Error("[{Module}] {Status}", ModuleId, status);
-        diagnostics.RecordFailure($"{ModuleId}: {status}");
+        // The operation suffix (id, kind, first-update flag, step, elapsed) makes the Diagnostics entry attributable
+        // to the exact step that failed instead of a bare "Party Finder failed"-shaped message.
+        diagnostics.RecordFailure($"{ModuleId}: {status}{DescribeCurrentOperation()}");
         taskManager.Abort();
-        state = AutomationState.Idle;
+        EndOperation(PartyFinderOperationOutcome.Failed, status);
         return true;
     }
 
@@ -1231,7 +1591,7 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
         Status = status;
         log.Information("[{Module}] {Status}", ModuleId, status);
         taskManager.Abort();
-        state = AutomationState.Idle;
+        EndOperation(PartyFinderOperationOutcome.Stopped, status);
         return true;
     }
 

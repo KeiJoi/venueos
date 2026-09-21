@@ -1,6 +1,6 @@
 # VenueOS User Manual
 
-**Current version:** 0.3.7
+**Current version:** 0.3.8
 **What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, live host trivia, Bingo, raffles, tournament brackets, block-letter text composition, timed giveaways, extended macros, and manual Shout announcements.
 **Supported environment:** Windows FFXIV with Dalamud installed (API level 15). VenueOS is unofficial, third-party, and not affiliated with Square Enix or the Dalamud/XIVLauncher project.
 
@@ -127,17 +127,24 @@ Found under **Settings → General**:
 
 ## 5. ShoutRunner
 
-**Purpose:** automatically travels to a route of destinations across selected Data Centers and Worlds, sending your configured `/shout` message at each stop.
+**Purpose:** automatically travels to a route of destinations across selected Data Centers and Worlds, sending your configured `/shout` message (one line, or two) at each stop.
 
 ### Message and Start/Stop
 
-The operational screen has a **"Message sent with `/shout` at each destination"** field, a status line, and a **Start**/**Stop** button.
+The operational screen has a **Shout Line 1** field and an optional **Shout Line 2 (Optional)** field, a status line, and a **Start**/**Stop** button.
+
+- **One line filled** (Line 2 blank, or only spaces) → exactly one `/shout` is sent at each destination.
+- **Both lines filled** → Line 1 is sent first, then Line 2, at each destination. The second line is sent only after the first was accepted, spaced by VenueOS's normal chat pacing.
+- **Line 1 is required.** A filled Line 2 with an empty Line 1 is refused at Start (*"Enter Shout Line 1 before starting."*) rather than silently sending Line 2 alone.
+- Each line is checked against FFXIV's 500-byte chat limit *including* its `/shout ` prefix (bytes, not characters — accented and non-Latin characters count for more). A line that is too long shows a warning under its field and Start is refused; nothing is ever cut short.
+- If Line 1 goes out but Line 2 fails, the Run Terminal shows *"SHOUT INCOMPLETE: Line 1 sent, Line 2 FAILED"* for that destination and Line 1 is not resent. If Line 1 fails, Line 2 is not sent. Stopping between the two lines means Line 2 never goes out.
 
 Status values you'll see: Stopped, Faulted, Recovering, Running, Waiting for next RUN, Stopping…
 
 **Start** is refused (with an on-screen message) if:
 - ShoutRunner is already running.
-- The Shout Message is empty → *"Enter a Shout Message before starting."*
+- Shout Line 1 is empty → *"Enter Shout Line 1 before starting."*
+- Shout Line 1 or Line 2 is over the chat limit → *"Shout Line 1/2 is too long for chat — shorten it before starting."*
 - No Data Center is selected → *"Select at least one Data Center in Settings → Modules → ShoutRunner before starting."*
 - No destination is configured → *"Configure at least one destination in Settings → Modules → ShoutRunner before starting."*
 
@@ -153,7 +160,7 @@ Status values you'll see: Stopped, Faulted, Recovering, Running, Waiting for nex
 
 **Data Centers:** one checkbox per Data Center — **Aether, Crystal, Dynamis, Primal**. None are selected by default. Data Center visiting order is fixed (always Aether → Crystal → Dynamis → Primal for whichever ones you select) and cannot be reordered — every World in a selected Data Center is visited automatically, you don't pick individual Worlds.
 
-**Destinations:** default list is **Ul'dah - Steps of Nald, New Gridania, Limsa Lominsa Lower Decks**. Each row has a rename field plus **Up** / **Down** / **Remove** buttons — this list *is* reorderable. Add a new one with the text field (example placeholder "e.g. Ul'dah - Steps of Nald") and **Add**.
+**Destinations:** default list is **Ul'dah - Steps of Nald, New Gridania, Limsa Lominsa Lower Decks**. Each row has a rename field plus **Up** / **Down** / **Remove** buttons — this list *is* reorderable, and the three defaults are ordinary entries you can remove or reorder like any other. To add another Aetheryte, use **Add Aetheryte** under the list: type in the search box to narrow the game's own Aetheryte list, click a suggestion (or type the exact name), then press **Add Aetheryte**. The new stop is saved for the current venue immediately and is used by the next run (a run already in progress keeps the route it started with). A blank entry, a name that isn't a real Aetheryte, or one already in the list is refused with a message. If the game's Aetheryte list can't be loaded, you can still type an exact name, but it can't be verified. Your character must have unlocked (attuned to) an Aetheryte for the route to be able to teleport there.
 
 ### How the route works
 
@@ -171,7 +178,7 @@ Moving between Worlds in the same Data Center is a same-Data-Center transfer; mo
 
 ### Terminal
 
-A running log organized **RUN → Data Center → World → Destination**, each line timestamped, color-coded by outcome (green = success, red = failure, yellow = warning, accent = in progress). **Copy Terminal** copies the full history as plain text to your clipboard; a **Jump to latest** button appears if you've scrolled up. The terminal is cleared on venue switch and does not survive a plugin/game reload — only your settings (message, timing, Data Centers, destinations) persist.
+A running log organized **RUN → Data Center → World → Destination**, each line timestamped, color-coded by outcome (green = success, red = failure, yellow = warning, accent = in progress). **Copy Terminal** copies the full history as plain text to your clipboard; a **Jump to latest** button appears if you've scrolled up. The terminal is cleared on venue switch and does not survive a plugin/game reload — only your settings (both shout lines, timing, Data Centers, destinations) persist.
 
 ### Crash Recovery / Resume Run
 
@@ -214,7 +221,7 @@ Guests are detected by presence (a periodic scan of nearby players), not by chat
 
 Pausing keeps the opening resumable; Closing ends it. Anyone already in the venue when you Start or Resume is counted as present but is *not* treated as a fresh arrival for auto-greeting purposes (see [Greeter](#7-greeter)).
 
-Also on the Live tab: a "Tonight Summary" card (Current/Max/Min guest counts, Unique/Visits/Avg per Guest) and a searchable "Guests Nearby" list.
+Also on the Live tab: a "Tonight Summary" card (Current/Max/Min guest counts, Unique/Visits/Avg per Guest) and a searchable "Guests Nearby" list showing one line per guest as `Name — Home World` (with `· Greeted` appended once greeted).
 
 **Visitors** — searchable list of tonight's visitors. Each shows a status badge: **Greeted**, **Greeting...**, **Queued**, or **Not Greeted**. Right-click (or the inline buttons) for **Target**, **Greet**, **Mark Greeted**.
 
@@ -565,11 +572,11 @@ When a player's card completes the pattern, a detached **Bingo Call Alert** wind
 ### Settings (Settings → Modules → Raffle)
 
 - **Backend URL** and **Backend Access Key** — the raffle server's address and its organizer secret. This is VenueOS's own credential (separate from any host/viewer link token) and, per VenueOS's standard credential convention, is shown as plain, selectable, copyable text — never masked.
-- **Defaults** applied to every new raffle you create: **Starting Pot**, **Ticket Cost**, **Prize %**, **Paid Tickets For Free (bonus rule)** (e.g. buy N paid tickets, get one free), and **Free Tickets Per Block**. Each raffle can override its own copy of these after creation.
+- **Defaults** applied to every new raffle you create: **Starting Pot**, **Ticket Cost**, **Prize %**, **Paid Tickets For Free (bonus rule)** (e.g. buy N paid tickets, get one free), and **Free Tickets Per Block**. These are read when you **Create raffle** and copied into that raffle, where they are **locked** — changing the defaults later only affects raffles you create afterwards, never one that already exists. Set them *before* you create the raffle.
 
 ### Creating and managing raffles
 
-- **New raffle name** + **Create raffle** — creates a local raffle you can then configure and publish.
+- **New raffle name** + **Create raffle** — creates a local raffle you can then add participants to and publish. The raffle captures the current **New Raffle Defaults** at this moment. On the raffle's screen, **This Raffle's Rules (Locked)** shows those five values read-only (Starting Pot, Ticket Cost, Prize %, Paid Tickets For Free, Free Tickets Per Block); the pot, prize and bonus-ticket figures for that raffle always use them, even if you change the defaults in Settings while it is running. If a raffle was created with the wrong values, create a new one (and archive or delete the old one).
 - Per raffle: **Rename**, **Archive** (nondestructive — hides it from the active list, fully restorable), **Reset** (clears participants/tickets/winner but keeps the raffle and its backend link — confirmed, since it destroys in-progress data), and **Delete Permanently** (confirmed, cannot be undone — if the raffle was ever published, VenueOS also best-effort deletes the backend's copy; a failed backend cleanup is logged to Diagnostics but never blocks the local deletion you already confirmed).
 - Archived raffles are hidden from the normal list; a **Show archived raffles** view offers **Restore** per row.
 
@@ -585,7 +592,7 @@ When a player's card completes the pattern, a detached **Bingo Call Alert** wind
 - A status badge shows **Not Published**, **Unpublished Changes**, or **Published**.
 - **Publish / Update Raffle** sends the current roster and settings to the backend; **Refresh From Backend** pulls the backend's current state back into VenueOS.
 - Once published, **Host Link** and **Viewer Link** appear (each with its own **Copy** button) — share the Host Link with whoever will spin the wheel, and the Viewer Link with the audience. These are now short links (`.../l/AB23CD`) that are practical to paste directly into FFXIV chat, resolved by the backend to the full link automatically — if a short link hasn't been minted yet (e.g. no Access Key configured in Settings), the field falls back to showing the full link instead, with a **Retry Short Links** button once the key is set. A **Show Full Links** toggle reveals the original full-length links if you ever need them. VenueOS itself never spins the wheel; it's a read-only observer of the backend's spin state and updates automatically the moment a result comes in.
-- **"Unpublished Changes"** appears the moment you adjust tickets, add a participant, or change settings after a Publish — a reminder that the live wheel hasn't seen your latest edits yet until you Publish again.
+- **"Unpublished Changes"** appears the moment you adjust tickets or add a participant after a Publish — a reminder that the live wheel hasn't seen your latest edits yet until you Publish again.
 
 ### Redraw and exclusion
 
@@ -643,7 +650,7 @@ Brackets stays in sync automatically if more than one controller (or the public 
 ### Composing
 
 - **Destination** selector: **Chat**, **Party Finder (Comment)**, or **Macro Line** — each has its own real limit (Chat and Macro Line are measured in bytes, matching how FFXIV itself counts them; Party Finder Comment matches VenueOS's own Party Finder module).
-- The composition box behaves like an ordinary text editor: type, paste, select, and move the cursor normally. Clicking a glyph button in the palette inserts it immediately at your current cursor position (or replaces your current selection) — no need to click back into the box first.
+- The composition box behaves like an ordinary text editor: type, paste, select, and move the cursor normally. Clicking a glyph button in the palette inserts it immediately at your current cursor position (or replaces your current selection) — no need to click back into the box first. Afterwards the box takes focus back with the cursor just after the inserted glyph, so you can keep typing (or click another glyph) without clicking into the box again.
 - The palette renders each button using the actual in-game glyph (via FFXIV's own font), not a placeholder label, so what you see is what will appear in-game. Letters, digits, and a curated set of additional symbols are all available.
 - A live byte counter shows how much room is left against the selected destination's limit, and input simply stops accepting more once you're at the limit — exactly like typing directly into that field in-game would.
 
@@ -903,7 +910,7 @@ Disabling a module never erases its saved configuration — re-enabling it picks
 
 **A player doesn't show up in the game right away.** VenueOS polls the backend periodically rather than instantly — give it a moment.
 
-**Raffle says "Unpublished Changes" and won't go away.** That's expected until you click **Publish / Update Raffle** again — any ticket/participant/setting change after your last publish sets this until you republish.
+**Raffle says "Unpublished Changes" and won't go away.** That's expected until you click **Publish / Update Raffle** again — any ticket/participant change after your last publish sets this until you republish.
 
 **A Raffle redraw didn't let the previous winner roll again — that's intentional.** They're marked "Excluded (previous winner)" and stay excluded across republishes until you check "Also clear previously-excluded winners on publish" and publish again.
 
@@ -945,6 +952,8 @@ Once VenueOS is installed from the Experimental Plugin Repository, updates arriv
 These are documented, non-blocking caveats in the current release — none of them require the affected module to be disabled or treated as unfinished.
 
 - **Bingo's automated payout has completed live end-to-end testing** and uses server-backed transaction tracking as its source of truth for paid/outstanding — see the [Bingo](#12-bingo) section and [Troubleshooting](#22-troubleshooting) above. An ambiguous outcome is still not the same as unpaid and always requires manual reconciliation, never an automatic retry; Mark Paid/Mark Not Paid, or a normal in-game trade, remain fully supported.
+- **0.3.8 maintenance fixes are awaiting consolidated in-game QA.** The 0.3.8 fixes (Party Finder first-refresh hardening, ShoutRunner's Aetheryte picker and second shout line, Attendance Nearby Guests layout, Raffle rules locking, Block Letters caret handling, Brackets Organizer sign-in/rate-limit handling, the Bingo called-ball fix, and no longer triggering the FFXIV System Menu) passed automated validation but have not yet been through the owner's full live FFXIV acceptance pass. Report anything that behaves unexpectedly.
+- **Block Letters:** typed or pasted text can exceed the chat byte limit; the over-limit warning and disabled Copy apply, and palette insertion stays limited. **ShoutRunner:** an in-world, genuinely stuck transfer dialog is no longer dismissed with a synthetic Escape key (that key opened the System Menu); close it manually if it ever occurs.
 - **Party Finder refresh/lifecycle hardening** (0.3.7) has been implementation-accepted and short-QA'd, but the historical intermittent refresh symptom has not yet been through an extended real-session soak test. If you notice a refresh not going out as expected, a manual **Refresh Active Listing** click remains the reliable fallback — see [Troubleshooting](#22-troubleshooting).
 
 ---

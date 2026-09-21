@@ -46,6 +46,9 @@ internal sealed class RaffleOperatorPanel(VenueRaffleService raffle, VenueProfil
 
         ImGui.Spacing();
         UiKit.BeginSectionCard("raffle-defaults", theme, "New Raffle Defaults");
+        ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary));
+        ImGui.TextWrapped("Used for the next raffle you create. A raffle keeps the values it was created with — changing these never alters an existing raffle.");
+        ImGui.PopStyleColor();
         var defaults = raffle.Settings.Defaults;
         var startingPot = defaults.StartingPot;
         if (Forms.FloatField(theme, "Starting Pot", ref startingPot, 1f, 0f)) raffle.SaveDefaults(defaults with { StartingPot = startingPot });
@@ -170,21 +173,34 @@ internal sealed class RaffleOperatorPanel(VenueRaffleService raffle, VenueProfil
         UiKit.EndSectionCard();
     }
 
+    /// <summary>Read-only. These five values were captured from Settings → Raffle → New Raffle Defaults when this
+    /// raffle was created and are locked for its lifetime (see <see cref="VenueRaffleService.Create"/>) — there is no
+    /// editable control here, and the service has no per-raffle setter, so nothing on this screen can change them.</summary>
     private void DrawSettingsSection(VenueTheme theme, LocalRaffle current)
     {
-        UiKit.BeginSectionCard("raffle-settings", theme, "Pot, Tickets & Bonus Rule");
+        UiKit.BeginSectionCard("raffle-settings", theme, "This Raffle's Rules (Locked)");
         var settings = current.Settings;
-        var startingPot = settings.StartingPot;
-        if (Forms.FloatField(theme, "Starting Pot", ref startingPot, 1f, 0f)) raffle.UpdateRaffleSettings(current.Id, settings with { StartingPot = startingPot });
-        var ticketCost = settings.TicketCost;
-        if (Forms.FloatField(theme, "Ticket Cost", ref ticketCost, 0.5f, 0f)) raffle.UpdateRaffleSettings(current.Id, settings with { TicketCost = ticketCost });
-        var prizePct = settings.PrizePercentage;
-        if (Forms.FloatField(theme, "Prize %", ref prizePct, 1f, 0f, 100f)) raffle.UpdateRaffleSettings(current.Id, settings with { PrizePercentage = prizePct });
-        var paidForFree = settings.PaidTicketsForFree;
-        if (Forms.NumericField(theme, "Paid Tickets For Free (bonus rule)", ref paidForFree, 1, 0)) raffle.UpdateRaffleSettings(current.Id, settings with { PaidTicketsForFree = paidForFree });
-        var freePerBlock = settings.FreeTicketsPerBlock;
-        if (Forms.NumericField(theme, "Free Tickets Per Block", ref freePerBlock, 1, 0)) raffle.UpdateRaffleSettings(current.Id, settings with { FreeTicketsPerBlock = freePerBlock });
+        ReadOnlyRow(theme, "Starting Pot", $"{settings.StartingPot:0.##}");
+        ReadOnlyRow(theme, "Ticket Cost", $"{settings.TicketCost:0.##}");
+        ReadOnlyRow(theme, "Prize %", $"{settings.PrizePercentage:0.##}%");
+        ReadOnlyRow(theme, "Paid Tickets For Free (bonus rule)", $"{settings.PaidTicketsForFree}");
+        ReadOnlyRow(theme, "Free Tickets Per Block", $"{settings.FreeTicketsPerBlock}");
+        ImGui.Spacing();
+        ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary));
+        ImGui.TextWrapped("Captured when this raffle was created. Changing Settings → Raffle → New Raffle Defaults only affects raffles you create afterwards, never this one.");
+        ImGui.PopStyleColor();
         UiKit.EndSectionCard();
+    }
+
+    private static void ReadOnlyRow(VenueTheme theme, string label, string value)
+    {
+        ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary));
+        ImGui.TextUnformatted($"{label}:");
+        ImGui.PopStyleColor();
+        ImGui.SameLine();
+        ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextPrimary));
+        ImGui.TextUnformatted(value);
+        ImGui.PopStyleColor();
     }
 
     private void DrawParticipantsSection(VenueTheme theme, LocalRaffle current)

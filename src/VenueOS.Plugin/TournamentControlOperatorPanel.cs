@@ -39,6 +39,7 @@ internal sealed class TournamentControlOperatorPanel(TournamentControlService se
             ImGui.Spacing();
             UiKit.WarningState(theme, dashboard.IsConfigured ? "Not authenticated. Configure or refresh credentials in Settings → Modules → Brackets." : "Not configured yet. Set a server endpoint and credentials in Settings → Modules → Brackets.");
             if (dashboard.IsConfigured) { ImGui.Spacing(); if (UiKit.GhostButton(theme, "Retry Authentication")) service.AuthenticateAsync().GetAwaiter().GetResult(); }
+            DrawAuthStatus(theme);
             confirmDialog.Draw(theme);
             return;
         }
@@ -48,6 +49,18 @@ internal sealed class TournamentControlOperatorPanel(TournamentControlService se
         else DrawTournament(theme, service.Current);
 
         confirmDialog.Draw(theme);
+    }
+
+    /// <summary>Outcome of the last Create Organizer / Authenticate / session expiry for the active venue, in the terminology the operator needs:
+    /// "Organizer Key" (long-lived credential) vs "organizer session" (short-lived sign-in). Also shows how long the server has paused sign-in.</summary>
+    private void DrawAuthStatus(VenueTheme theme)
+    {
+        if (service.AuthStatus is { } status)
+        {
+            ImGui.Spacing();
+            UiKit.InfoBanner(theme, status.Title, status.Message, status.Kind switch { TournamentAuthStatusKind.Error => ToastLevel.Error, TournamentAuthStatusKind.Warning => ToastLevel.Warning, _ => ToastLevel.Information });
+        }
+        if (service.SignInPausedFor is { } wait) ImGui.TextDisabled($"Sign-in is paused by the server's rate limit: {TournamentControlClient.FormatWait(wait)} remaining.");
     }
 
     public void DrawSettings()
@@ -68,7 +81,8 @@ internal sealed class TournamentControlOperatorPanel(TournamentControlService se
         ImGui.Spacing();
         if (UiKit.PrimaryButton(theme, "Authenticate")) service.AuthenticateAsync().GetAwaiter().GetResult();
         ImGui.SameLine();
-        if (UiKit.GhostButton(theme, "Create Organizer")) confirmDialog.Request("Create a new organizer?", "This registers a brand-new organizer identity on the backend using the Server Access Password and Organizer Key entered above. Only do this once per organizer — creating another organizer does not migrate any existing tournaments.", () => service.CreateOrganizerAsync().GetAwaiter().GetResult());
+        if (UiKit.GhostButton(theme, "Create Organizer")) confirmDialog.Request("Create a new organizer?", "This registers a brand-new organizer identity on the backend using the Server Access Password and Organizer Key entered above. Only do this once per organizer — creating another organizer does not migrate any existing tournaments. The server signs this venue in as part of creating the organizer, so you do not need to press Authenticate afterwards.", () => service.CreateOrganizerAsync().GetAwaiter().GetResult());
+        DrawAuthStatus(theme);
         if (!string.IsNullOrWhiteSpace(service.Dashboard.Notice)) { ImGui.Spacing(); UiKit.WarningState(theme, service.Dashboard.Notice!); }
         UiKit.EndSectionCard();
 

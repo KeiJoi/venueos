@@ -530,7 +530,13 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
                 agent->Hide();
             }
 
-            WindowsKeypress.SendKeypress(EscapeVirtualKey);
+            // Escape is a real key event as far as the game is concerned; with the character in the world and nothing
+            // to cancel, its native meaning is "open the System Menu" (ShoutRunnerEscapePolicy). Only send it when the
+            // character is not in the world, which is the only situation this dismissal exists for.
+            if (ShoutRunnerEscapePolicy.ShouldSendEscape(clientState.IsLoggedIn, objectTable.LocalPlayer != null))
+                WindowsKeypress.SendKeypress(EscapeVirtualKey);
+            else
+                log.Debug("ShoutRunner: transfer UI dismissal skipped the Escape keypress — the character is in the world.");
         }
         catch (Exception ex)
         {

@@ -1,5 +1,6 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using VenueOS.Modules.Operations.BlockLetters;
 using VenueOS.Modules.Operations.ShoutRunner;
 using VenueOS.Plugin.Shell;
 using VenueOS.Services;
@@ -8,20 +9,23 @@ using VenueOS.Venues;
 namespace VenueOS.Plugin;
 
 /// <summary>ShoutRunner's <c>Draw()</c>/<c>DrawSettings()</c> content — its own file per <c>NEW_MODULE_GUIDE.md</c>
-/// §21/§33 (not grown into <c>NativeOperationsPanels.cs</c>). <c>Draw()</c> is deliberately compact: Shout Message,
-/// Status + Start/Stop, then the Run Terminal — no macro editor, no preset page, no giant settings copy (per the
-/// reconstruction brief's "SHOUTRUNNER LIVE MODULE UI").</summary>
+/// §21/§33 (not grown into <c>NativeOperationsPanels.cs</c>). <c>Draw()</c> is deliberately compact: Shout Line 1 and
+/// the optional Shout Line 2, Status + Start/Stop, then the Run Terminal — no macro editor, no preset page, no giant
+/// settings copy (per the reconstruction brief's "SHOUTRUNNER LIVE MODULE UI").</summary>
 internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, VenueProfileService venues)
 {
     private Guid bufferVenueId;
     private string shoutMessageBuffer = string.Empty;
+    private string shoutMessageLine2Buffer = string.Empty;
     private bool forceScrollToBottom;
     private ShoutRunnerStartResult? lastStartResult;
     private double? copiedAtImGuiTime;
     private readonly ConfirmDialog confirmDialog = new();
 
-    // Settings-only scratch state for the destination editor.
-    private string newDestinationBuffer = string.Empty;
+    // Settings-only scratch state for the destination editor's "Add Aetheryte" picker.
+    private const int MaxAetheryteSuggestions = 8;
+    private string aetheryteQuery = string.Empty;
+    private (string Text, bool Success)? addAetheryteFeedback;
 
     public void Draw()
     {
@@ -31,11 +35,24 @@ internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, Venue
         DrawRecoveryArea(theme);
 
         UiKit.BeginSectionCard("shoutrunner-message", theme, "Shout Message");
-        if (Forms.TextField(theme, "Message sent with /shout at each destination", ref shoutMessageBuffer, 500))
+        if (Forms.TextField(theme, "Shout Line 1", ref shoutMessageBuffer, 500))
         {
             service.UpdateShoutMessage(shoutMessageBuffer);
             lastStartResult = null;
         }
+        DrawLineByteWarning(theme, shoutMessageBuffer);
+        ImGui.Spacing();
+        if (Forms.TextField(theme, "Shout Line 2 (Optional)", ref shoutMessageLine2Buffer, 500))
+        {
+            service.UpdateShoutMessageLine2(shoutMessageLine2Buffer);
+            lastStartResult = null;
+        }
+        DrawLineByteWarning(theme, shoutMessageLine2Buffer);
+        if (ShoutRunnerShoutLines.IsBlank(shoutMessageBuffer) && !ShoutRunnerShoutLines.IsBlank(shoutMessageLine2Buffer))
+            UiKit.WarningState(theme, "Line 2 is only sent together with Line 1 — enter Shout Line 1.");
+        ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary));
+        ImGui.TextWrapped("Sent with /shout at each destination. If both lines are filled, Line 1 is sent first, followed by Line 2.");
+        ImGui.PopStyleColor();
         UiKit.EndSectionCard();
 
         ImGui.Spacing();
@@ -136,7 +153,9 @@ internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, Venue
             ImGui.Spacing();
             UiKit.WarningState(theme, result switch
             {
-                ShoutRunnerStartResult.ShoutMessageRequired => "Enter a Shout Message before starting.",
+                ShoutRunnerStartResult.ShoutMessageRequired => "Enter Shout Line 1 before starting.",
+                ShoutRunnerStartResult.ShoutMessageTooLong => "Shout Line 1 is too long for chat — shorten it before starting.",
+                ShoutRunnerStartResult.ShoutMessageLine2TooLong => "Shout Line 2 is too long for chat — shorten it before starting.",
                 ShoutRunnerStartResult.NoDataCenterSelected => "Select at least one Data Center in Settings → Modules → ShoutRunner before starting.",
                 ShoutRunnerStartResult.NoDestinationConfigured => "Configure at least one destination in Settings → Modules → ShoutRunner before starting.",
                 _ => "ShoutRunner is already running.",
@@ -318,18 +337,87 @@ internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, Venue
         if (settings.Destinations.Count == 0) UiKit.EmptyState(theme, "No destinations configured", "Add at least one below.");
 
         ImGui.Spacing();
-        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - 90);
-        Forms.PushFieldStyle(theme);
-        ImGui.InputTextWithHint("##new-destination", "e.g. Ul'dah - Steps of Nald", ref newDestinationBuffer, 128);
-        Forms.PopFieldStyle();
-        ImGui.SameLine();
-        if (UiKit.PrimaryButton(theme, "Add", new Vector2(70, 0)) && !string.IsNullOrWhiteSpace(newDestinationBuffer))
-        {
-            service.AddDestination(newDestinationBuffer);
-            newDestinationBuffer = string.Empty;
-        }
+        DrawAddAetheryte(theme, settings);
 
         UiKit.EndSectionCard();
+    }
+
+    /// <summary>The "Add Aetheryte" picker. Pick from the game's own Aetheryte list (typing narrows it; clicking a
+    /// suggestion fills the box) or type an exact name, then press Add Aetheryte — the service validates, persists, and
+    /// appends to the same destination list the defaults live in, and every outcome is reported here rather than a
+    /// click silently doing nothing.</summary>
+    private void DrawAddAetheryte(VenueTheme theme, ShoutRunnerSettings settings)
+    {
+        var known = service.KnownAetheryteNames;
+        Forms.FieldLabel(theme, "Add Aetheryte");
+        if (Forms.SearchBox(theme, "shoutrunner-aetheryte-search", ref aetheryteQuery, known.Count > 0 ? "Search Aetherytes, e.g. Foundation" : "Exact Aetheryte name", ImGui.GetContentRegionAvail().X - 150))
+            addAetheryteFeedback = null;
+        ImGui.SameLine();
+        if (UiKit.PrimaryButton(theme, "Add Aetheryte", new Vector2(140, 0)))
+        {
+            var name = aetheryteQuery.Trim();
+            var result = service.AddDestination(aetheryteQuery);
+            addAetheryteFeedback = result switch
+            {
+                ShoutRunnerAddDestinationResult.Added => ($"Added {service.Settings.Destinations[^1]}.", true),
+                ShoutRunnerAddDestinationResult.Blank => ("Enter or pick an Aetheryte first.", false),
+                ShoutRunnerAddDestinationResult.Duplicate => ($"{name} is already in the route.", false),
+                ShoutRunnerAddDestinationResult.UnknownAetheryte => ($"\"{name}\" is not a known Aetheryte — pick one from the list.", false),
+                _ => ($"That name is too long (max {ShoutRunnerService.MaxDestinationNameLength} characters).", false),
+            };
+            if (result == ShoutRunnerAddDestinationResult.Added) aetheryteQuery = string.Empty;
+        }
+
+        if (known.Count > 0)
+        {
+            var configured = new HashSet<string>(settings.Destinations.Select(d => d.Trim()), StringComparer.OrdinalIgnoreCase);
+            var query = aetheryteQuery.Trim();
+            var matches = known.Where(n => !configured.Contains(n) && (query.Length == 0 || n.Contains(query, StringComparison.OrdinalIgnoreCase))).Take(MaxAetheryteSuggestions).ToList();
+            if (matches.Count == 0)
+            {
+                UiKit.WarningState(theme, query.Length == 0 ? "Every known Aetheryte is already in the route." : "No matching Aetheryte.");
+            }
+            else
+            {
+                ImGui.PushStyleColor(ImGuiCol.ChildBg, UiKit.Color(theme.Tokens.Background));
+                ImGui.BeginChild("shoutrunner-aetheryte-suggestions", new Vector2(0, MathF.Min(matches.Count, 6) * ImGui.GetTextLineHeightWithSpacing() + 12f), true);
+                for (var i = 0; i < matches.Count; i++)
+                {
+                    ImGui.PushID(i);
+                    if (UiKit.ListRow(theme, matches[i], null, string.Equals(matches[i], query, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        aetheryteQuery = matches[i];
+                        addAetheryteFeedback = null;
+                    }
+                    ImGui.PopID();
+                }
+                ImGui.EndChild();
+                ImGui.PopStyleColor();
+            }
+        }
+        else
+        {
+            UiKit.WarningState(theme, "The game's Aetheryte list isn't available right now — type the exact in-game Aetheryte name (it can't be verified until the list loads).");
+        }
+
+        if (addAetheryteFeedback is { } feedback)
+        {
+            if (feedback.Success)
+            {
+                ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.Success));
+                ImGui.TextUnformatted(feedback.Text);
+                ImGui.PopStyleColor();
+            }
+            else UiKit.WarningState(theme, feedback.Text);
+        }
+    }
+
+    /// <summary>Shown under a shout line whose full <c>/shout</c> command exceeds FFXIV's chat limit — the same check
+    /// for Line 1 and Line 2, never a silent truncation.</summary>
+    private static void DrawLineByteWarning(VenueTheme theme, string text)
+    {
+        if (!ShoutRunnerShoutLines.ExceedsLimit(text)) return;
+        UiKit.WarningState(theme, $"{ShoutRunnerShoutLines.CountBytes(text)} / {BlockLettersLimits.ChatBytes} bytes once its /shout command is included — shorten this line.");
     }
 
     private void SyncBuffer()
@@ -338,6 +426,7 @@ internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, Venue
         if (bufferVenueId == venueId) return;
         bufferVenueId = venueId;
         shoutMessageBuffer = service.Settings.ShoutMessage;
+        shoutMessageLine2Buffer = service.Settings.ShoutMessageLine2;
         lastStartResult = null;
     }
 }

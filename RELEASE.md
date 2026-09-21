@@ -1,6 +1,49 @@
-# VenueOS 0.3.7 release
+# VenueOS 0.3.8 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.8 — Maintenance & Reliability Hardening
+
+A maintenance/hardening release that ships the fixes from the post-0.3.7 real-world training audit. It adds no new
+modules. Every fix below passed automated validation (full suite 1343 / 1343, Debug and Release builds with 0
+warnings / 0 errors) and is **implemented — awaiting live FFXIV QA**: the consolidated in-game acceptance pass is
+performed by the owner after this release, so nothing here is claimed as live-tested. The two backend-dependent
+fixes (Bingo, Brackets) rely on backend updates the owner has already deployed. See
+`docs/POST_0.3.7_TRAINING_AUDIT.md` for the per-item ledger and links to each investigation report.
+
+- **Party Finder first-refresh reliability.** The first refresh after starting recruitment could reach the
+  Recruitment Criteria screen but fail to activate **Apply Changes**. Apply must now be genuinely usable before it is
+  clicked, success is judged by the editor actually closing, an Update (never a Start) gets one bounded retry if the
+  editor stays open, a refresh chain that dies silently no longer leaves the operation stuck as "busy", and raw party
+  passwords are no longer written to logs.
+- **Bingo called-ball daub (web page).** Clicking a called ball now marks every exactly matching number on all
+  cards and never un-daubs anything on a repeat click; the server also serializes per-room updates so simultaneous
+  daubs are not lost.
+- **Brackets first Organizer authentication.** A session returned by **Create Organizer** is reused instead of
+  immediately logging in again; an HTTP 429 now shows a clear "temporarily rate limited, try again in N s" message
+  with a countdown and is never retried automatically; session-expired vs. wrong-key messages are distinguished.
+- **ShoutRunner: searchable Aetheryte picker.** **Add Aetheryte** now uses a searchable list built from the game's own
+  Aetheryte data, with validation and on-screen feedback (blank, duplicate, unknown, too long).
+- **ShoutRunner: optional second shout line.** The operational screen has **Shout Line 1** (required) and an
+  optional **Shout Line 2**. Line 2 is sent only after Line 1 is accepted, a partial failure is reported truthfully, and
+  each line is checked against the chat byte limit.
+- **Attendance Nearby Guests.** Each guest now shows on one line as `Name — Home World` (with `· Greeted` appended).
+- **Raffle active-run rules locked.** A running raffle's rules can no longer be changed from its live screen; it shows
+  a read-only **This Raffle's Rules (Locked)** card, and **Settings** controls the defaults for *future* raffles.
+- **Block Letters caret and selection.** Palette blocks are inserted at the real caret (or replace the real
+  selection) even after you have typed, and the caret is restored after each insertion.
+- **No more VenueOS-triggered FFXIV System Menu.** ShoutRunner's shutdown path no longer sends a synthetic Escape
+  keypress on plugin reload, venue switch, module disable or dispose, and Escape is never synthesized while your
+  character is in the world.
+
+Known limitations carried into 0.3.8 (documented, not fixed here): typed or pasted Block Letters text can exceed the
+chat byte limit (the over-limit warning and disabled Copy apply; palette insertion remains byte-limited), and a
+genuinely stuck in-world ShoutRunner transfer dialog is no longer dismissed with a synthetic Escape.
+
+Reports: `docs/PARTY_FINDER_FIRST_REFRESH_INVESTIGATION.md`, `docs/BINGO_CALLED_BALL_WEB_INVESTIGATION.md`,
+`docs/BRACKETS_FIRST_AUTH_INVESTIGATION.md`, `docs/SHOUTRUNNER_0.3.8_MAINTENANCE.md`,
+`docs/ATTENDANCE_RAFFLE_0.3.8_MAINTENANCE.md`, `docs/BLOCK_LETTERS_CARET_0.3.8_MAINTENANCE.md`,
+`docs/SYSTEM_MENU_0.3.8_INVESTIGATION.md`.
 
 ## 0.3.7 — Maintenance, Module Launcher & Window Management
 

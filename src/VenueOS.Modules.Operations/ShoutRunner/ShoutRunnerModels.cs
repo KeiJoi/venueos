@@ -1,3 +1,5 @@
+using VenueOS.Modules.Operations.BlockLetters;
+
 namespace VenueOS.Modules.Operations.ShoutRunner;
 
 /// <summary>Persistent per-venue ShoutRunner configuration — the route policy (Settings → Modules → ShoutRunner)
@@ -7,7 +9,14 @@ namespace VenueOS.Modules.Operations.ShoutRunner;
 /// application behavior independent of the active venue (its only current example is Auto Pop-Out), and different
 /// venues plausibly do want different Data Centers/destinations/timing — so this stays fully per-venue, consistent
 /// with every other reconstructed module. See <c>SHOUTRUNNER_RECONSTRUCTION.md</c> §16/§17/Q1 for the full
-/// reasoning this deliberately departs from the earlier "global module settings" framing.</summary>
+/// reasoning this deliberately departs from the earlier "global module settings" framing.
+///
+/// <para><see cref="ShoutMessage"/> is Shout Line 1 (the JSON property keeps its original name so every existing
+/// saved configuration loads unchanged) and <see cref="ShoutMessageLine2"/> is the optional second line added in
+/// 0.3.8 — an additive, defaulted property, so an old payload without it deserializes to an empty Line 2 with no
+/// schema-version bump. <see cref="Destinations"/> is the one and only route-destination source: the three default
+/// city entries are simply this list's seeded initial contents, never a separate hard-coded set, so any entry the
+/// operator adds is routed exactly like a default one.</para></summary>
 public sealed record ShoutRunnerSettings(
     string ShoutMessage,
     bool RepeatEnabled,
@@ -16,7 +25,8 @@ public sealed record ShoutRunnerSettings(
     int IntervalSeconds,
     int DelayBetweenActionsSeconds,
     List<string> SelectedDataCenters,
-    List<string> Destinations)
+    List<string> Destinations,
+    string ShoutMessageLine2 = "")
 {
     /// <summary>Donor default was 30 minutes (<c>Configuration.IntervalMinutes = 30</c>); the VenueOS redesign uses
     /// a 1-hour default per explicit product direction. Data Centers/Destinations intentionally start unselected —
@@ -31,7 +41,8 @@ public sealed record ShoutRunnerSettings(
         IntervalSeconds: 0,
         DelayBetweenActionsSeconds: 2,
         SelectedDataCenters: [],
-        Destinations: ["Ul'dah - Steps of Nald", "New Gridania", "Limsa Lominsa Lower Decks"]);
+        Destinations: ["Ul'dah - Steps of Nald", "New Gridania", "Limsa Lominsa Lower Decks"],
+        ShoutMessageLine2: string.Empty);
 
     /// <summary>A zero interval is forbidden — the donor allowed it and could hot-loop the entire route back-to-back
     /// with no throttle (familiarization report §15). One minute is the floor; unlike the donor, the total is also
@@ -81,6 +92,62 @@ public enum ShoutRunnerStartResult
     ShoutMessageRequired,
     NoDataCenterSelected,
     NoDestinationConfigured,
+    /// <summary>Shout Line 1, with its <c>/shout </c> prefix, exceeds <see cref="BlockLettersLimits.ChatBytes"/>.</summary>
+    ShoutMessageTooLong,
+    /// <summary>Shout Line 2 (non-blank), with its <c>/shout </c> prefix, exceeds <see cref="BlockLettersLimits.ChatBytes"/>.</summary>
+    ShoutMessageLine2TooLong,
+}
+
+/// <summary>The outcome of <see cref="ShoutRunnerService.AddDestination"/> — the operator-facing "Add Aetheryte"
+/// action. Only <see cref="Added"/> changes anything; every other value leaves the saved list untouched and is
+/// something the UI can explain rather than silently ignoring the click.</summary>
+public enum ShoutRunnerAddDestinationResult
+{
+    Added,
+    /// <summary>Empty or whitespace-only entry.</summary>
+    Blank,
+    /// <summary>Longer than <see cref="ShoutRunnerService.MaxDestinationNameLength"/>.</summary>
+    TooLong,
+    /// <summary>Already in the destination list (case-insensitive) — a duplicate would only shout twice at one place.</summary>
+    Duplicate,
+    /// <summary>Not a known Aetheryte name in the game data (only ever returned when an
+    /// <see cref="IShoutRunnerAetheryteCatalog"/> with data is available).</summary>
+    UnknownAetheryte,
+}
+
+/// <summary>The authoritative list of valid Aetheryte teleport-destination names, sourced from the game's own
+/// Aetheryte data by the real implementation in <c>VenueOS.Plugin</c> (this layer never touches Lumina/Dalamud — the
+/// same boundary <see cref="IShoutRunnerAutomation"/> draws). <see cref="ShoutRunnerService"/> only uses it to
+/// validate and canonicalize an entry as it is ADDED; an already-saved destination is never re-validated against
+/// it, so a configuration written before this catalog existed always keeps working exactly as before.</summary>
+public interface IShoutRunnerAetheryteCatalog
+{
+    /// <summary>Every known Aetheryte name, alphabetical and distinct. Empty when the game data isn't available
+    /// (early plugin startup, a sheet-load failure) — <see cref="ShoutRunnerService.AddDestination"/> then falls
+    /// back to accepting any well-formed name rather than making Add impossible.</summary>
+    IReadOnlyList<string> Names { get; }
+}
+
+/// <summary>Everything about one outgoing <c>/shout</c> line — its normalization, the exact command text, and its
+/// UTF-8 byte count measured the same way the Shouts module measures a line (<see cref="BlockTextLength"/> over the
+/// FULL command including its <c>/shout </c> prefix, against <see cref="BlockLettersLimits.ChatBytes"/>, since that
+/// limit models FFXIV's chat input buffer holding the whole typed command). Line 1 and Line 2 both go through this
+/// one implementation, so they can never be validated differently.</summary>
+public static class ShoutRunnerShoutLines
+{
+    public const string CommandPrefix = "/shout ";
+
+    /// <summary>Trimmed text; a whitespace-only line normalizes to empty, which means "no line."</summary>
+    public static string Normalize(string? text) => (text ?? string.Empty).Trim();
+
+    public static bool IsBlank(string? text) => Normalize(text).Length == 0;
+
+    public static string BuildCommand(string? text) => CommandPrefix + Normalize(text);
+
+    public static int CountBytes(string? text) => BlockTextLength.CountBytes(BuildCommand(text));
+
+    /// <summary>False for a blank line (nothing to send, so nothing to limit).</summary>
+    public static bool ExceedsLimit(string? text) => !IsBlank(text) && CountBytes(text) > BlockLettersLimits.ChatBytes;
 }
 
 /// <summary>One planned stop within a single World's destination traversal — see

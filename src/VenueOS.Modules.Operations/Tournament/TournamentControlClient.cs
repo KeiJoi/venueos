@@ -10,8 +10,12 @@ namespace VenueOS.Modules.Operations.Tournament;
 public sealed record TournamentConnectionSettings(string BaseUrl = "", string? AccessToken = null, DateTimeOffset? SessionExpiresAt = null, string? ServerAccessPassword = null, string? UserKey = null)
 { public TournamentConnectionSettings WithoutSecrets() => this with { AccessToken = null, ServerAccessPassword = null, UserKey = null }; }
 public sealed record TournamentApiError(string Code, string Message);
-public sealed record TournamentResult<T>(bool Success, T? Value = default, TournamentApiError? Error = null, HttpStatusCode? StatusCode = null, TournamentControllerState? AuthoritativeState = null)
-{ public static TournamentResult<T> Failed(string code, string message, HttpStatusCode? status = null) => new(false, default, new(code, message), status); }
+// Error codes an operator can act on (Error.Code): configuration_required, session_expired (the saved organizer SESSION was
+// rejected/expired — never the Organizer Key), invalid_credentials (Server Access Password / Organizer Key not accepted at
+// sign-in), invalid_key (backend key-policy rejection at Create Organizer), rate_limited (HTTP 429; RetryAfter says how long),
+// backend_unavailable (502/503/504 or unreachable), stale_tournament, cancelled, backend_error, invalid_response.
+public sealed record TournamentResult<T>(bool Success, T? Value = default, TournamentApiError? Error = null, HttpStatusCode? StatusCode = null, TournamentControllerState? AuthoritativeState = null, TimeSpan? RetryAfter = null)
+{ public static TournamentResult<T> Failed(string code, string message, HttpStatusCode? status = null, TimeSpan? retryAfter = null) => new(false, default, new(code, message), status, null, retryAfter); }
 public sealed record TournamentSession(string AccessToken, DateTimeOffset ExpiresAt);
 public sealed record ControllerTournament(string Id, string PublicCode, string VenueName, string GameName, string TournamentName, DateTimeOffset EventDate, string Status, int Revision, int PlayerCount);
 public sealed record TournamentCreateRequest(string VenueName, string GameName, string TournamentName, DateTimeOffset EventDate);
@@ -107,11 +111,49 @@ public sealed class TournamentControlClient(HttpClient http)
     // rejects ACTIVE with 400 INVALID_TOURNAMENT_STATE; TournamentDeleteEligibility mirrors that gate client-side.
     public Task<TournamentResult<object>> DeleteAsync(TournamentConnectionSettings settings, string id, CancellationToken ct) => SendAsync<object>(settings, HttpMethod.Delete, $"/api/controller/tournaments/{Uri.EscapeDataString(id)}", null, true, ct);
     private Task<TournamentResult<TournamentControllerState>> MutationAsync(TournamentConnectionSettings settings, string id, string action, HttpMethod method, object body, CancellationToken ct) => SendAsync<TournamentControllerState>(settings, method, $"/api/controller/tournaments/{Uri.EscapeDataString(id)}/{action}", body, true, ct);
+    // Fallback when a 429 carries no usable Retry-After: long enough not to hammer, short enough to be useful. The backend's own
+    // window is at most ten minutes (see docs/auth-rate-limit-investigation.md in the backend repository).
+    public static readonly TimeSpan DefaultRateLimitWait = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan MaxRateLimitWait = TimeSpan.FromMinutes(15);
+    private static TournamentResult<T> RateLimited<T>(HttpResponseMessage response, string body)
+    {
+        var wait = ParseRetryAfter(response, body);
+        var message = wait is { } known ? $"The server is rate limiting sign-in attempts. Try again in {FormatWait(known)}." : "The server is rate limiting sign-in attempts. Try again later.";
+        return TournamentResult<T>.Failed("rate_limited", message, response.StatusCode, wait ?? DefaultRateLimitWait);
+    }
+    internal static TimeSpan? ParseRetryAfter(HttpResponseMessage response, string body)
+    {
+        TimeSpan? wait = null;
+        var header = response.Headers.RetryAfter;
+        if (header?.Delta is { } delta) wait = delta;
+        else if (header?.Date is { } date) wait = date - DateTimeOffset.UtcNow;
+        else
+        {
+            try { using var doc = JsonDocument.Parse(body); if (doc.RootElement.TryGetProperty("error", out var error) && error.TryGetProperty("retryAfterSeconds", out var seconds) && seconds.TryGetInt32(out var value)) wait = TimeSpan.FromSeconds(value); } catch (JsonException) { }
+        }
+        return wait is { } w ? TimeSpan.FromSeconds(Math.Clamp(Math.Ceiling(w.TotalSeconds), 1, MaxRateLimitWait.TotalSeconds)) : null;
+    }
+    public static string FormatWait(TimeSpan wait) => wait.TotalMinutes >= 1 ? $"{(int)wait.TotalMinutes}m {wait.Seconds:00}s" : $"{Math.Max(1, (int)Math.Ceiling(wait.TotalSeconds))}s";
+    // Backend key-policy messages are fixed, secret-free sentences; only the vocabulary is aligned with what the operator sees ("Organizer Key").
+    private static TournamentApiError? ReadError(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.Object) return null;
+            var code = error.TryGetProperty("code", out var c) ? c.GetString() : null; var message = error.TryGetProperty("message", out var m) ? m.GetString() : null;
+            if (code is null) return null;
+            message = string.IsNullOrWhiteSpace(message) ? "The Organizer Key was rejected." : message.Replace("user key", "Organizer Key", StringComparison.OrdinalIgnoreCase);
+            return new(code, message.Length > 200 ? message[..200] : message);
+        }
+        catch (JsonException) { return null; }
+    }
     private async Task<TournamentResult<T>> SendAsync<T>(TournamentConnectionSettings settings, HttpMethod method, string path, object? body, bool authenticated, CancellationToken ct)
     {
         var baseUri = NormalizeBaseUri(settings.BaseUrl); if (baseUri is null) return TournamentResult<T>.Failed("configuration_required", "Tournament endpoint is not set.");
-        if (authenticated && (string.IsNullOrWhiteSpace(settings.AccessToken) || settings.SessionExpiresAt <= DateTimeOffset.UtcNow)) return TournamentResult<T>.Failed("session_expired", "Organizer session is required.", HttpStatusCode.Unauthorized);
-        try { using var request = new HttpRequestMessage(method, new Uri(baseUri, path)); if (authenticated) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.AccessToken); if (body is not null) request.Content = JsonContent.Create(body, options: Json); using var response = await http.SendAsync(request, ct).ConfigureAwait(false); var text = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false); if (response.StatusCode == HttpStatusCode.Conflict) return new(false, default, new("stale_tournament", "Tournament changed; authoritative state was requested."), response.StatusCode); if (response.StatusCode == HttpStatusCode.Unauthorized) return TournamentResult<T>.Failed("session_expired", "Organizer session expired.", response.StatusCode); if (!response.IsSuccessStatusCode) return TournamentResult<T>.Failed("backend_error", $"Tournament backend returned {(int)response.StatusCode}.", response.StatusCode); if (typeof(T) == typeof(object)) return new(true, (T)(object)new object()); var value = JsonSerializer.Deserialize<T>(text, Json); return value is null ? TournamentResult<T>.Failed("invalid_response", "Tournament backend returned an invalid response.") : new(true, value); }
+        if (authenticated && string.IsNullOrWhiteSpace(settings.AccessToken)) return TournamentResult<T>.Failed("session_expired", "No organizer session. Authenticate first.", HttpStatusCode.Unauthorized);
+        if (authenticated && settings.SessionExpiresAt <= DateTimeOffset.UtcNow) return TournamentResult<T>.Failed("session_expired", "Organizer session expired.", HttpStatusCode.Unauthorized);
+        try { using var request = new HttpRequestMessage(method, new Uri(baseUri, path)); if (authenticated) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.AccessToken); if (body is not null) request.Content = JsonContent.Create(body, options: Json); using var response = await http.SendAsync(request, ct).ConfigureAwait(false); var text = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false); if (response.StatusCode == HttpStatusCode.Conflict) return new(false, default, new("stale_tournament", "Tournament changed; authoritative state was requested."), response.StatusCode); if (response.StatusCode == HttpStatusCode.Unauthorized) return authenticated ? TournamentResult<T>.Failed("session_expired", "Organizer session expired.", response.StatusCode) : TournamentResult<T>.Failed("invalid_credentials", "The Server Access Password or Organizer Key was not accepted.", response.StatusCode); if (response.StatusCode == HttpStatusCode.TooManyRequests) return RateLimited<T>(response, text); if (!authenticated && response.StatusCode == HttpStatusCode.BadRequest && ReadError(text) is { Code: "INVALID_USER_KEY" } keyError) return TournamentResult<T>.Failed("invalid_key", keyError.Message, response.StatusCode); if (response.StatusCode is HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout) return TournamentResult<T>.Failed("backend_unavailable", $"Tournament backend is unavailable ({(int)response.StatusCode}).", response.StatusCode); if (!response.IsSuccessStatusCode) return TournamentResult<T>.Failed("backend_error", $"Tournament backend returned {(int)response.StatusCode}.", response.StatusCode); if (typeof(T) == typeof(object)) return new(true, (T)(object)new object()); var value = JsonSerializer.Deserialize<T>(text, Json); return value is null ? TournamentResult<T>.Failed("invalid_response", "Tournament backend returned an invalid response.") : new(true, value); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { return TournamentResult<T>.Failed("cancelled", "Request cancelled."); }
         catch (Exception) { return TournamentResult<T>.Failed("connection_failed", "Unable to complete tournament request."); }
     }

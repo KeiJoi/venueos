@@ -21,7 +21,9 @@ public interface IShoutRunnerAutomation
     /// <summary>Hard-cancels whatever the engine is currently doing: aborts Lifestream if a transfer is in flight,
     /// dismisses any visible transfer UI, and lets any in-flight bounded wait observe cancellation. Called from
     /// <c>ShoutRunnerService</c>'s Stop sequence — must return quickly and must never leave Lifestream mid-transfer
-    /// with nothing having told it to stop, unlike the donor's <c>Stop()</c> (familiarization report §14).</summary>
+    /// with nothing having told it to stop, unlike the donor's <c>Stop()</c> (familiarization report §14). Only ever
+    /// called while a run is actually in progress — never as an idle "make sure everything is quiet" call — and must
+    /// never synthesize an Escape key while the character is in the world (see <see cref="ShoutRunnerEscapePolicy"/>).</summary>
     void Abort();
 
     /// <summary>The one shared readiness/recovery gate — see <see cref="ShoutRunnerReadinessOutcome"/>'s doc

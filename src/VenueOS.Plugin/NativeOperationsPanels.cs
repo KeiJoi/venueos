@@ -1,6 +1,7 @@
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using VenueOS.Modules.Operations;
+using VenueOS.Modules.Operations.Attendance;
 using VenueOS.Plugin.Shell;
 using VenueOS.Services;
 using VenueOS.Venues;
@@ -135,15 +136,17 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
         UiKit.BeginSectionCard("attendance-guests", theme, $"Guests Nearby ({attendance.Guests.Count})");
         Forms.SearchBox(theme, "attendance-search", ref guestSearch, "Search guests by name");
         ImGui.Spacing();
-        var guests = attendance.Guests.Values.Where(g => string.IsNullOrWhiteSpace(guestSearch) || g.Name.Contains(guestSearch, StringComparison.OrdinalIgnoreCase)).OrderBy(g => g.Name).ToArray();
-        if (guests.Length == 0) UiKit.EmptyState(theme, "No guests yet", "Guests will appear here as they're detected nearby.");
+        // Attendance is the authoritative greeted-state source (see AttendanceService.IsGreeted's doc comment) —
+        // this reads it directly rather than a Greeter-owned flag.
+        var guests = NearbyGuestRows.Build(attendance.Guests.Values, guestSearch, attendance.IsGreeted);
+        if (guests.Count == 0) UiKit.EmptyState(theme, "No guests yet", "Guests will appear here as they're detected nearby.");
         else foreach (var guest in guests)
         {
             ImGui.PushID(guest.Name + guest.HomeWorld);
-            // Attendance is the authoritative greeted-state source (see AttendanceService.IsGreeted's doc comment) —
-            // this reads it directly rather than a Greeter-owned flag.
-            var subtitle = attendance.IsGreeted(new GuestIdentity(guest.Name, guest.HomeWorld)) ? $"{guest.HomeWorld} · Greeted" : guest.HomeWorld;
-            UiKit.ListRow(theme, guest.Name, subtitle, false);
+            // One single-line row per guest ("Name — HomeWorld"). ListRow's two-line form draws its subtitle *below*
+            // a fixed-height selectable, which left a blank gap under the name so the world read as belonging to the
+            // next guest — the single-line form has no subtitle to displace.
+            UiKit.ListRow(theme, guest.Text, null, false);
             ImGui.PopID();
         }
         UiKit.EndSectionCard();

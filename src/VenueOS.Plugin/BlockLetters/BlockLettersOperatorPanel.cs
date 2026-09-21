@@ -21,10 +21,13 @@ namespace VenueOS.Plugin.BlockLetters;
 /// BLOCK_LETTERS_IMPLEMENTATION.md for why the earlier "queue it and apply inside the next callback" design failed
 /// live: <c>ImGuiInputTextFlags.CallbackAlways</c> only fires while the InputText widget is ImGui's active item, and
 /// clicking any other widget (a palette button) moves that active-item status away from the text box, so a queued
-/// insertion never got applied until the operator clicked back into the box. <see cref="selectionStartChars"/>/
-/// <see cref="selectionEndChars"/> are kept in sync from the widget's own callback data while the operator is
-/// actively editing, and are the same fields a button click reads and updates directly — one authoritative cursor/
-/// selection model regardless of which input path is driving it.</summary>
+/// insertion never got applied until the operator clicked back into the box. <see cref="observation"/> is refreshed
+/// from the widget's own callback data every frame the operator is actively editing (see <see cref="EditorCallback"/>
+/// for exactly which callback fields are trustworthy), and is what a button click reads and then replaces directly —
+/// one authoritative cursor/selection model regardless of which input path is driving it. After a palette insertion
+/// the panel hands focus back to the box with the caret just after the inserted block (see <see cref="pendingRestore"/>),
+/// so the operator can keep typing without clicking into it; the composition itself is still mutated directly, never
+/// through that restoration.</summary>
 internal sealed class BlockLettersOperatorPanel(BlockLettersService service, VenueProfileService venues, IFontHandle blockGlyphFont)
 {
     private static readonly BlockLettersDestination[] DestinationValues =
@@ -46,14 +49,20 @@ internal sealed class BlockLettersOperatorPanel(BlockLettersService service, Ven
     private int activeMaxBytes = BlockLettersLimits.ChatBytes;
     private double? copiedAtImGuiTime;
 
-    // The one authoritative cursor/selection model — a C# char index into `composition`, kept in sync from BOTH
-    // the ImGui callback (while the operator is actively typing/clicking/selecting in the box) and a palette-button
-    // click (applied immediately, with no dependency on the box regaining focus). `hasKnownCursor` is false only
-    // until the operator has interacted with the box at least once this session, in which case a button click
-    // falls back to "insert at end" per the task's explicitly allowed fallback.
-    private int selectionStartChars;
-    private int selectionEndChars;
-    private bool hasKnownCursor;
+    // The one authoritative cursor/selection model — C# char indices into `composition`, refreshed from the ImGui
+    // callback while the operator is actively typing/clicking/selecting in the box and replaced by a palette-button
+    // click (applied immediately, with no dependency on the box regaining focus). It carries the length of the text
+    // it describes, and is only used while that still matches `composition`; null (never interacted, cleared, venue
+    // switch) or a mismatch means "no trustworthy caret" and a button click appends at the end of the CURRENT text.
+    private BlockEditorObservation? observation;
+
+    // One-shot request to give the composition box keyboard focus, with the caret/selection restored, on the frame(s)
+    // right after a palette insertion (the click itself moved focus to the button). Frame-bounded so it can never
+    // linger and jump the caret later, and consumed exactly once — never a per-frame focus grab.
+    private const int RestoreLifetimeFrames = 4;
+    private EditorRestore? pendingRestore;
+
+    private sealed record EditorRestore(BlockEditorSelection Selection, int TextLength, int ExpiresAtFrame, bool FocusRequested);
 
     // --- Live operation: Home → Block Letters ------------------------------------------------------------------
 
@@ -117,9 +126,8 @@ internal sealed class BlockLettersOperatorPanel(BlockLettersService service, Ven
         if (venues.Current.Id == trackedVenueId) return;
         trackedVenueId = venues.Current.Id;
         composition = "";
-        selectionStartChars = 0;
-        selectionEndChars = 0;
-        hasKnownCursor = false;
+        observation = null;
+        pendingRestore = null;
         var index = Array.IndexOf(DestinationValues, service.Settings.DefaultDestination);
         destinationIndex = Math.Max(0, index);
     }
@@ -129,6 +137,16 @@ internal sealed class BlockLettersOperatorPanel(BlockLettersService service, Ven
         Forms.FieldLabel(theme, "Composition");
         ImGui.SetNextItemWidth(-1);
         Forms.PushFieldStyle(theme);
+        if (pendingRestore is { } restore)
+        {
+            if (ImGui.GetFrameCount() > restore.ExpiresAtFrame)
+                pendingRestore = null;
+            else if (!restore.FocusRequested)
+            {
+                ImGui.SetKeyboardFocusHere(); // one-shot; takes effect on the following frame, where EditorCallback restores the caret
+                pendingRestore = restore with { FocusRequested = true };
+            }
+        }
         ImGui.InputTextMultiline(
             "##blockletters-composition",
             ref composition,
@@ -143,10 +161,13 @@ internal sealed class BlockLettersOperatorPanel(BlockLettersService service, Ven
     /// feeds a paste through the same per-character filter path), so evaluating one character at a time against the
     /// remaining byte budget naturally implements "accept as much of a paste as fits, drop the rest" with no
     /// paste-specific code. <c>CallbackAlways</c> fires every frame the composition box is the active/focused ImGui
-    /// item and is used ONLY to keep <see cref="selectionStartChars"/>/<see cref="selectionEndChars"/> in sync with
-    /// the operator's own typing/clicking/selecting — palette-button insertion no longer waits for this callback at
-    /// all (see <see cref="InsertGlyph"/>), which is the live-QA fix: the callback is not guaranteed to fire on the
-    /// frame(s) right after a button click, since that click moves ImGui's active-item status to the button.</summary>
+    /// item and is used ONLY to keep <see cref="observation"/> in sync with the operator's own typing/clicking/
+    /// selecting (and, once, to restore the caret after a palette insertion) — palette-button insertion no longer
+    /// waits for this callback at all (see <see cref="InsertGlyph"/>), which is the live-QA fix: the callback is not
+    /// guaranteed to fire on the frame(s) right after a button click, since that click moves ImGui's active-item
+    /// status to the button. NOTE (0.3.8 caret investigation, unchanged here): verified against the game's ImGui, the
+    /// CharFilter callback's data carries only <c>EventChar</c> — <c>BufTextSpan</c> is empty and the selection is 0 —
+    /// so the per-character budget check above evaluates against an empty buffer; see BLOCK_LETTERS_CARET_0.3.8_MAINTENANCE.md.</summary>
     private int EditorCallback(ref ImGuiInputTextCallbackData data)
     {
         if (data.EventFlag == ImGuiInputTextFlags.CallbackCharFilter)
@@ -166,32 +187,48 @@ internal sealed class BlockLettersOperatorPanel(BlockLettersService service, Ven
 
         if (data.EventFlag == ImGuiInputTextFlags.CallbackAlways)
         {
-            selectionStartChars = Utf8Offsets.ToCharIndex(data.BufTextSpan, data.SelectionStart);
-            selectionEndChars = Utf8Offsets.ToCharIndex(data.BufTextSpan, data.SelectionEnd);
-            hasKnownCursor = true;
+            if (pendingRestore is { FocusRequested: true } restore
+                && ImGui.GetFrameCount() <= restore.ExpiresAtFrame
+                && Encoding.UTF8.GetCharCount(data.BufTextSpan) == restore.TextLength)
+            {
+                // First active frame after a palette insertion: put the caret (or preserved selection) where the
+                // insertion left it. A freshly focused widget otherwise starts at byte 0. Set all three fields —
+                // ImGui's own selection pair does not follow the caret (see BlockEditorCaret).
+                var text = Encoding.UTF8.GetString(data.BufTextSpan);
+                var startBytes = BlockEditorCaret.ToByteOffset(text, restore.Selection.Start);
+                var endBytes = BlockEditorCaret.ToByteOffset(text, restore.Selection.End);
+                data.SelectionStart = startBytes;
+                data.SelectionEnd = endBytes;
+                data.CursorPos = endBytes;
+                pendingRestore = null;
+                observation = new BlockEditorObservation(restore.Selection, restore.TextLength);
+                return 0;
+            }
+
+            // The caret is CursorPos; SelectionStart/SelectionEnd only count while they differ (a real selection).
+            // Typing leaves them frozen at the previous click position — reading them alone is exactly what made a
+            // block inserted after typing land right after the previous block.
+            observation = BlockEditorCaret.Observe(data.BufTextSpan, data.CursorPos, data.SelectionStart, data.SelectionEnd);
         }
 
         return 0;
     }
 
-    /// <summary>The actual live-QA fix for delayed insertion: a palette-button click mutates the ONE authoritative
-    /// <see cref="composition"/> string directly, through the same pure <see cref="BlockTextEditor.Insert"/> logic
-    /// the typed/pasted path uses, with no dependency on the InputTextMultiline widget regaining focus or its
-    /// callback firing again. ImGui's <c>ref string</c> InputText binding re-syncs its displayed content from
-    /// whatever <see cref="composition"/> currently holds on every frame the widget is NOT the active item (it only
-    /// keeps its own internal edit buffer while active), so the very next rendered frame shows the inserted glyph —
-    /// no second click into the box required. Falls back to inserting at the end of the text if the operator has
-    /// never yet interacted with the box this session (<see cref="hasKnownCursor"/> false), matching the one
-    /// explicitly allowed no-cursor-known fallback.</summary>
+    /// <summary>A palette-button click mutates the ONE authoritative <see cref="composition"/> string directly (the
+    /// earlier live-QA fix — no dependency on the InputTextMultiline widget's callback firing after the click), at the
+    /// editor's current caret/selection as last observed while the operator was editing
+    /// (<see cref="BlockEditorCaret.InsertAtEditorPosition"/>). The observation is used only while it still describes
+    /// the current text; otherwise the block is appended at the end of the CURRENT composition — never at a position
+    /// remembered from an earlier insertion. ImGui's <c>ref string</c> binding re-syncs its displayed content from
+    /// <see cref="composition"/> on every frame the widget is not active, so the next rendered frame shows the result.
+    /// Afterwards the box is handed focus with the caret just after the block (or the untouched selection, if the
+    /// block did not fit the byte budget) so typing can continue without clicking into it.</summary>
     private void InsertGlyph(string value)
     {
-        var selStart = hasKnownCursor ? selectionStartChars : composition.Length;
-        var selEnd = hasKnownCursor ? selectionEndChars : composition.Length;
-        var result = BlockTextEditor.Insert(composition, selStart, selEnd, value, activeMaxBytes);
-        composition = result.Text;
-        selectionStartChars = result.CursorPos;
-        selectionEndChars = result.CursorPos;
-        hasKnownCursor = true;
+        var outcome = BlockEditorCaret.InsertAtEditorPosition(composition, observation, value, activeMaxBytes);
+        composition = outcome.Text;
+        observation = new BlockEditorObservation(outcome.Selection, composition.Length);
+        pendingRestore = new EditorRestore(outcome.Selection, composition.Length, ImGui.GetFrameCount() + RestoreLifetimeFrames, FocusRequested: false);
     }
 
     private void DrawActions(VenueTheme theme, bool overLimit)
@@ -218,8 +255,8 @@ internal sealed class BlockLettersOperatorPanel(BlockLettersService service, Ven
             confirmDialog.Request("Clear composition?", "The current block-letter text will be cleared. This cannot be undone.", () =>
             {
                 composition = "";
-                selectionStartChars = 0;
-                selectionEndChars = 0;
+                observation = null;
+                pendingRestore = null;
             });
         ImGui.EndDisabled();
     }

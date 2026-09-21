@@ -406,3 +406,75 @@ accumulated maintenance batch as part of VenueOS 0.3.7 — see `RELEASE.md`. Ext
   validation (TEST H) remains ongoing/recommended and does not block this release.
 - **Mair's Trivia was not touched by this pass.**
 - No other module's files were modified by this pass.
+
+---
+
+# Post-0.3.7 investigation: first-refresh `Apply Changes` failure (VenueOS 0.3.8 maintenance, work package 1)
+
+Status: **implemented and unit-tested; awaiting live QA.** Uncommitted; rides the combined 0.3.8 release. The 0.3.7
+history above is unchanged and remains accurate: everything it describes is preserved. Full report:
+[`PARTY_FINDER_FIRST_REFRESH_INVESTIGATION.md`](PARTY_FINDER_FIRST_REFRESH_INVESTIGATION.md).
+
+## Production observation
+
+The TEST H soak this document recommended has now been run (five hours, two PCs). It **falsified** "hardening is
+enough": the original symptom still occurs, so the first-refresh defect is **open**, not merely un-validated.
+
+## First-refresh-only pattern
+
+Main PC (stronger, Debug build, VenueOS Party Finder window closed after starting recruitment): refresh #1 failed,
+refreshes #2–#5 passed. Historical occurrences were also first-refresh. Mini PC (weaker, two accounts, window open):
+every refresh passed.
+
+## Exact failure boundary
+
+The chain reached the fully populated Recruitment Criteria (edit) screen showing **Apply Changes** and then failed to get
+it activated — one native action from completing. Not: Party Finder open, locating the listing, Edit, opening or populating
+the criteria form, zoning, logout, world travel, or machine load.
+
+## Main-PC vs mini-PC; module open vs closed (investigated variable)
+
+The machine difference is not throughput (the weaker machine passed). Module-window state was **proven irrelevant from
+code**: `PartyFinderModule.Tick` is empty; automation is driven only by ECommons `TaskManager` (`Framework.Update`) and the
+`IChatGui` subscription; the operator panel only reads service state; the service/module assembly references no ImGui/
+Dalamud assembly; and a test runs the whole Start → refresh → refresh sequence drawn-every-frame vs never-drawn with
+identical traces. Debug vs Release has no Party Finder difference (no conditional compilation).
+
+## Root cause
+
+Native reason **not provable from source**; see the report §9/§26. Proven source defects on the failing path:
+(1) pacing to `Apply Changes` was measured from the Edit *click*, not from the editor being observed, and readiness was only
+`IsReady && IsVisible`; (2) a dispatch was treated as acceptance, with no recovery; (3) an unusable control was
+indistinguishable from a missing one; (4) — a latent 0.3.7 interaction — ECommons aborts a chain silently on a per-task timeout
+or step exception, which would leave the engine's `IsBusy` true forever and, because of 0.3.7's own guard, silently block
+every later refresh; (5) an unbounded wait for the Edit button fed (4). Leading (unproven) hypothesis: the first refresh
+is the first cold pass through the detail/edit route, so `Apply Changes` is dispatched into an addon that is
+ready/visible but not yet settled.
+
+## Repair
+
+State-based only. An observed-editor gate (`wait_editor_ready`) before the editor-dependent pacing; a pure, tested
+readiness classifier for the submit control; dispatch once; confirm the authoritative transition (editor closes); on
+*observed* non-transition (≥ 2 s, editor still open, control still enabled, no popup pending, update-only) exactly one bounded
+re-dispatch; lost-chain reconciliation so ownership can never be stranded; bounded Edit-button wait. No delay, sleep or
+timeout was added or lengthened; the donor-parity pacing is unchanged but now anchored to an observed event.
+
+## Diagnostics added
+
+Per-operation id/kind/reason/first-update flag/addon load state at start; a millisecond milestone timeline and outcome at
+end; submit-control readiness on change; every dispatch with mechanism, label and native event type/param; confirmation;
+recovery warning; attributable Diagnostics suffix (op, step, elapsed); lost-chain report. Scan logging throttled to changes;
+the party password is no longer written to the log.
+
+## Tests
+
+33 new (`PartyFinderApplyFlowTests` 17, `PartyFinderOperationOwnershipTests` 16): readiness classification, confirmation,
+bounded recovery, never-sent vs sent-ignored, ownership held/cleared on every outcome, first vs later refresh,
+presentation independence. Total 1206/1206. Native behavior is live-QA-only and was not faked.
+
+## Remaining live-QA requirements
+
+TESTS A–I in report §25 — first-refresh manual and automatic with the module closed and open, second+ refreshes,
+observability (the `op#` lines), regression sweep, and a long soak whose harvested `op#` lines (especially any
+`re-dispatching` warning and the `addons:` cold/warm start line) will confirm or refute the leading hypothesis. Until
+that soak passes, describe this as a repair with instrumentation, not a confirmed fix.

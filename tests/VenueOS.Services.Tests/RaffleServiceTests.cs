@@ -54,8 +54,8 @@ public sealed class RaffleServiceTests
     public void Adding_paid_tickets_merges_by_name_and_homeworld_and_applies_the_bonus_rule()
     {
         var (service, _, _) = Build();
+        service.SaveDefaults(new RaffleSettings(PaidTicketsForFree: 5, FreeTicketsPerBlock: 1)); // a raffle's rules are captured at Create, not edited afterwards
         var raffle = service.Create("Friday");
-        service.UpdateRaffleSettings(raffle.Id, new RaffleSettings(PaidTicketsForFree: 5, FreeTicketsPerBlock: 1));
         service.AddPaidTickets(raffle.Id, "Ada", "Balmung", 5);
         service.AddPaidTickets(raffle.Id, "ada", "balmung", 5); // same identity, different casing - must merge
 

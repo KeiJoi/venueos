@@ -109,6 +109,11 @@ public static class BlockTextEditor
         var start = Math.Clamp(Math.Min(selectionStart, selectionEnd), 0, current.Length);
         var end = Math.Clamp(Math.Max(selectionStart, selectionEnd), 0, current.Length);
 
+        // Never split a surrogate pair: a caret inside one snaps back to its start; a selection widens to cover it.
+        var isCaret = start == end;
+        start = BlockEditorCaret.SnapToScalarBoundary(current, start, forward: false);
+        end = isCaret ? start : BlockEditorCaret.SnapToScalarBoundary(current, end, forward: true);
+
         var prefix = current[..start];
         var suffix = current[end..];
         var budgetForInsertion = maxBytes - BlockTextLength.CountBytes(prefix) - BlockTextLength.CountBytes(suffix);
@@ -117,6 +122,12 @@ public static class BlockTextEditor
             return new BlockTextEditResult(current, start, budgetForInsertion <= 0 && insertion.Length > 0);
 
         var fitted = FitWithinByteBudget(insertion, budgetForInsertion);
+
+        // Nothing fit (a 3-byte glyph against a 1–2 byte budget): reject outright rather than deleting a selection
+        // and inserting nothing.
+        if (fitted.Length == 0)
+            return new BlockTextEditResult(current, start, true);
+
         var newText = prefix + fitted + suffix;
         return new BlockTextEditResult(newText, start + fitted.Length, fitted.Length < insertion.Length);
     }

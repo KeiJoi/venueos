@@ -64,11 +64,20 @@ public sealed class VenueRaffleService(VenueRaffleClient client, VenueProfileSer
     // --- Settings (persistent, Settings → Modules → Raffle) ----------------------------------------------------
 
     public void SaveConnection(RaffleConnectionSettings connection) { Settings = Settings with { Connection = connection }; Save(); EnsureRealtimeConnection(); }
+
+    /// <summary>Saves the economics/rules the <b>next</b> raffle will start with (Settings → Modules → Raffle → New
+    /// Raffle Defaults). This is the only place those five values (Starting Pot, Ticket Cost, Prize %, Paid Tickets
+    /// For Free, Free Tickets Per Block) can be changed. It never touches a raffle that already exists: each
+    /// <see cref="LocalRaffle"/> captured its own copy in <see cref="Create"/> and that copy is immutable for the
+    /// raffle's lifetime — see <see cref="LocalRaffle.Settings"/>. There is deliberately no per-raffle setter.</summary>
     public void SaveDefaults(RaffleSettings defaults) { Settings = Settings with { Defaults = defaults }; Save(); }
-    public void UpdateRaffleSettings(string raffleId, RaffleSettings settings) => Update(raffleId, r => r with { Settings = settings });
 
     // --- Lifecycle: create / select / rename / archive / delete / reset --------------------------------------
 
+    /// <summary>Starts a new raffle. This is the moment the active-run configuration is captured: the current
+    /// <see cref="VenueRaffleSettings.Defaults"/> are copied (a value copy — <see cref="RaffleSettings"/> is an
+    /// immutable record) into the new raffle, which owns them from then on. Later edits to the defaults affect only
+    /// raffles created after that.</summary>
     public LocalRaffle Create(string name)
     {
         var raffle = new LocalRaffle(
@@ -375,11 +384,16 @@ public sealed class VenueRaffleService(VenueRaffleClient client, VenueProfileSer
         realtime.Start(socketUri, raffle.ExternalId, token);
     }
 
+    /// <summary>The single funnel every per-raffle mutation goes through. A raffle's economics/rules
+    /// (<see cref="LocalRaffle.Settings"/>) are frozen at <see cref="Create"/>, so whatever a transform returns, the
+    /// raffle's original <see cref="LocalRaffle.Settings"/> is re-imposed — no present or future caller can alter an
+    /// existing raffle's pot/ticket/bonus/prize rules by accident through this path.</summary>
     private void Update(string raffleId, Func<LocalRaffle, LocalRaffle> transform)
     {
         var index = Settings.Raffles.FindIndex(x => x.Id == raffleId);
         if (index < 0) return;
-        Settings.Raffles[index] = transform(Settings.Raffles[index]);
+        var existing = Settings.Raffles[index];
+        Settings.Raffles[index] = transform(existing) with { Settings = existing.Settings };
         Save();
     }
 

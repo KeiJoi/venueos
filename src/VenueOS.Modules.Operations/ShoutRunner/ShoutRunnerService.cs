@@ -1,3 +1,4 @@
+using VenueOS.Modules.Operations.BlockLetters;
 using VenueOS.Services;
 using VenueOS.Venues;
 
@@ -22,9 +23,12 @@ namespace VenueOS.Modules.Operations.ShoutRunner;
 /// Fully unit-testable with a fake <see cref="IShoutRunnerAutomation"/> (returning already-completed
 /// <see cref="Task{T}"/>s) and a fake <see cref="IClock"/> — no real waiting, no live Dalamud/game context, exactly
 /// like <c>VenueOS.Modules.Operations.PartyFinder.PartyFinderService</c>.</summary>
-public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCommandService chat, VenueProfileService profiles, DiagnosticsService diagnostics, IClock clock, IShoutRunnerRecoveryStore recoveryStore)
+public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCommandService chat, VenueProfileService profiles, DiagnosticsService diagnostics, IClock clock, IShoutRunnerRecoveryStore recoveryStore, IShoutRunnerAetheryteCatalog? aetheryteCatalog = null)
 {
     public const string ModuleId = "communication.announcements";
+
+    /// <summary>The longest destination name accepted — matches the Settings text field's own buffer.</summary>
+    public const int MaxDestinationNameLength = 128;
 
     /// <summary>Schema version 2 — the donor-shaped "Announcements" schema (scheduled multi-channel message presets,
     /// <c>Operations.cs</c>'s <c>AnnouncementsSettings</c>) was schema version 1 under this same module ID. Bumping
@@ -70,6 +74,12 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     private Task<bool>? shoutTask;
     private Task<ShoutRunnerReadinessOutcome>? stoppingTask;
 
+    // The shout step's own sub-state: which of the (up to two) lines the in-flight shoutTask is for, and why a line
+    // that never reached the chat queue was refused. Both are reset by BeginShout and only read from
+    // ProcessShoutCompletion, which only runs while State == SendingShout — see BeginShoutLine's doc comment.
+    private int shoutLineNumber = 1;
+    private string? shoutRefusalReason;
+
     // ----- crash-recovery journal state (see ShoutRunnerRecoveryJournal's doc comment) -----
     private Guid? activeRunId;
     private List<ShoutRunnerRecoverySkippedDataCenter> activeSkippedDataCenters = [];
@@ -96,6 +106,10 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     public DateTimeOffset? NextRunAtUtc => State == ShoutRunnerState.WaitingRepeat ? nextRunAtUtc : null;
     public ShoutRunnerSettings Settings => settings;
     public IReadOnlyList<ShoutRunnerTerminalEvent> TerminalEvents => terminal.Events;
+
+    /// <summary>The valid Aetheryte names the "Add Aetheryte" picker can offer — empty when the game data isn't
+    /// available (see <see cref="IShoutRunnerAetheryteCatalog.Names"/>).</summary>
+    public IReadOnlyList<string> KnownAetheryteNames => aetheryteCatalog?.Names ?? [];
 
     /// <summary>Loaded once, at construction, from whatever <see cref="IShoutRunnerRecoveryStore"/> already has on
     /// disk — a recovery journal is not tied to any particular venue switch (<see cref="Load"/> never touches it),
@@ -157,10 +171,18 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         automation.ResetForVenue();
     }
 
+    /// <summary>Sets Shout Line 1 (the original, required Shout Message).</summary>
     public void UpdateShoutMessage(string message)
     {
         if (settings.ShoutMessage == message) return;
         Mutate(s => s with { ShoutMessage = message });
+    }
+
+    /// <summary>Sets the optional Shout Line 2. Blank/whitespace means "no second line."</summary>
+    public void UpdateShoutMessageLine2(string message)
+    {
+        if (settings.ShoutMessageLine2 == message) return;
+        Mutate(s => s with { ShoutMessageLine2 = message });
     }
 
     public void SetRepeatEnabled(bool enabled) => Mutate(s => s with { RepeatEnabled = enabled });
@@ -175,10 +197,29 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         Mutate(s => s with { SelectedDataCenters = [.. ShoutRunnerCatalog.OrderSelectedDataCenters(set)] });
     }
 
-    public void AddDestination(string name)
+    /// <summary>The "Add Aetheryte" action. Persists immediately (through <see cref="Mutate"/>) and joins the same
+    /// <see cref="ShoutRunnerSettings.Destinations"/> list the three seeded defaults live in, which is also the list
+    /// <see cref="Start"/> snapshots into the run's route — so an added entry is routed exactly like a default one.
+    /// Rejects (and reports why, instead of silently ignoring the click) a blank or over-long name, a
+    /// case-insensitive duplicate of an existing entry, and — when the game's Aetheryte data is available — a name that
+    /// isn't a real Aetheryte; a name that is real is stored in the game's own canonical spelling.</summary>
+    public ShoutRunnerAddDestinationResult AddDestination(string name)
     {
-        if (string.IsNullOrWhiteSpace(name)) return;
-        Mutate(s => s with { Destinations = [.. s.Destinations, name.Trim()] });
+        var trimmed = (name ?? string.Empty).Trim();
+        if (trimmed.Length == 0) return ShoutRunnerAddDestinationResult.Blank;
+        if (trimmed.Length > MaxDestinationNameLength) return ShoutRunnerAddDestinationResult.TooLong;
+
+        var known = KnownAetheryteNames;
+        if (known.Count > 0)
+        {
+            var canonical = known.FirstOrDefault(k => string.Equals(k, trimmed, StringComparison.OrdinalIgnoreCase));
+            if (canonical is null) return ShoutRunnerAddDestinationResult.UnknownAetheryte;
+            trimmed = canonical;
+        }
+
+        if (settings.Destinations.Any(d => string.Equals(d.Trim(), trimmed, StringComparison.OrdinalIgnoreCase))) return ShoutRunnerAddDestinationResult.Duplicate;
+        Mutate(s => s with { Destinations = [.. s.Destinations, trimmed] });
+        return ShoutRunnerAddDestinationResult.Added;
     }
 
     public void RemoveDestinationAt(int index)
@@ -220,7 +261,10 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     public ShoutRunnerStartResult Start()
     {
         if (!CanStart) return ShoutRunnerStartResult.AlreadyRunning;
-        if (string.IsNullOrWhiteSpace(settings.ShoutMessage)) return ShoutRunnerStartResult.ShoutMessageRequired;
+        // Line 1 is the required line: a filled Line 2 never substitutes for a blank Line 1 (see BeginShoutLine).
+        if (ShoutRunnerShoutLines.IsBlank(settings.ShoutMessage)) return ShoutRunnerStartResult.ShoutMessageRequired;
+        if (ShoutRunnerShoutLines.ExceedsLimit(settings.ShoutMessage)) return ShoutRunnerStartResult.ShoutMessageTooLong;
+        if (ShoutRunnerShoutLines.ExceedsLimit(settings.ShoutMessageLine2)) return ShoutRunnerStartResult.ShoutMessageLine2TooLong;
         var dataCenters = ShoutRunnerCatalog.OrderSelectedDataCenters(settings.SelectedDataCenters);
         if (dataCenters.Count == 0) return ShoutRunnerStartResult.NoDataCenterSelected;
         if (settings.Destinations.Count == 0) return ShoutRunnerStartResult.NoDestinationConfigured;
@@ -288,12 +332,21 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     /// none of which can await a bounded recovery pass (a venue switch must complete synchronously; disable/dispose
     /// must never hang the plugin). Cancels everything immediately and unconditionally settles into
     /// <see cref="ShoutRunnerState.Stopped"/> with no further waiting — safe to call at any time, including when
-    /// already stopped (idempotent), and safe to call twice in a row (e.g. disable followed by plugin dispose).</summary>
+    /// already stopped (idempotent), and safe to call twice in a row (e.g. disable followed by plugin dispose).
+    ///
+    /// <see cref="IShoutRunnerAutomation.Abort"/> is only issued when a run was actually in progress
+    /// (<see cref="IsActive"/> on entry). This is called on every venue activation (including startup), every venue
+    /// switch, module disable and plugin dispose/<c>/xlreload</c> — nearly all of them with nothing running — and
+    /// Abort touches the live game (Lifestream abort + transfer-UI dismissal), which an idle ShoutRunner has no
+    /// business doing. Before 0.3.8 it ran unconditionally, and its dismissal synthesized an Escape key that opened
+    /// the FFXIV System Menu on every reload and venue switch (see
+    /// <c>docs/SYSTEM_MENU_0.3.8_INVESTIGATION.md</c>).</summary>
     public void HardStop()
     {
+        var wasActive = IsActive;
         runCts?.Cancel(); runCts?.Dispose(); runCts = null;
         stoppingCts?.Cancel(); stoppingCts?.Dispose(); stoppingCts = null;
-        automation.Abort();
+        if (wasActive) automation.Abort();
         ClearPendingTasks();
         stoppingTask = null;
         State = ShoutRunnerState.Stopped;
@@ -555,18 +608,41 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         BeginReadinessGate(ReadinessPurpose.Shout);
     }
 
-    /// <summary>The Shout Message is read live here — not from the RUN-start snapshot — so a small wording edit made
-    /// mid-route takes effect on the next unsent shout without restarting the route (reconstruction brief "SHOUT
-    /// MESSAGE"). A shout already handed to <see cref="ChatCommandService"/> is never retroactively altered.</summary>
+    /// <summary>Starts a destination's shout with Line 1. The shout text is read live here — not from the RUN-start
+    /// snapshot — so a small wording edit made mid-route takes effect on the next unsent shout without restarting the
+    /// route (reconstruction brief "SHOUT MESSAGE"). A line already handed to <see cref="ChatCommandService"/> is never
+    /// retroactively altered.</summary>
     private void BeginShout()
     {
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var message = settings.ShoutMessage.Trim();
-        if (string.IsNullOrWhiteSpace(message)) tcs.SetResult(false);
-        else chat.Enqueue(new($"/shout {message}", runCts!.Token, (success, _) => tcs.TrySetResult(success)));
-        shoutTask = tcs.Task;
+        shoutLineNumber = 1;
+        shoutRefusalReason = null;
+        shoutTask = BeginShoutLine(settings.ShoutMessage);
     }
 
+    /// <summary>Hands ONE line to the shared <see cref="ChatCommandService"/> and returns a task that completes with
+    /// whether the transport accepted it. A blank line, or one whose full <c>/shout</c> command exceeds
+    /// <see cref="BlockLettersLimits.ChatBytes"/>, is refused here (completed <c>false</c>, reason recorded) rather
+    /// than truncated or sent — the same rule for Line 1 and Line 2. Every line is enqueued with the RUN's own
+    /// cancellation token, so a Stop/venue switch/disable that lands before dispatch makes the shared service skip it.
+    /// Line 2 is deliberately NOT enqueued from a dispatch callback: <see cref="ProcessShoutCompletion"/> starts it
+    /// from <see cref="Tick"/>, which only polls this task while <see cref="State"/> is
+    /// <see cref="ShoutRunnerState.SendingShout"/>, so a stale completion arriving after Stop/HardStop/venue switch can
+    /// never enqueue a second line.</summary>
+    private Task<bool> BeginShoutLine(string text)
+    {
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (ShoutRunnerShoutLines.IsBlank(text)) { shoutRefusalReason = "the line is empty"; tcs.SetResult(false); }
+        else if (ShoutRunnerShoutLines.ExceedsLimit(text)) { shoutRefusalReason = $"the line is {ShoutRunnerShoutLines.CountBytes(text)} / {BlockLettersLimits.ChatBytes} bytes once its /shout command is included"; tcs.SetResult(false); }
+        else chat.Enqueue(new(ShoutRunnerShoutLines.BuildCommand(text), runCts!.Token, (success, _) => tcs.TrySetResult(success)));
+        return tcs.Task;
+    }
+
+    /// <summary>Line 1 → (accepted) → Line 2 is strictly sequential: Line 2 is only handed to the chat service after
+    /// the transport accepted Line 1, and the shared service's own minimum dispatch interval already spaces the two
+    /// (no extra ShoutRunner delay is added between them — DelayBetweenActionsSeconds paces route actions after the
+    /// whole shout). A blank Line 2 is skipped without a second enqueue. If Line 1 fails, Line 2 is never sent; if
+    /// Line 1 succeeds and Line 2 fails, the destination is reported as a partial failure and Line 1 is never
+    /// resent.</summary>
     private void ProcessShoutCompletion()
     {
         var success = SafeResult(shoutTask!, false);
@@ -574,17 +650,31 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         var dc = runConfig!.DataCentersInOrder[dataCenterIndex];
         var world = currentWorlds[worldIndex];
         var step = currentSteps[stepIndex];
+        var line2Configured = !ShoutRunnerShoutLines.IsBlank(settings.ShoutMessageLine2);
+
+        if (success && shoutLineNumber == 1 && line2Configured)
+        {
+            shoutLineNumber = 2;
+            shoutTask = BeginShoutLine(settings.ShoutMessageLine2);
+            return;
+        }
+
+        var reason = shoutRefusalReason is null ? string.Empty : $" ({shoutRefusalReason})";
         if (!success)
         {
             currentWorldHadFailure = true;
-            terminal.Add(Event(ShoutRunnerEventSeverity.Failure, $"{step.Destination} — SHOUT FAILED.", dc, world, step.Destination));
+            var text = shoutLineNumber == 2 ? $"{step.Destination} — SHOUT INCOMPLETE: Line 1 sent, Line 2 FAILED{reason}."
+                : line2Configured ? $"{step.Destination} — SHOUT FAILED: Line 1 failed{reason}; Line 2 not sent."
+                : $"{step.Destination} — SHOUT FAILED{reason}.";
+            terminal.Add(Event(ShoutRunnerEventSeverity.Failure, text, dc, world, step.Destination));
         }
         else
         {
-            terminal.Add(Event(ShoutRunnerEventSeverity.Success, $"{step.Destination} — SHOUT SENT.", dc, world, step.Destination));
+            terminal.Add(Event(ShoutRunnerEventSeverity.Success, shoutLineNumber == 2 ? $"{step.Destination} — SHOUT SENT (2 lines)." : $"{step.Destination} — SHOUT SENT.", dc, world, step.Destination));
             // The crash-recovery brief's core checkpoint unit: a destination becomes durably completed only once its
             // shout has actually succeeded — never merely because travel/teleport/a shout attempt started (see
-            // ShoutRunnerRecoveryJournal's doc comment). Checkpointed BEFORE the pacing delay/next step begins.
+            // ShoutRunnerRecoveryJournal's doc comment). Checkpointed BEFORE the pacing delay/next step begins. With two
+            // lines, "succeeded" means BOTH lines were accepted; a partial shout is a failed destination, like any other.
             activeCompletedDestinationsInCurrentWorld.Add(step.Destination);
             activeCurrentWorldPlan = [.. currentSteps];
             WriteCheckpoint();

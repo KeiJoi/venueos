@@ -24,6 +24,10 @@ public sealed record RaffleParticipant(string Name, string? HomeWorld, int PaidT
     public string IdentityKey => new GuestIdentity(Name, HomeWorld ?? string.Empty).Key;
 }
 
+/// <param name="Settings">This raffle's frozen active-run configuration (Starting Pot, Ticket Cost, Prize %, Paid Tickets
+/// For Free, Free Tickets Per Block). Captured from <see cref="VenueRaffleSettings.Defaults"/> when the raffle is
+/// created and never changed afterwards — every pot/prize/bonus figure this raffle reports or applies reads it, never
+/// the mutable defaults. It is persisted with the raffle, so a reload or venue switch restores exactly these values.</param>
 public sealed record LocalRaffle(
     string Id,
     string Name,

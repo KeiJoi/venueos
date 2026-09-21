@@ -159,7 +159,7 @@ public sealed class Plugin : IDalamudPlugin
         // matching attendance.db's own top-level placement — see FileShoutRunnerRecoveryStore's doc comment for the
         // atomic-write guarantee (same temp-file-then-move pattern already proven by FileQuestionSetRepository).
         var shoutRunnerRecoveryStore = new FileShoutRunnerRecoveryStore(PluginInterface.ConfigDirectory.FullName);
-        var shoutRunnerService = new ShoutRunnerService(shoutRunnerAutomation, chat, venues, diagnostics, clock, shoutRunnerRecoveryStore);
+        var shoutRunnerService = new ShoutRunnerService(shoutRunnerAutomation, chat, venues, diagnostics, clock, shoutRunnerRecoveryStore, new VenueOS.Plugin.ShoutRunner.DalamudAetheryteCatalog(DataManager, Log));
         shoutRunnerServiceRef = shoutRunnerService;
         sessionGate = new VenueOS.Services.SessionPresentationGateService(new DalamudSessionStateProvider(ClientState));
         var raffleService = new VenueRaffleService(new VenueRaffleClient(new HttpClient { Timeout = TimeSpan.FromSeconds(15) }), venues, diagnostics);
