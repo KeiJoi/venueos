@@ -51,7 +51,7 @@ internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, Venue
         if (ShoutRunnerShoutLines.IsBlank(shoutMessageBuffer) && !ShoutRunnerShoutLines.IsBlank(shoutMessageLine2Buffer))
             UiKit.WarningState(theme, "Line 2 is only sent together with Line 1 — enter Shout Line 1.");
         ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary));
-        ImGui.TextWrapped("Sent with /shout at each destination. If both lines are filled, Line 1 is sent first, followed by Line 2.");
+        ImGui.TextWrapped("Sent with /shout at each destination. If both lines are filled, Line 1 is sent first, followed by Line 2 about 2 seconds later.");
         ImGui.PopStyleColor();
         UiKit.EndSectionCard();
 

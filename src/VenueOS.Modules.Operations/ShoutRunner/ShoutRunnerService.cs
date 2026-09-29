@@ -71,7 +71,7 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     private Task<ShoutRunnerTransferOutcome>? transferTask;
     private Task<string?>? locateTask;
     private Task<ShoutRunnerTeleportOutcome>? teleportTask;
-    private Task<bool>? shoutTask;
+    private Task<ShoutLineOutcome>? shoutTask;
     private Task<ShoutRunnerReadinessOutcome>? stoppingTask;
 
     // The shout step's own sub-state: which of the (up to two) lines the in-flight shoutTask is for, and why a line
@@ -79,6 +79,14 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     // ProcessShoutCompletion, which only runs while State == SendingShout — see BeginShoutLine's doc comment.
     private int shoutLineNumber = 1;
     private string? shoutRefusalReason;
+    // When Line 1 of a two-line shout was confirmed dispatched — the anchor for InterLineDelay. Only read while
+    // State == WaitingForLine2; every exit from that state (Stop, HardStop, fault, BeginSecondLine) makes it inert.
+    private DateTimeOffset line1ConfirmedAt;
+
+    /// <summary>One line's transport outcome plus WHEN it was known — <paramref name="At"/> is stamped inside the
+    /// <see cref="ChatCommand.OnDispatched"/> callback itself (i.e. the instant the transport accepted or rejected the
+    /// line), not when a later <see cref="Tick"/> happens to observe the completed task.</summary>
+    private readonly record struct ShoutLineOutcome(bool Success, DateTimeOffset At);
 
     // ----- crash-recovery journal state (see ShoutRunnerRecoveryJournal's doc comment) -----
     private Guid? activeRunId;
@@ -388,6 +396,9 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
             case ShoutRunnerState.SendingShout:
                 if (shoutTask is { IsCompleted: true }) ProcessShoutCompletion();
                 return;
+            case ShoutRunnerState.WaitingForLine2:
+                if (ShoutRunnerShoutLines.IsLine2Eligible(line1ConfirmedAt, now)) BeginSecondLine();
+                return;
         }
     }
 
@@ -624,28 +635,32 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     /// <see cref="BlockLettersLimits.ChatBytes"/>, is refused here (completed <c>false</c>, reason recorded) rather
     /// than truncated or sent — the same rule for Line 1 and Line 2. Every line is enqueued with the RUN's own
     /// cancellation token, so a Stop/venue switch/disable that lands before dispatch makes the shared service skip it.
-    /// Line 2 is deliberately NOT enqueued from a dispatch callback: <see cref="ProcessShoutCompletion"/> starts it
-    /// from <see cref="Tick"/>, which only polls this task while <see cref="State"/> is
-    /// <see cref="ShoutRunnerState.SendingShout"/>, so a stale completion arriving after Stop/HardStop/venue switch can
-    /// never enqueue a second line.</summary>
-    private Task<bool> BeginShoutLine(string text)
+    /// Line 2 is deliberately NOT enqueued from a dispatch callback: <see cref="BeginSecondLine"/> starts it from
+    /// <see cref="Tick"/>, which only reaches it while <see cref="State"/> is
+    /// <see cref="ShoutRunnerState.WaitingForLine2"/>, so a stale completion arriving after Stop/HardStop/venue switch
+    /// can never enqueue a second line. The callback only records the outcome and its timestamp.</summary>
+    private Task<ShoutLineOutcome> BeginShoutLine(string text)
     {
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (ShoutRunnerShoutLines.IsBlank(text)) { shoutRefusalReason = "the line is empty"; tcs.SetResult(false); }
-        else if (ShoutRunnerShoutLines.ExceedsLimit(text)) { shoutRefusalReason = $"the line is {ShoutRunnerShoutLines.CountBytes(text)} / {BlockLettersLimits.ChatBytes} bytes once its /shout command is included"; tcs.SetResult(false); }
-        else chat.Enqueue(new(ShoutRunnerShoutLines.BuildCommand(text), runCts!.Token, (success, _) => tcs.TrySetResult(success)));
+        var tcs = new TaskCompletionSource<ShoutLineOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (ShoutRunnerShoutLines.IsBlank(text)) { shoutRefusalReason = "the line is empty"; tcs.SetResult(new(false, clock.UtcNow)); }
+        else if (ShoutRunnerShoutLines.ExceedsLimit(text)) { shoutRefusalReason = $"the line is {ShoutRunnerShoutLines.CountBytes(text)} / {BlockLettersLimits.ChatBytes} bytes once its /shout command is included"; tcs.SetResult(new(false, clock.UtcNow)); }
+        else chat.Enqueue(new(ShoutRunnerShoutLines.BuildCommand(text), runCts!.Token, (success, _) => tcs.TrySetResult(new(success, clock.UtcNow))));
         return tcs.Task;
     }
 
-    /// <summary>Line 1 → (accepted) → Line 2 is strictly sequential: Line 2 is only handed to the chat service after
-    /// the transport accepted Line 1, and the shared service's own minimum dispatch interval already spaces the two
-    /// (no extra ShoutRunner delay is added between them — DelayBetweenActionsSeconds paces route actions after the
-    /// whole shout). A blank Line 2 is skipped without a second enqueue. If Line 1 fails, Line 2 is never sent; if
-    /// Line 1 succeeds and Line 2 fails, the destination is reported as a partial failure and Line 1 is never
-    /// resent.</summary>
+    /// <summary>Line 1 → (confirmed) → 2 s → Line 2 is strictly sequential. Once the transport confirms Line 1 (its
+    /// <see cref="ChatCommand.OnDispatched"/> callback reports success), the runner records that callback's timestamp
+    /// and enters <see cref="ShoutRunnerState.WaitingForLine2"/>; <see cref="Tick"/> hands Line 2 to the chat service
+    /// only once <see cref="ShoutRunnerShoutLines.InterLineDelay"/> has elapsed since that timestamp. (0.3.9 live-QA
+    /// correction: relying on the shared service's 1 s minimum interval alone let FFXIV drop Line 2.) A blank Line 2
+    /// never enters the wait, so a one-line shout is exactly as fast as before. If Line 1 fails, Line 2 is never sent
+    /// and no wait starts; if Line 1 succeeds and Line 2 fails, the destination is reported as a partial failure and
+    /// Line 1 is never resent. Route progression (<see cref="BeginActionDelay"/>) only starts after the final line's
+    /// outcome is known.</summary>
     private void ProcessShoutCompletion()
     {
-        var success = SafeResult(shoutTask!, false);
+        var outcome = SafeResult(shoutTask!, new ShoutLineOutcome(false, clock.UtcNow));
+        var success = outcome.Success;
         shoutTask = null;
         var dc = runConfig!.DataCentersInOrder[dataCenterIndex];
         var world = currentWorlds[worldIndex];
@@ -654,8 +669,9 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
 
         if (success && shoutLineNumber == 1 && line2Configured)
         {
-            shoutLineNumber = 2;
-            shoutTask = BeginShoutLine(settings.ShoutMessageLine2);
+            line1ConfirmedAt = outcome.At;
+            State = ShoutRunnerState.WaitingForLine2;
+            terminal.Add(Event(ShoutRunnerEventSeverity.InProgress, $"{step.Destination} — Line 1 sent; Line 2 in {ShoutRunnerShoutLines.InterLineDelay.TotalSeconds:0} s.", dc, world, step.Destination));
             return;
         }
 
@@ -681,6 +697,15 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         }
 
         BeginActionDelay();
+    }
+
+    /// <summary>Reached only from <see cref="Tick"/> in <see cref="ShoutRunnerState.WaitingForLine2"/> once the
+    /// inter-line delay has elapsed. Line 2's text is read live here, like Line 1's.</summary>
+    private void BeginSecondLine()
+    {
+        State = ShoutRunnerState.SendingShout;
+        shoutLineNumber = 2;
+        shoutTask = BeginShoutLine(settings.ShoutMessageLine2);
     }
 
     private void BeginActionDelay()
@@ -767,7 +792,7 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     private void ClearCursor()
     {
         dataCenterIndex = -1; currentWorlds = []; worldIndex = -1; currentDataCenterHadSkip = false;
-        currentSteps = []; stepIndex = -1; currentWorldHadFailure = false; runConfig = null;
+        currentSteps = []; stepIndex = -1; currentWorldHadFailure = false; runConfig = null; line1ConfirmedAt = default;
         activeRunId = null; activeSkippedDataCenters = []; activeCompletedDestinationsInCurrentWorld = []; activeCurrentWorldPlan = null; pendingResumedWorldSteps = null;
     }
 

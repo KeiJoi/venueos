@@ -1,6 +1,22 @@
-# VenueOS 0.3.8 release
+# VenueOS 0.3.9 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.9 — Mair's Editor File Picker & ShoutRunner Line 2 Timing
+
+A small follow-up release with two changes from 0.3.8 live testing. Automated validation complete (full suite
+1393 / 1393, Debug and Release builds with 0 warnings / 0 errors); **live FFXIV verification pending** on the
+operator's secondary VenueOS installation, which receives this release through Dalamud.
+
+- **Mair's Editor: `.fftrivia` file browser.** A **Browse…** button beside the import path opens a VenueOS-styled
+  file picker (default filter *Mair's Trivia Question Sets (\*.fftrivia)*, *All Files* optional). The chosen file's
+  path fills the existing path box; the existing **Import** action, collision prompts and validation are unchanged,
+  and nothing is imported until Import is pressed.
+- **ShoutRunner: second-line timing corrected.** Live testing of 0.3.8 showed the optional second `/shout` could be
+  sent too quickly and FFXIV dropped it. Line 2 now waits at least 2 seconds after Line 1's confirmed dispatch. One-line
+  shouts are unaffected; Stop, venue switch and disable during the wait still prevent Line 2.
+
+Reports: `docs/MAIRS_EDITOR_FILE_PICKER_HOTFIX.md`, `docs/SHOUTRUNNER_0.3.8_MAINTENANCE.md` §19.
 
 ## 0.3.8 — Maintenance & Reliability Hardening
 

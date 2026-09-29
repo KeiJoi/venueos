@@ -16,6 +16,9 @@ internal sealed class MairsEditorOperatorPanel(MairsEditorService editor, VenueP
     private Guid selectedQuestionId;
     private string categoriesBuffer = "", tagsBuffer = "";
     private string importPath = "";
+    // Session-only: where the last Browse selection came from, so the next Browse starts there. Not persisted.
+    private string? lastImportDirectory;
+    private readonly FilePickerModal importFilePicker = new();
     private readonly ConfirmDialog confirmDialog = new();
     private readonly TextInputModal newSetModal = new();
     private readonly TextInputModal importAsNewModal = new();
@@ -33,6 +36,7 @@ internal sealed class MairsEditorOperatorPanel(MairsEditorService editor, VenueP
         confirmDialog.Draw(theme);
         newSetModal.Draw(theme);
         importAsNewModal.Draw(theme);
+        importFilePicker.Draw(theme);
         if (statusMessage is not null) { ImGui.Spacing(); ImGui.TextWrapped(statusMessage); }
     }
 
@@ -42,8 +46,15 @@ internal sealed class MairsEditorOperatorPanel(MairsEditorService editor, VenueP
         Forms.SearchBox(theme, "editor-search", ref search);
         if (UiKit.PrimaryButton(theme, "+ New Set")) newSetModal.Request("New question set", "Title", "e.g. Friday Night Trivia", title => { editor.NewSet(title); statusMessage = null; });
         ImGui.SameLine();
-        ImGui.SetNextItemWidth(260);
-        ImGui.InputTextWithHint("##import-path", "Path to .fftrivia file", ref importPath, 512);
+        if (UiKit.GhostButton(theme, "Browse…##import-browse")) OpenImportFilePicker();
+        UiKit.Tooltip("Choose a .fftrivia question set file on this computer");
+        ImGui.SameLine();
+        // The path field stays editable (type/paste/adjust) and takes the remaining width, leaving room for Import.
+        var importButtonWidth = ImGui.CalcTextSize("Import").X + ImGui.GetStyle().FramePadding.X * 2;
+        ImGui.SetNextItemWidth(MathF.Max(160f, ImGui.GetContentRegionAvail().X - importButtonWidth - ImGui.GetStyle().ItemSpacing.X));
+        Forms.PushFieldStyle(theme);
+        ImGui.InputTextWithHint("##import-path", "Path to .fftrivia file", ref importPath, 4096);
+        Forms.PopFieldStyle();
         ImGui.SameLine();
         if (UiKit.GhostButton(theme, "Import")) TryImport();
 
@@ -79,6 +90,21 @@ internal sealed class MairsEditorOperatorPanel(MairsEditorService editor, VenueP
     }
     private void OpenSet(Guid id) { editor.OpenSet(id); SyncBuffersFromDraft(); statusMessage = null; }
     private void SyncBuffersFromDraft() { categoriesBuffer = string.Join(", ", editor.Draft?.Categories ?? []); tagsBuffer = string.Join(", ", editor.Draft?.Tags ?? []); selectedQuestionId = editor.Draft?.Questions.FirstOrDefault()?.Id ?? Guid.Empty; }
+
+    /// <summary>Browse only fills <see cref="importPath"/> — it never imports. The existing Import button (and
+    /// <see cref="TryImport"/>'s read/parse/validate path) stays the one and only import action. Cancel leaves the
+    /// path exactly as it was (<see cref="FilePickerResult.ApplyTo"/>).</summary>
+    private void OpenImportFilePicker()
+    {
+        var initial = FileBrowser.ResolveInitialDirectory(importPath, QuestionSetFileType.Filter, lastImportDirectory, Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments));
+        importFilePicker.Request("Select Question Set File", QuestionSetFileType.PickerFilters, initial, result =>
+        {
+            importPath = result.ApplyTo(importPath);
+            if (!result.Confirmed) return;
+            lastImportDirectory = Path.GetDirectoryName(importPath);
+            statusMessage = $"Selected \"{Path.GetFileName(importPath)}\" — press Import to import it.";
+        });
+    }
 
     private void TryImport()
     {

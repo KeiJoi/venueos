@@ -40,8 +40,44 @@ internal static class AppIcons
             case "lock": DrawLock(drawList, center, radius, color, thickness, locked: true); break;
             case "unlock": DrawLock(drawList, center, radius, color, thickness, locked: false); break;
             case "launcher": DrawLauncher(drawList, center, radius, color); break;
+            case "folder": DrawFolder(drawList, center, radius, color, thickness); break;
+            case "file": DrawFile(drawList, center, radius, color, thickness); break;
+            case "arrow-left": DrawArrowLeft(drawList, center, radius, color, thickness); break;
             default: drawList.AddCircle(center, radius * 0.6f, color, 0, thickness); break;
         }
+    }
+
+    /// <summary>File picker glyphs (<c>FilePickerModal</c>): a tabbed folder, a dog-eared document, and a back arrow.</summary>
+    private static void DrawFolder(ImDrawListPtr d, Vector2 c, float r, uint color, float t)
+    {
+        var min = c + new Vector2(-r * 0.62f, -r * 0.32f);
+        var max = c + new Vector2(r * 0.62f, r * 0.45f);
+        d.AddRect(min, max, color, r * 0.08f, ImDrawFlags.None, t);
+        d.PathLineTo(new Vector2(min.X, min.Y));
+        d.PathLineTo(new Vector2(min.X, min.Y - r * 0.18f));
+        d.PathLineTo(new Vector2(min.X + r * 0.45f, min.Y - r * 0.18f));
+        d.PathLineTo(new Vector2(min.X + r * 0.58f, min.Y));
+        d.PathStroke(color, ImDrawFlags.None, t);
+    }
+
+    private static void DrawFile(ImDrawListPtr d, Vector2 c, float r, uint color, float t)
+    {
+        var left = c.X - r * 0.42f; var right = c.X + r * 0.42f; var top = c.Y - r * 0.6f; var bottom = c.Y + r * 0.6f; var fold = r * 0.28f;
+        d.PathLineTo(new Vector2(left, top));
+        d.PathLineTo(new Vector2(right - fold, top));
+        d.PathLineTo(new Vector2(right, top + fold));
+        d.PathLineTo(new Vector2(right, bottom));
+        d.PathLineTo(new Vector2(left, bottom));
+        d.PathStroke(color, ImDrawFlags.Closed, t);
+        d.AddLine(new Vector2(right - fold, top), new Vector2(right - fold, top + fold), color, t * 0.75f);
+        d.AddLine(new Vector2(right - fold, top + fold), new Vector2(right, top + fold), color, t * 0.75f);
+    }
+
+    private static void DrawArrowLeft(ImDrawListPtr d, Vector2 c, float r, uint color, float t)
+    {
+        d.AddLine(c + new Vector2(r * 0.5f, 0), c + new Vector2(-r * 0.45f, 0), color, t);
+        d.AddLine(c + new Vector2(-r * 0.5f, 0), c + new Vector2(-r * 0.1f, -r * 0.38f), color, t);
+        d.AddLine(c + new Vector2(-r * 0.5f, 0), c + new Vector2(-r * 0.1f, r * 0.38f), color, t);
     }
 
     private static void DrawUsers(ImDrawListPtr d, Vector2 c, float r, uint color, float t)

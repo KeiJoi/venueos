@@ -79,6 +79,10 @@ public enum ShoutRunnerState
     TravelingWorld,
     Teleporting,
     SendingShout,
+    /// <summary>Line 1 of a two-line shout was confirmed dispatched; Line 2 is held until
+    /// <see cref="ShoutRunnerShoutLines.InterLineDelay"/> has elapsed since that confirmation. Never entered for a
+    /// one-line shout.</summary>
+    WaitingForLine2,
     WaitingActionDelay,
     WaitingRepeat,
     Stopping,
@@ -148,6 +152,15 @@ public static class ShoutRunnerShoutLines
 
     /// <summary>False for a blank line (nothing to send, so nothing to limit).</summary>
     public static bool ExceedsLimit(string? text) => !IsBlank(text) && CountBytes(text) > BlockLettersLimits.ChatBytes;
+
+    /// <summary>The minimum gap between Line 1's CONFIRMED dispatch (its
+    /// <see cref="VenueOS.Services.ChatCommand.OnDispatched"/> callback reporting success) and Line 2 becoming eligible to be handed to the chat queue. Live FFXIV testing
+    /// showed the shared chat service's 1 s minimum interval alone is not enough — the game silently dropped a second
+    /// <c>/shout</c> sent ~1 s after the first.</summary>
+    public static readonly TimeSpan InterLineDelay = TimeSpan.FromSeconds(2);
+
+    /// <summary>True once at least <see cref="InterLineDelay"/> has elapsed since <paramref name="line1ConfirmedAt"/>.</summary>
+    public static bool IsLine2Eligible(DateTimeOffset line1ConfirmedAt, DateTimeOffset now) => now - line1ConfirmedAt >= InterLineDelay;
 }
 
 /// <summary>One planned stop within a single World's destination traversal — see

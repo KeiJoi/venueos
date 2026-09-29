@@ -1,7 +1,8 @@
 # ShoutRunner 0.3.8 Maintenance — Add Aetheryte + Optional Second Shout Line
 
 Work Package 3 of the post-0.3.7 maintenance cycle (see [`POST_0.3.7_TRAINING_AUDIT.md`](POST_0.3.7_TRAINING_AUDIT.md), items 3 and 4).
-Status of both items: **IMPLEMENTED — awaiting live QA.** Nothing here has been run in FFXIV; automated tests cover the
+Status of both items: **IMPLEMENTED — awaiting live QA.** **Part B (second line) FAILED its first live test — Line 2 was sent too
+soon and FFXIV dropped it; corrected in §19, awaiting operator retest.** §13's pacing description below is superseded by §19. Nothing here has been run in FFXIV; automated tests cover the
 service/model layer only (see §16 for exactly what that does and does not prove).
 
 Scope: VenueOS only. No version bump, packaging, `repo.json` change, commit, push, tag or release.
@@ -244,3 +245,98 @@ New:
 * `docs/SHOUTRUNNER_0.3.8_MAINTENANCE.md` (this file)
 
 Untouched: everything from WP1 (Party Finder) and WP2 (Brackets/Tournament, Bingo companion docs); no backend/donor repo.
+
+---
+
+## 19. Live-QA correction — Line 2 sent too soon (post-0.3.8 hotfix, shipped in 0.3.9)
+
+Status: **CORRECTED — awaiting operator live retest.** Not marked passed.
+
+### What happened
+
+* **Original implementation (§13):** once the transport accepted Line 1, the next `Tick` enqueued Line 2 immediately; the only
+  thing separating the two was `ChatCommandService`'s shared minimum dispatch interval (1 s, `Plugin.cs` constructs it with the
+  default). Automated tests passed — one of them (`Line_2_is_paced_by_the_shared_chat_interval…`) literally asserted that Line 2
+  went out at the 1 s mark.
+* **Real FFXIV test:** Line 1 appeared; Line 2 was attempted ~1 s later (effectively right after Line 1) and never appeared —
+  FFXIV dropped/rejected it. (From the code, not observed live: `Chat.ExecuteCommand` returns without throwing even when the game
+  drops the line, so the transport most likely reported success for both and the terminal would have shown `SHOUT SENT (2 lines)`.)
+* **Wrong assumption:** that the shared chat pacing was enough spacing between two consecutive `/shout`s. It is not. The chat
+  service's interval is a generic floor for all VenueOS chat output, not a guarantee that the game will accept a second shout.
+
+### New rule
+
+After Line 1 is **confirmed dispatched**, Line 2 is not eligible until **≥ 2.0 s** later
+(`ShoutRunnerShoutLines.InterLineDelay`, `IsLine2Eligible(anchor, now) => now - anchor >= 2 s`). The chat service's own 1 s
+pacing may add more on top; it can never make it less.
+
+### Timing anchor (exact)
+
+`ChatCommandService.TickAsync` dequeues Line 1, calls the transport (`execute` → `Plugin.ExecuteChatCommand`) through the
+dispatcher, and then invokes that command's `OnDispatched(success, error)`. ShoutRunner's `OnDispatched` callback stamps
+`clock.UtcNow` into the line's result (`ShoutLineOutcome(Success, At)`). **That stamp — taken inside the callback, the moment the
+transport returned `true` — is the anchor.** It is not route start, destination arrival, command construction, or enqueue, and
+it is not the (possibly later) `Tick` that observes the completed task: if a slow frame observes it 1.5 s late, Line 2 still
+goes at anchor + 2 s, not observation + 2 s (tested). "Confirmed" means exactly what the transport can report: the command was
+executed as if typed into the chat box without an exception. VenueOS has no signal that the game server displayed it.
+
+### State machine
+
+```
+SendingShout(Line 1) --OnDispatched(true) & Line 2 non-blank--> WaitingForLine2 (anchor recorded)
+WaitingForLine2 --Tick: now - anchor >= 2 s--> SendingShout(Line 2: enqueue on ChatCommandService with the run token)
+SendingShout(Line 2) --OnDispatched--> terminal result --> WaitingActionDelay (existing post-shout pacing) --> next step
+SendingShout(Line 1) --OnDispatched(true) & Line 2 blank--> terminal result --> WaitingActionDelay   (unchanged one-line path)
+SendingShout(Line 1) --OnDispatched(false)--> "Line 1 failed; Line 2 not sent" --> WaitingActionDelay (no timer)
+```
+
+* New enum value `ShoutRunnerState.WaitingForLine2`; handled by `Tick` like `WaitingActionDelay` — a stored timestamp compared
+  with `now`. No `Thread.Sleep`, `Task.Delay`, `.Wait()`, `.Result`, busy wait or detached callback. The terminal shows
+  `<destination> — Line 1 sent; Line 2 in 2 s.` The operator panel shows it as "Running" (the generic fallback). The panel's
+  help text now says Line 2 follows "about 2 seconds later".
+* **One line:** blank/whitespace Line 2 never enters `WaitingForLine2`; no new delay (tested at zero elapsed clock time).
+* **Cancellation:** the wait is only ever evaluated inside `Tick` while `State == WaitingForLine2`. Stop (→ `Stopping`), `HardStop`
+  (venue change via `Load`, module disable, module/plugin dispose), and fault all leave that state, so Line 2 is never enqueued
+  afterward; the anchor field is also cleared with the run cursor. A Line 2 already enqueued is still skipped by the chat
+  service's run-token check, as before. A new run always starts at Line 1 (tested).
+* **Failures:** unchanged semantics — Line 1 failure: no timer, no Line 2, `SHOUT FAILED: Line 1 failed …; Line 2 not sent.`
+  Line 2 failure: `SHOUT INCOMPLETE: Line 1 sent, Line 2 FAILED …`, Line 1 not resent, not checkpointed as completed. Recovery
+  journal untouched.
+* **Route progression:** the route cannot advance during the gap — `BeginActionDelay` (and thus the next teleport/world) only
+  runs after Line 2's outcome is processed (tested: no teleport during the gap).
+
+### Tests
+
+New `tests/VenueOS.Services.Tests/ShoutRunnerLine2TimingTests.cs` — **27 tests** (real `ShoutRunnerService` + real
+`ChatCommandService`, hand-moved clock): pure rule at 0 / 1000 / 1500 / 1999 ms (not eligible) and 2000 / 2500 ms (eligible);
+single line never enters the wait and adds zero time; a whole one-line run never observes it; with production 1 s chat pacing,
+no Line 2 at 0 / 1 / 1.5 / 1.999 s; none immediately even with zero chat pacing; Line 2 at 2.000 / 2.001 / 3.5 s, handed to the
+chat service (not sent directly); millisecond sweep — Line 2 first appears at exactly 2.000 s; anchor = confirmation, not enqueue
+(Line 1 held 5 s in the queue); anchor = callback time, not observing tick; Stop / venue change / disable / dispose during the
+gap; fresh run after a stop in the gap; Line 1 failure; Line 2 failure; route progression.
+
+Changed in `ShoutRunnerMaintenanceTests.cs`: the harness now advances the clock past `WaitingForLine2` like it does past
+`WaitingActionDelay`; `Line_2_is_paced_by_the_shared_chat_interval…` (which encoded the disproven assumption) became
+`Line_2_waits_for_the_2_second_inter_line_delay_not_just_the_shared_1_second_chat_interval`; the queued-but-undispatched-Line-2
+Stop test now waits out the 2 s gap (with a 5 s chat interval) so it still tests what its name says.
+
+**Mutation checks:** (1) restoring the old behaviour (Line 2 started straight from `ProcessShoutCompletion`) → **19 tests fail**;
+(2) anchoring to the observing tick instead of the callback → the anchor test fails. Both restored; all pass.
+
+### Live retest (operator)
+
+* **G — Two lines.** Line 1 `TEST LINE ONE`, Line 2 `TEST LINE TWO`, run. PASS: Line 1 appears; Line 2 is not attempted
+  immediately; Line 2 appears ~2 s later; correct order; no missing Line 2; no duplicate Line 1. The terminal shows
+  "Line 1 sent; Line 2 in 2 s." then `SHOUT SENT (2 lines)`.
+* **H — Single line.** Clear Line 2, run. PASS: one line per destination; no Line 2; no extra 2 s pause before the next action.
+* **I — Stop in the gap.** Two lines; press Stop right after Line 1 appears. PASS: Line 2 never appears.
+
+If Line 2 still drops at 2 s, the next step is a live measurement of FFXIV's shout spacing — not a code guess.
+
+### Files (this correction)
+
+`src/VenueOS.Modules.Operations/ShoutRunner/ShoutRunnerModels.cs` (`WaitingForLine2`, `InterLineDelay`, `IsLine2Eligible`),
+`src/VenueOS.Modules.Operations/ShoutRunner/ShoutRunnerService.cs` (anchor stamping, wait state, `BeginSecondLine`),
+`src/VenueOS.Plugin/ShoutRunnerOperatorPanel.cs` (help text), `docs/USER_MANUAL.md`,
+`tests/VenueOS.Services.Tests/ShoutRunnerMaintenanceTests.cs`, new `tests/VenueOS.Services.Tests/ShoutRunnerLine2TimingTests.cs`,
+this section, `docs/POST_0.3.7_TRAINING_AUDIT.md`.

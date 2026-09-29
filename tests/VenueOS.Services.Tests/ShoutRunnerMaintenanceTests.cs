@@ -362,10 +362,17 @@ public sealed class ShoutRunnerSecondLineTests
 
     [Fact] public void A_Line_2_already_queued_but_not_yet_dispatched_is_skipped_when_the_run_is_stopped()
     {
-        var h = Ready(line2: L2, chatInterval: TimeSpan.FromSeconds(1));
+        // A 5 s chat interval so that, once the 2 s inter-line delay has elapsed and Line 2 is enqueued, the shared chat
+        // service is still holding it (not yet dispatched) when Stop lands.
+        var h = Ready(line2: L2, chatInterval: TimeSpan.FromSeconds(5));
         h.Service.Start();
         h.StepUntil(() => h.Sent.Count == 1);
-        h.Service.Tick(h.Clock.UtcNow); // observes Line 1's acceptance and enqueues Line 2 behind the pacing interval
+        h.Service.Tick(h.Clock.UtcNow); // observes Line 1's confirmation -> WaitingForLine2
+        h.Clock.Advance(ShoutRunnerShoutLines.InterLineDelay);
+        h.Service.Tick(h.Clock.UtcNow); // enqueues Line 2 behind the chat pacing interval
+        Assert.Equal(ShoutRunnerState.SendingShout, h.Service.State);
+        h.TickChat();
+        Assert.Single(h.Sent);
 
         h.Service.Stop();
         h.Clock.Advance(TimeSpan.FromSeconds(10));
@@ -436,23 +443,30 @@ public sealed class ShoutRunnerSecondLineTests
         Assert.All(store.Saved, j => Assert.Empty(j.CompletedDestinationsInCurrentWorld));
     }
 
-    [Fact] public void Line_2_is_paced_by_the_shared_chat_interval_and_only_after_Line_1_was_accepted()
+    /// <summary>0.3.9 live-QA correction: this test used to assert that Line 2 went out once the shared 1 s chat
+    /// interval had elapsed — the exact assumption live FFXIV testing disproved (the game dropped Line 2). With the
+    /// production 1 s chat interval, Line 2 must now still be held at 1 s and only go out at the 2 s mark.</summary>
+    [Fact] public void Line_2_waits_for_the_2_second_inter_line_delay_not_just_the_shared_1_second_chat_interval()
     {
         var h = Ready(line2: L2, chatInterval: TimeSpan.FromSeconds(1));
         h.Service.Start();
         h.StepUntil(() => h.Sent.Count == 1);
         var afterLine1 = h.Clock.UtcNow;
 
-        // Line 1 was accepted; the service enqueues Line 2 on its next tick — but the chat service will not dispatch it
-        // inside the same interval.
         h.Service.Tick(h.Clock.UtcNow);
         h.TickChat();
         Assert.Single(h.Sent);
 
         h.Clock.Advance(TimeSpan.FromSeconds(1));
+        h.Service.Tick(h.Clock.UtcNow);
+        h.TickChat();
+        Assert.Single(h.Sent); // the old behavior sent Line 2 here
+
+        h.Clock.Advance(TimeSpan.FromSeconds(1));
+        h.Service.Tick(h.Clock.UtcNow);
         h.TickChat();
         Assert.Equal(["/shout " + L1, "/shout " + L2], h.Sent);
-        Assert.True(h.Clock.UtcNow - afterLine1 >= TimeSpan.FromSeconds(1));
+        Assert.True(h.Clock.UtcNow - afterLine1 >= ShoutRunnerShoutLines.InterLineDelay);
     }
 
     [Fact] public void Both_lines_use_the_same_channel_route_and_run_semantics()
@@ -570,10 +584,18 @@ internal sealed class ShoutRunnerHarness
     /// service ticked once per frame independent of any module, then the module).</summary>
     public void Step()
     {
-        if (Service.State == ShoutRunnerState.WaitingActionDelay) Clock.Advance(TimeSpan.FromSeconds(Service.Settings.ClampedDelaySeconds() + 1));
-        else if (chatInterval > TimeSpan.Zero) Clock.Advance(chatInterval);
+        AdvanceClockForCurrentState();
         Chat.TickAsync().GetAwaiter().GetResult();
         Service.Tick(Clock.UtcNow);
+    }
+
+    /// <summary>Moves the clock past whatever time-based wait the service is currently in (the action delay, the
+    /// two-line inter-line delay) or, otherwise, by the chat pacing interval — so a pumped run always makes progress.</summary>
+    private void AdvanceClockForCurrentState()
+    {
+        if (Service.State == ShoutRunnerState.WaitingActionDelay) Clock.Advance(TimeSpan.FromSeconds(Service.Settings.ClampedDelaySeconds() + 1));
+        else if (Service.State == ShoutRunnerState.WaitingForLine2) Clock.Advance(ShoutRunnerShoutLines.InterLineDelay);
+        else if (chatInterval > TimeSpan.Zero) Clock.Advance(chatInterval);
     }
 
     /// <summary>Drives only the shared chat service — a non-async helper so tests don't block on a Task themselves.</summary>
@@ -591,8 +613,7 @@ internal sealed class ShoutRunnerHarness
         for (var i = 0; i < maxSteps; i++)
         {
             if (condition()) return;
-            if (Service.State == ShoutRunnerState.WaitingActionDelay) Clock.Advance(TimeSpan.FromSeconds(Service.Settings.ClampedDelaySeconds() + 1));
-            else if (chatInterval > TimeSpan.Zero) Clock.Advance(chatInterval);
+            AdvanceClockForCurrentState();
             Chat.TickAsync().GetAwaiter().GetResult();
             if (condition()) return;
             Service.Tick(Clock.UtcNow);

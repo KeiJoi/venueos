@@ -134,7 +134,7 @@ Found under **Settings → General**:
 The operational screen has a **Shout Line 1** field and an optional **Shout Line 2 (Optional)** field, a status line, and a **Start**/**Stop** button.
 
 - **One line filled** (Line 2 blank, or only spaces) → exactly one `/shout` is sent at each destination.
-- **Both lines filled** → Line 1 is sent first, then Line 2, at each destination. The second line is sent only after the first was accepted, spaced by VenueOS's normal chat pacing.
+- **Both lines filled** → Line 1 is sent first, then Line 2, at each destination. The second line is sent only after the first was accepted by the game's chat, and never sooner than 2 seconds after it (FFXIV drops a second `/shout` sent too quickly).
 - **Line 1 is required.** A filled Line 2 with an empty Line 1 is refused at Start (*"Enter Shout Line 1 before starting."*) rather than silently sending Line 2 alone.
 - Each line is checked against FFXIV's 500-byte chat limit *including* its `/shout ` prefix (bytes, not characters — accented and non-Latin characters count for more). A line that is too long shows a warning under its field and Start is refused; nothing is ever cut short.
 - If Line 1 goes out but Line 2 fails, the Run Terminal shows *"SHOUT INCOMPLETE: Line 1 sent, Line 2 FAILED"* for that destination and Line 1 is not resent. If Line 1 fails, Line 2 is not sent. Stopping between the two lines means Line 2 never goes out.
@@ -377,7 +377,7 @@ There is exactly **one** save step: the **Save** button. There's no separate Dra
 
 ### Import / Export
 
-- **Import** — enter a path to a `.fftrivia` file and click **Import**. If the file's ID doesn't collide with anything already in your library, it imports immediately. If it does collide, you'll see two prompts: first a dialog asking to overwrite (its buttons are **Confirm**/**Cancel** — Confirm replaces the existing set), and if you don't want to overwrite, a separate "Import as new set" prompt lets you give the incoming set a new title and import it as a distinct copy.
+- **Import** — click **Browse…** (left of the path box) to pick a `.fftrivia` question set file from your computer — the picker shows *Mair's Trivia Question Sets (*.fftrivia)* by default, with *All Files* as an option. Choosing a file only fills in the path box; nothing is imported until you click **Import**. **Cancel** leaves the path box as it was. You can also type or paste a full path into the box yourself. If the file's ID doesn't collide with anything already in your library, it imports immediately. If it does collide, you'll see two prompts: first a dialog asking to overwrite (its buttons are **Confirm**/**Cancel** — Confirm replaces the existing set), and if you don't want to overwrite, a separate "Import as new set" prompt lets you give the incoming set a new title and import it as a distinct copy.
 - **Export** — writes the currently open set to a `.fftrivia` file in your system temp folder (the panel tells you the exact path after export).
 
 ### Deleting a set
