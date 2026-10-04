@@ -1,5 +1,5 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
-  <PropertyGroup><TargetFramework>net10.0-windows</TargetFramework><AssemblyName>VenueOS</AssemblyName><RootNamespace>VenueOS.Plugin</RootNamespace><AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath><Version>0.3.9</Version><AssemblyVersion>0.3.9.0</AssemblyVersion><FileVersion>0.3.9.0</FileVersion><Name>VenueOS</Name><Author>VenueOS</Author><Punchline>Multi-venue operations console.</Punchline><Description>Venue-scoped operations, promotion, and backend-compatible venue games.</Description><ApplicableVersion>any</ApplicableVersion><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup>
+  <PropertyGroup><TargetFramework>net10.0-windows</TargetFramework><AssemblyName>VenueOS</AssemblyName><RootNamespace>VenueOS.Plugin</RootNamespace><AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath><Version>0.3.10</Version><AssemblyVersion>0.3.10.0</AssemblyVersion><FileVersion>0.3.10.0</FileVersion><Name>VenueOS</Name><Author>VenueOS</Author><Punchline>Multi-venue operations console.</Punchline><Description>Venue-scoped operations, promotion, and backend-compatible venue games.</Description><ApplicableVersion>any</ApplicableVersion><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup>
   <ItemGroup><ProjectReference Include="..\VenueOS.Core\VenueOS.Core.csproj" /><ProjectReference Include="..\VenueOS.Venues\VenueOS.Venues.csproj" /><ProjectReference Include="..\VenueOS.Services\VenueOS.Services.csproj" /><ProjectReference Include="..\VenueOS.UI\VenueOS.UI.csproj" /><ProjectReference Include="..\VenueOS.Modules.Operations\VenueOS.Modules.Operations.csproj" /><Reference Include="Dalamud.Bindings.ImGui" Private="false" /><Reference Include="FFXIVClientStructs" Private="false" />
     <!-- Party Finder reconstruction: VenueOS owns its automation engine directly (src/VenueOS.Plugin/PartyFinder/)
          and depends on ECommons the same way the read-only donor reference (venuepartyfinder) does — a third-party
@@ -14,5 +14,8 @@
          output (and therefore the release package) without duplicating its content anywhere in this project. The
          runtime loader (VenueOS.Services.UserManualLoader) reads it back from beside the running assembly. -->
     <None Include="..\..\docs\USER_MANUAL.md" Link="USER_MANUAL.md"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></None>
+    <!-- CHANGELOG.md (repository root) is the canonical release history, linked the same way for Settings ->
+         Changelog (VenueOS.Services.ChangelogLoader). Never duplicated in C#. -->
+    <None Include="..\..\CHANGELOG.md" Link="CHANGELOG.md"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></None>
   </ItemGroup>
 </Project>

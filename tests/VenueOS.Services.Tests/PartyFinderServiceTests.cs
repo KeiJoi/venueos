@@ -258,9 +258,26 @@ public sealed class PartyFinderServiceTests
     {
         var (service, _, venueId, automation) = Create();
         service.Load(venueId);
+        automation.HasOwnListing = true; // so only the preference — not the no-listing guard — can block it
         service.SetAutoRefreshEnabled(false);
         service.HandleChatText("Your party recruitment closes in five minutes.");
         Assert.Empty(automation.RefreshCalls);
+    }
+
+    /// <summary>Post-0.3.9 hotfix: End no longer turns the preference off, so "enabled + idle" is now the normal
+    /// end-of-night state. A matching warning (e.g. a broad Warning Message Override) must never refresh, and must
+    /// not persist a throttle timestamp, while there is no active recruitment.</summary>
+    [Fact] public void Enabled_preference_with_no_active_listing_never_auto_refreshes()
+    {
+        var (service, _, venueId, automation) = Create();
+        service.Load(venueId);
+        automation.HasOwnListing = false;
+
+        service.HandleChatText("Your party recruitment closes in five minutes.");
+
+        Assert.True(service.Settings.AutoRefreshEnabled);
+        Assert.Empty(automation.RefreshCalls);
+        Assert.Equal(DateTime.MinValue, service.Settings.LastRefreshAttemptUtc);
     }
 
     [Fact] public void Auto_refresh_fires_on_the_five_minute_warning_when_enabled()
@@ -294,18 +311,117 @@ public sealed class PartyFinderServiceTests
         Assert.True(observedEnding);
     }
 
-    [Fact] public void End_party_finder_disables_and_persists_auto_refresh_before_touching_automation()
+    /// <summary>Post-0.3.9 hotfix regression (live-reported): End used to call <c>SetAutoRefreshEnabled(false)</c>,
+    /// silently turning off the operator's 5-minute refresh preference every night. End must change run state only.
+    /// Checked in memory, at the moment the engine is asked to end, and across a reconstructed service.</summary>
+    [Fact] public void End_party_finder_preserves_an_enabled_auto_refresh_preference()
     {
         var (service, profiles, venueId, automation) = Create();
         service.Load(venueId);
+        service.SetAutoRefreshEnabled(true);
         automation.HasOwnListing = true;
-        automation.OnEndPartyFinderInvoked = () => Assert.False(service.Settings.AutoRefreshEnabled); // already false by the time automation is asked to end
+        automation.OnEndPartyFinderInvoked = () => Assert.True(service.Settings.AutoRefreshEnabled);
+
+        service.EndPartyFinder("operator panel");
+
+        Assert.Single(automation.EndPartyFinderCalls);
+        Assert.False(service.HasOwnListing);
+        Assert.True(service.Settings.AutoRefreshEnabled);
+        var reloaded = new PartyFinderService(automation, profiles, new FakeClock());
+        reloaded.Load(venueId);
+        Assert.True(reloaded.Settings.AutoRefreshEnabled); // the persisted value was never overwritten
+    }
+
+    [Fact] public void End_party_finder_preserves_a_disabled_auto_refresh_preference()
+    {
+        var (service, profiles, venueId, automation) = Create();
+        service.Load(venueId);
+        service.SetAutoRefreshEnabled(false);
+        automation.HasOwnListing = true;
+
         service.EndPartyFinder("operator panel");
 
         Assert.False(service.Settings.AutoRefreshEnabled);
         var reloaded = new PartyFinderService(automation, profiles, new FakeClock());
         reloaded.Load(venueId);
-        Assert.False(reloaded.Settings.AutoRefreshEnabled); // persisted, not just in-memory
+        Assert.False(reloaded.Settings.AutoRefreshEnabled);
+    }
+
+    [Fact] public void End_party_finder_does_not_trigger_a_refresh_or_create()
+    {
+        var (service, _, venueId, automation) = Create();
+        service.Load(venueId);
+        automation.HasOwnListing = true;
+
+        service.EndPartyFinder("operator panel");
+        service.HandleChatText("Your party recruitment closes in five minutes."); // a late warning after End completed
+
+        Assert.Empty(automation.RefreshCalls);
+        Assert.Empty(automation.CreateOrUpdateCalls);
+        Assert.False(service.IsBusy);
+        Assert.False(service.IsEnding);
+    }
+
+    /// <summary>The whole operator workflow from the hotfix brief: enable → start → end → start again. The next
+    /// recruitment's 5-minute warning refreshes with no re-enable step in between.</summary>
+    [Fact] public void Next_recruitment_after_end_auto_refreshes_without_reconfiguration()
+    {
+        var (_, profiles, venueId, automation) = Create();
+        var clock = new FakeClock();
+        var service = new PartyFinderService(automation, profiles, clock);
+        service.Load(venueId);
+        service.SetAutoRefreshEnabled(true);
+
+        service.CreateOrUpdate("night one");
+        automation.HasOwnListing = true;
+        automation.Abort(); // engine finished the Create
+        service.EndPartyFinder("operator panel");
+        Assert.True(service.Settings.AutoRefreshEnabled);
+
+        service.CreateOrUpdate("night two");
+        automation.HasOwnListing = true;
+        automation.Abort();
+        clock.UtcNow += TimeSpan.FromMinutes(55); // the native warning arrives ~55 minutes into the listing
+        service.HandleChatText("Your party recruitment closes in five minutes.");
+
+        Assert.Single(automation.RefreshCalls);
+        Assert.Equal("5 minute warning", automation.RefreshCalls[0].Reason);
+    }
+
+    [Fact] public void Enabled_preference_survives_end_and_a_full_serialize_deserialize_reload()
+    {
+        var (service, _, venueId, automation, store) = CreateWithStore();
+        service.Load(venueId);
+        automation.HasOwnListing = true;
+        service.EndPartyFinder("operator panel");
+
+        var json = JsonSerializer.Serialize(store.Read());
+        var freshStore = new InMemoryVenueStore(JsonSerializer.Deserialize<VenueStoreSnapshot>(json)!);
+        var freshAutomation = new FakeAutomation();
+        var fresh = new PartyFinderService(freshAutomation, new VenueProfileService(freshStore, new ModuleHost()), new FakeClock());
+        fresh.Load(venueId);
+
+        Assert.True(fresh.Settings.AutoRefreshEnabled);
+        Assert.False(fresh.HasOwnListing);
+        fresh.HandleChatText("Your party recruitment closes in five minutes."); // reloaded idle: no recruitment, no refresh
+        Assert.Empty(freshAutomation.RefreshCalls);
+    }
+
+    [Fact] public void Manual_disable_after_end_still_persists_and_blocks_the_next_recruitments_refresh()
+    {
+        var (service, profiles, venueId, automation) = Create();
+        service.Load(venueId);
+        automation.HasOwnListing = true;
+        service.EndPartyFinder("operator panel");
+
+        service.SetAutoRefreshEnabled(false);
+        var reloaded = new PartyFinderService(automation, profiles, new FakeClock());
+        reloaded.Load(venueId);
+        Assert.False(reloaded.Settings.AutoRefreshEnabled);
+
+        automation.HasOwnListing = true; // next recruitment
+        reloaded.HandleChatText("Your party recruitment closes in five minutes.");
+        Assert.Empty(automation.RefreshCalls);
     }
 
     /// <summary>Hard requirement: End Party Finder changes operational recruitment/Auto Refresh state only — it must
@@ -329,9 +445,9 @@ public sealed class PartyFinderServiceTests
 
     /// <summary>The actual re-entrancy guard against a duplicate/simultaneous End is the automation engine's own
     /// <c>state == Ending</c> check (unsafe engine code, live-verified only — see PARTY_FINDER_RECONSTRUCTION.md).
-    /// This asserts the service layer itself stays safe regardless: a second End call never resurrects Auto Refresh
-    /// or disturbs the persisted preset.</summary>
-    [Fact] public void Repeated_end_calls_never_resurrect_auto_refresh_or_disturb_the_preset()
+    /// This asserts the service layer itself stays safe regardless: a second End call never changes the Auto Refresh
+    /// preference or disturbs the persisted preset.</summary>
+    [Fact] public void Repeated_end_calls_never_change_auto_refresh_or_disturb_the_preset()
     {
         var (service, _, venueId, automation) = Create();
         service.Load(venueId);
@@ -339,30 +455,34 @@ public sealed class PartyFinderServiceTests
         automation.HasOwnListing = true;
 
         service.EndPartyFinder("first click");
-        Assert.False(service.Settings.AutoRefreshEnabled);
+        Assert.True(service.Settings.AutoRefreshEnabled);
 
         service.EndPartyFinder("second click");
-        Assert.False(service.Settings.AutoRefreshEnabled);
+        Assert.True(service.Settings.AutoRefreshEnabled);
         Assert.Equal("Unchanged", service.Settings.Preset.Comment);
     }
 
-    [Fact] public void End_party_finder_leaves_auto_refresh_disabled_even_if_withdrawal_fails()
+    [Fact] public void End_party_finder_leaves_auto_refresh_unchanged_even_if_withdrawal_fails()
     {
         var (service, _, venueId, automation) = Create();
         service.Load(venueId);
         automation.HasOwnListing = true;
         automation.FailEndPartyFinder = true;
         service.EndPartyFinder("operator panel");
-        Assert.False(service.Settings.AutoRefreshEnabled);
+        Assert.True(service.Settings.AutoRefreshEnabled);
     }
 
+    /// <summary>With the preference now left enabled through End, the engine's <c>IsEnding</c> flag is what blocks a
+    /// warning arriving mid-shutdown — so the listing is still active here and only <c>IsEnding</c> can stop it.</summary>
     [Fact] public void Stale_auto_refresh_cannot_run_once_ending_has_begun()
     {
         var (service, _, venueId, automation) = Create();
         service.Load(venueId);
         automation.HasOwnListing = true;
         service.EndPartyFinder("operator panel");
-        automation.IsEnding = true; // the real engine keeps this true until its own shutdown chain finishes
+        Assert.True(service.Settings.AutoRefreshEnabled);
+        automation.HasOwnListing = true; // listing not yet withdrawn...
+        automation.IsEnding = true; // ...and the real engine keeps this true until its own shutdown chain finishes
 
         service.HandleChatText("Your party recruitment closes in five minutes.");
         Assert.Empty(automation.RefreshCalls);
@@ -381,26 +501,37 @@ public sealed class PartyFinderServiceTests
         Assert.Empty(automation.RefreshCalls);
     }
 
-    [Fact] public void Ending_one_venue_does_not_disable_auto_refresh_for_another()
+    /// <summary>Per-venue scope: Venue A enabled, Venue B disabled. Ending in either venue must leave both values
+    /// exactly as configured.</summary>
+    [Fact] public void Ending_in_either_venue_never_cross_contaminates_the_other_venues_preference()
     {
         var (service, profiles, venueA, automation) = Create();
         var venueB = profiles.Create("Second Venue").Id;
+        service.Load(venueB);
+        service.SetAutoRefreshEnabled(false);
 
         service.Load(venueA);
         automation.HasOwnListing = true;
-        service.EndPartyFinder("operator panel");
+        service.EndPartyFinder("venue A");
+        Assert.True(service.Settings.AutoRefreshEnabled);
 
         service.Load(venueB);
+        Assert.False(service.Settings.AutoRefreshEnabled);
+        automation.HasOwnListing = true;
+        service.EndPartyFinder("venue B");
+        Assert.False(service.Settings.AutoRefreshEnabled);
+
+        service.Load(venueA);
         Assert.True(service.Settings.AutoRefreshEnabled);
     }
 
-    [Fact] public void Ending_with_no_active_listing_still_disables_auto_refresh_and_calls_the_engine()
+    [Fact] public void Ending_with_no_active_listing_calls_the_engine_and_preserves_auto_refresh()
     {
         var (service, _, venueId, automation) = Create();
         service.Load(venueId);
         automation.HasOwnListing = false;
         service.EndPartyFinder("operator panel");
-        Assert.False(service.Settings.AutoRefreshEnabled);
+        Assert.True(service.Settings.AutoRefreshEnabled);
         Assert.Single(automation.EndPartyFinderCalls);
     }
 
@@ -430,7 +561,7 @@ public sealed class PartyFinderServiceTests
 
     private sealed class FakeClock : IClock
     {
-        public DateTimeOffset UtcNow { get; private set; } = DateTimeOffset.UnixEpoch;
+        public DateTimeOffset UtcNow { get; set; } = DateTimeOffset.UnixEpoch;
     }
 
     private sealed class FakeAutomation : IPartyFinderAutomation

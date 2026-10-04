@@ -36,8 +36,8 @@ public interface IPartyFinderAutomation
     void QueueRefresh(PartyFinderPreset preset, string reason);
 
     /// <summary>The VenueOS-added shutdown workflow: aborts any in-flight chain, then withdraws the active native
-    /// listing (if any) and verifies recruitment actually ended. Auto Refresh is disabled by the caller
-    /// (<see cref="PartyFinderService.EndPartyFinder"/>) before this is ever invoked.</summary>
+    /// listing (if any) and verifies recruitment actually ended. Runtime state only — the persisted Auto Refresh
+    /// preference is never changed by End.</summary>
     void EndPartyFinder(string reason);
 
     /// <summary>Donor: the "Party recruitment ... has ended" chat-text detection — clears the observed-active-listing

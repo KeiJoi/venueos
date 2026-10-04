@@ -43,8 +43,13 @@ $requiredFiles = @(
     "ExcelNumberFormat.dll", "RBush.dll", "SixLabors.Fonts.dll", "System.IO.Packaging.dll",
     # The bundled offline manual (single source of truth: docs/USER_MANUAL.md, copied here at build time by
     # VenueOS.Plugin.csproj's Include+Link content item) - read at runtime by VenueOS.Services.UserManualLoader.
-    "USER_MANUAL.md"
+    "USER_MANUAL.md",
+    # The bundled release history (single source of truth: the repository-root CHANGELOG.md, linked the same way) -
+    # read at runtime by VenueOS.Services.ChangelogLoader for Settings -> Changelog.
+    "CHANGELOG.md"
 )
+# Documents every release ZIP must carry. Checked again inside the finished ZIP below, not just in the build output.
+$requiredDocuments = @("USER_MANUAL.md", "CHANGELOG.md")
 
 foreach ($file in $requiredFiles) {
     $source = Join-Path $releaseBin $file
@@ -69,6 +74,19 @@ if (-not (Test-Path $outputDir)) { New-Item -ItemType Directory -Path $outputDir
 $zipPath = Join-Path $outputDir "VenueOS-$version.zip"
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 Compress-Archive -Path (Join-Path $stagingDir "*") -DestinationPath $zipPath -CompressionLevel Optimal
+
+# Fail the release if the finished ZIP is missing a required document, or if CHANGELOG.md has no entry for this
+# version (every release must update CHANGELOG.md before it is packaged).
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+try {
+    $entryNames = @($zip.Entries | ForEach-Object { $_.FullName })
+    foreach ($doc in $requiredDocuments) {
+        if ($entryNames -notcontains $doc) { throw "Release ZIP is missing required document: $doc" }
+    }
+} finally { $zip.Dispose() }
+$changelogText = Get-Content (Join-Path $stagingDir "CHANGELOG.md") -Raw -Encoding UTF8
+if ($changelogText -notmatch "(?m)^## $([regex]::Escape($version)) ") { throw "CHANGELOG.md has no '## $version' entry - update CHANGELOG.md before packaging a release." }
 
 $zipSize = (Get-Item $zipPath).Length
 Write-Host ""

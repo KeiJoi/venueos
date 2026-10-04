@@ -80,17 +80,14 @@ public sealed class PartyFinderService(IPartyFinderAutomation automation, VenueP
     /// and is not "done for the night" — see <see cref="EndPartyFinder"/> for that.</summary>
     public void Abort() => automation.Abort();
 
-    /// <summary>The VenueOS-added shutdown operation. Auto Refresh is disabled and persisted for the ACTIVE venue
-    /// FIRST, before the automation engine begins withdrawing the native listing, so a 5-minute-warning chat event
-    /// arriving mid-shutdown can never queue another refresh (see <see cref="HandleChatText"/>'s own
-    /// <c>IsEnding</c>/<c>AutoRefreshEnabled</c> guard). Auto Refresh is never re-enabled automatically afterward —
-    /// only an explicit future call to <see cref="SetAutoRefreshEnabled"/> (Settings → Modules → Party Finder) turns
-    /// it back on.</summary>
-    public void EndPartyFinder(string reason)
-    {
-        SetAutoRefreshEnabled(false);
-        automation.EndPartyFinder(reason);
-    }
+    /// <summary>The VenueOS-added shutdown operation: ends the current recruitment (runtime state) only.
+    /// <see cref="PartyFinderSettings.AutoRefreshEnabled"/> is a persistent operator preference and is deliberately
+    /// left untouched — End preserves whatever value the operator configured, so the next recruitment picks it up
+    /// with no re-enable step. (Before the post-0.3.9 hotfix this method called <c>SetAutoRefreshEnabled(false)</c>
+    /// first, conflating the preference with run state; see docs/PARTY_FINDER_HARDENING.md.) A 5-minute-warning chat
+    /// event can still never queue a refresh mid-shutdown or afterward: <see cref="HandleChatText"/> ignores it while
+    /// <c>IsEnding</c> and whenever there is no active listing.</summary>
+    public void EndPartyFinder(string reason) => automation.EndPartyFinder(reason);
 
     public void HandleChatText(string text)
     {
@@ -105,7 +102,11 @@ public sealed class PartyFinderService(IPartyFinderAutomation automation, VenueP
         // that case (rather than aborting the operator's in-flight action to restart an automatic refresh with the
         // exact same preset data) never loses the renewal — the manual action in flight already re-submits the
         // current preset, which resets the listing's visibility exactly like a refresh would.
-        if (!Settings.AutoRefreshEnabled || automation.IsEnding || automation.IsBusy)
+        //
+        // The HasOwnListing guard makes "preference enabled + no active recruitment" an explicit no-op here (End no
+        // longer turns the preference off, so it stays enabled while idle). The engine's own QueueRefresh already
+        // refuses without a listing; checking first also avoids persisting a spurious throttle timestamp.
+        if (!Settings.AutoRefreshEnabled || automation.IsEnding || automation.IsBusy || !automation.HasOwnListing)
         {
             return;
         }

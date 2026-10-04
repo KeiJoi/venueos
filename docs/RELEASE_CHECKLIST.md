@@ -136,6 +136,8 @@ test assemblies, no source, no other platforms' native libraries, no local/devel
       instructions, source link, disclaimer, issue-reporting location.
 - [x] `RELEASE.md` updated with the actual packaging/versioning/publish workflow now that it exists.
 - [x] This checklist.
+- [ ] Every release (0.3.10 onward): add the new version's entry to the root `CHANGELOG.md` before the version
+      bump and packaging — `scripts/Package-Release.ps1` fails without it (see `NEW_MODULE_GUIDE.md` §43a).
 
 ## Repository hygiene
 

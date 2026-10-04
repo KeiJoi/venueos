@@ -1,6 +1,25 @@
-# VenueOS 0.3.9 release
+# VenueOS 0.3.10 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.10 — Party Finder Refresh Persistence & Changelog
+
+A small maintenance release. Automated validation is complete (see the release report). The Party Finder fix has **passed live operator QA**.
+
+### Party Finder
+
+- **End no longer changes your Auto Refresh setting.** Before this release, **End Party Finder** also turned off **Auto Refresh on native 5 minute warning**. Now End only withdraws the listing, and your setting (on or off) carries over to the next recruitment.
+- **Auto Refresh stays idle without a listing.** The 5-minute warning is ignored unless VenueOS has an active listing, so leaving the setting on never causes a refresh while you are not recruiting.
+- **End control updated.** **End Party Finder** is enabled only while a listing is active. Its tooltip and status text ("Party Finder ended.") no longer mention disabling Auto Refresh.
+- **Live QA passed:** with the old standalone Party Finder plugin disabled, the operator enabled Auto Refresh, started and ended recruitment, and Auto Refresh stayed enabled.
+
+### Changelog
+
+- **New canonical `CHANGELOG.md`** at the repository root, with a concise entry for every release. Entries back to 0.1.0 were reconstructed from the repository's tags, GitHub Releases, this file and release commits.
+- **Settings → Changelog** shows the bundled changelog offline, using the same reader as the User Manual. If the file is missing, the page shows a message instead of failing.
+- **Packaged:** every release ZIP now includes `CHANGELOG.md` next to `USER_MANUAL.md`, and packaging fails if either is missing or the changelog has no entry for the version being released.
+
+Reports: `docs/PARTY_FINDER_HARDENING.md` ("Post-0.3.9 hotfix"), `docs/POST_0.3.7_TRAINING_AUDIT.md` item 11.
 
 ## 0.3.9 — Mair's Editor File Picker & ShoutRunner Line 2 Timing
 
@@ -298,14 +317,15 @@ reasoning. No packaging change was needed — `USER_MANUAL.md` was already at th
 
 Local development never needs packaging: build `src/VenueOS.Plugin/VenueOS.Plugin.csproj` (Debug or Release) and load the resulting DLL directly via Dalamud's dev-plugin loader, same as any other iteration.
 
-To build the distributable package for the experimental repository, run `scripts/Package-Release.ps1` from the repository root. It builds `VenueOS.Plugin` in Release, stages only the runtime files VenueOS actually needs (its own assemblies, ECommons, the Sqlite/ClosedXML dependency chain, and the Windows x64 native Sqlite library — not the Debug/PDB output, not DalamudPackager's own default zip which bundles every platform's native Sqlite asset), and produces `release/VenueOS-<version>.zip`. `repo.json` at the repository root is the experimental-repository manifest; its `DownloadLinkInstall`/`DownloadLinkUpdate` point at a GitHub Release asset named to match that ZIP.
+To build the distributable package for the experimental repository, run `scripts/Package-Release.ps1` from the repository root. It builds `VenueOS.Plugin` in Release, stages only the runtime files VenueOS actually needs (its own assemblies, ECommons, the Sqlite/ClosedXML dependency chain, the Windows x64 native Sqlite library, and the bundled `USER_MANUAL.md` and `CHANGELOG.md` — not the Debug/PDB output, not DalamudPackager's own default zip which bundles every platform's native Sqlite asset), and produces `release/VenueOS-<version>.zip`. `repo.json` at the repository root is the experimental-repository manifest; its `DownloadLinkInstall`/`DownloadLinkUpdate` point at a GitHub Release asset named to match that ZIP.
 
 Publishing a new version is a deliberate act, never automatic on every commit:
 
-1. Bump `<Version>`/`<AssemblyVersion>`/`<FileVersion>` in `src/VenueOS.Plugin/VenueOS.Plugin.csproj` if this is a new version (keep `VenueOS.json`'s `AssemblyVersion` and `repo.json`'s `AssemblyVersion`/download URLs in sync with it).
-2. Run `scripts/Package-Release.ps1`.
-3. Push the commit, create a GitHub Release for the matching tag, and upload `release/VenueOS-<version>.zip` as its asset.
-4. Confirm `repo.json`'s download links resolve, then publish/update it wherever the experimental repository URL is hosted.
+1. Add the new version's entry to `CHANGELOG.md` (required — packaging fails without it).
+2. Bump `<Version>`/`<AssemblyVersion>`/`<FileVersion>` in `src/VenueOS.Plugin/VenueOS.Plugin.csproj` if this is a new version (keep `VenueOS.json`'s `AssemblyVersion` and `repo.json`'s `AssemblyVersion`/download URLs in sync with it).
+3. Run `scripts/Package-Release.ps1`.
+4. Push the commit, create a GitHub Release for the matching tag, and upload `release/VenueOS-<version>.zip` as its asset.
+5. Confirm `repo.json`'s download links resolve, then publish/update it wherever the experimental repository URL is hosted.
 
 ## Coexistence and migration
 

@@ -1066,8 +1066,8 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
         }
 
         // Step 2 of the End sequence: abort any in-flight Create/Edit/Refresh chain first, so a queued automatic
-        // refresh can never resume after this begins (Auto Refresh itself is already disabled by the caller,
-        // PartyFinderService.EndPartyFinder, before this method is ever invoked).
+        // refresh can never resume after this begins. The persisted Auto Refresh preference is NOT changed by End;
+        // PartyFinderService.HandleChatText ignores the 5-minute warning while Ending and whenever no listing exists.
         taskManager.Abort();
         mainAddonOpenAttempts = 0;
         usedSlashCommandFallback = false;
@@ -1084,7 +1084,7 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
         if (!HasOwnListing)
         {
             observedActiveListing = false;
-            SetStatus("Party Finder ended — Auto Refresh disabled");
+            SetStatus("Party Finder ended.");
             EndOperation(PartyFinderOperationOutcome.Completed, "no own listing to end");
             return;
         }
@@ -1100,7 +1100,7 @@ public sealed unsafe class PartyFinderAutomationService : IPartyFinderAutomation
         EnqueueStep("end_close_pf", ClosePartyFinderWindowIfVisible);
         EnqueueStep("end_finish", () =>
         {
-            SetStatus("Party Finder ended — Auto Refresh disabled");
+            SetStatus("Party Finder ended.");
             EndOperation(PartyFinderOperationOutcome.Completed, "listing withdrawn");
             return true;
         });

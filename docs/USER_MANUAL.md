@@ -71,15 +71,17 @@ VenueOS presents itself as a tablet with one persistent toolbar and a content ar
 
 **Home** shows an overview card and a grid of application tiles under an "Applications" heading — one tile per enabled module, plus a Settings tile. Clicking a tile opens that module.
 
-**Settings** has five sections, reached from its own sidebar:
+**Settings** has seven sections, reached from its own sidebar:
 
 | Section | Subtitle |
 |---|---|
 | Venue | Profile & identity |
 | Appearance | Themes & colors |
 | Modules | Enable & configure |
+| Launcher | Quick-access hotbar |
 | General | System behavior |
 | Diagnostics | Logs & troubleshooting |
+| Changelog | Release history |
 
 **Enabled vs. disabled modules:** a disabled module does not appear on Home at all — it's simply not there, not just grayed out. It still appears in **Settings → Modules**, where you can re-enable it. Toggling a module on/off in Settings → Modules is remembered — it's not reset by future updates unless you've never touched that toggle.
 
@@ -122,6 +124,8 @@ Found under **Settings → General**:
 **Settings → Diagnostics** shows a filterable log of recent errors and configuration-recovery warnings (filters: **Log Level** — All Levels/Errors/Warnings, **Module**, and a **Search** box), plus **Clear** and **Copy** buttons and small stat tiles (Total Entries, Errors, Warnings, Last Update). Useful for troubleshooting — see [Troubleshooting](#22-troubleshooting).
 
 **Settings → Launcher** configures the Module Launcher — see [Module Launcher & Window Management](#20-module-launcher--window-management) below.
+
+**Settings → Changelog** shows a short summary of what changed in each VenueOS release, newest first. It reads the copy of `CHANGELOG.md` that ships with your installed VenueOS, so it works offline. If that file is missing, the page shows a "could not be loaded" message with a **Reload Changelog** button instead.
 
 ---
 
@@ -334,9 +338,9 @@ The main action button reads **Recruit Members** when nothing is posted yet, and
 ### Refresh and end
 
 - **Refresh Active Listing** — manual refresh at any time.
-- Auto Refresh (if on) listens for the game's native "5 minute" warning in chat and refreshes automatically, throttled to at most once every 4 minutes.
+- Auto Refresh (if on) listens for the game's native "5 minute" warning in chat and refreshes automatically, throttled to at most once every 4 minutes. It only acts while you have an active listing — with no listing it simply waits for your next recruitment.
 - **Abort** — cancels whatever automation is currently doing, without withdrawing your listing or touching Auto Refresh.
-- **End Party Finder** (red button) — turns off Auto Refresh for this venue *and* withdraws the active listing. Auto Refresh stays off afterward until you turn it back on yourself in Settings.
+- **End Party Finder** (red button, available while a listing is active) — withdraws the active listing. Your Auto Refresh setting is left exactly as you configured it, so the next recruitment uses it without re-enabling anything.
 
 **Refresh reliability hardening:** the Create/Refresh/Edit buttons are now disabled while a refresh is already in progress, so clicking again mid-refresh can't restart or collide with it — a redundant click (or an automatic 5-minute warning landing mid-manual-edit) is simply ignored rather than aborting your in-flight attempt. If you zone, log out, or are between areas when a refresh would run, it now stops quietly instead of showing a confusing "Failed to detect a visible Party Finder window" error; the next warning or manual click retries normally once you're back in a valid state. Abort is always available regardless.
 

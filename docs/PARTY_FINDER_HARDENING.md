@@ -478,3 +478,71 @@ TESTS A–I in report §25 — first-refresh manual and automatic with the modul
 observability (the `op#` lines), regression sweep, and a long soak whose harvested `op#` lines (especially any
 `re-dispatching` warning and the `addons:` cold/warm start line) will confirm or refute the leading hypothesis. Until
 that soak passes, describe this as a repair with instrumentation, not a confirmed fix.
+
+---
+
+# Post-0.3.9 hotfix: End Party Finder must preserve the 5-minute Auto Refresh preference
+
+**Status: CODE PASS / AUTOMATED PASS / LIVE QA PASSED.** The operator retested this fix in FFXIV and accepted it ("Tested, works."). It ships in VenueOS 0.3.10.
+
+## Live finding
+
+* During earlier live testing, the old **standalone Party Finder plugin** (`venuepartyfinder`) was still enabled and interfered with VenueOS's own Party Finder automation.
+* With the standalone plugin disabled, VenueOS Party Finder worked on its own: it started recruitment and refreshed on the native 5-minute warning.
+* The one remaining defect: pressing **End Party Finder** also turned off the "Auto Refresh on native 5 minute warning" setting, so the operator had to turn it back on before every venue night.
+
+## Root cause
+
+The persisted preference is `PartyFinderSettings.AutoRefreshEnabled`. It is per venue, stored through `VenueProfileService.SaveModuleConfig` under module `promotion.partyfinder`, schema 1. Only two code paths ever wrote it:
+
+1. `PartyFinderService.SetAutoRefreshEnabled`, called from the Settings toggle (`PartyFinderOperatorPanel.DrawSettings`). This is correct: it is the operator's explicit change.
+2. `PartyFinderService.EndPartyFinder`, which called `SetAutoRefreshEnabled(false)` and saved the change before it handed off to `automation.EndPartyFinder`. **This was the defect.** It was a deliberate reconstruction-era choice ("disable Auto Refresh first so a mid-shutdown warning can't queue a refresh"), but it treated a persistent operator preference as if it were run state. The engine's `IsEnding` guard in `HandleChatText` already gives that mid-shutdown protection on its own.
+
+Other paths, all audited and none of them touch the preference: natural expiry (`HandleChatText` → `NotifyListingEnded`), Abort (`automation.Abort`), venue switch and reload (`Load` → `GetModuleConfig` + `automation.ResetForVenue`), and module disable/unload (`PartyFinderModule.DisposeAsync` → `Abort`). The settings record holds no run state. The only non-preference value it holds is `LastRefreshAttemptUtc`, the per-venue throttle timestamp, which is unchanged here.
+
+## Fix
+
+* `PartyFinderService.EndPartyFinder` now only calls `automation.EndPartyFinder(reason)`. That still aborts the in-flight chain, releases operation ownership, withdraws the listing, verifies it, and closes the window. The preference is never written.
+* **No-active-recruitment guard.** `HandleChatText` now also returns early when `!automation.HasOwnListing`. Before this fix, the engine's `QueueRefresh` already refused with "No active listing to refresh.", but the service had already saved a throttle timestamp first. Now "preference enabled + no listing" does nothing and persists nothing. This adds no polling: auto refresh is still triggered only by chat events.
+* Plugin layer: End's status text changed from "Party Finder ended — Auto Refresh disabled" to "Party Finder ended.". The End button tooltip now says the setting is kept. The End button is now disabled when there is no listing (`IsEnding || !HasOwnListing`). The old condition also enabled it while Auto Refresh was on, which only made sense when End was the way to turn that off. End with no listing is still a safe no-op in the engine.
+* Docs describing the old behavior were updated: `docs/USER_MANUAL.md` and `PARTY_FINDER_RECONSTRUCTION.md` (now marked superseded).
+
+## Tests (`PartyFinderServiceTests`)
+
+New:
+* `End_party_finder_preserves_an_enabled_auto_refresh_preference` checks the value in memory, at the moment the engine is invoked, and in a reconstructed service.
+* `End_party_finder_preserves_a_disabled_auto_refresh_preference`
+* `End_party_finder_does_not_trigger_a_refresh_or_create`
+* `Enabled_preference_with_no_active_listing_never_auto_refreshes`
+* `Next_recruitment_after_end_auto_refreshes_without_reconfiguration`
+* `Enabled_preference_survives_end_and_a_full_serialize_deserialize_reload`
+* `Manual_disable_after_end_still_persists_and_blocks_the_next_recruitments_refresh`
+
+Inverted from the old semantics, because they asserted the defect:
+* `Repeated_end_calls_never_change_auto_refresh_or_disturb_the_preset`
+* `End_party_finder_leaves_auto_refresh_unchanged_even_if_withdrawal_fails`
+* `Ending_with_no_active_listing_calls_the_engine_and_preserves_auto_refresh`
+* `Ending_in_either_venue_never_cross_contaminates_the_other_venues_preference` (Venue A on / Venue B off)
+
+Tightened:
+* `Stale_auto_refresh_cannot_run_once_ending_has_begun` now keeps the listing active, so only `IsEnding` can block the refresh.
+* `Auto_refresh_is_ignored_while_disabled` now has an active listing, so only the preference can block the refresh.
+
+The first-refresh, ownership/collision and Abort suites are unchanged and still pass.
+
+**Mutation checks.** Restoring `SetAutoRefreshEnabled(false)` in End makes 8 tests fail. Removing the `HasOwnListing` guard makes 3 tests fail. Both mutations were reverted and the suite is green again.
+
+**Validation:** 1399 / 1399 (Core 69, Venues 23, Services 1307), 0 failed, 0 skipped. Debug and Release builds: 0 warnings / 0 errors.
+
+## Live QA — PASSED (operator retest)
+
+**Result:** the operator tested this fix live in FFXIV, reported "Tested, works.", and accepted it. The scenario was: standalone Party Finder plugin disabled, VenueOS Party Finder tested on its own, Auto Refresh enabled, recruitment started, then ended. Auto Refresh stayed enabled as configured. The operator reported nothing beyond that; the checklist below is the scenario list that was provided for the retest.
+
+Run with the standalone Party Finder plugin **disabled**.
+
+* **A. Enabled state is kept.** Enable Auto Refresh (Settings → Modules → Party Finder). Start Party Finder. Confirm the setting is on. End Party Finder. PASS: recruitment ends, the status reads "Party Finder ended.", and the toggle is still on.
+* **B. No refresh while idle.** After End, keep playing normally for a while. PASS: no Party Finder window opens and no refresh happens while there is no listing.
+* **C. Next recruitment.** Start Party Finder again without touching Settings. PASS: Auto Refresh is already on, and the next native 5-minute warning refreshes the listing.
+* **D. Disabled state is kept.** Turn Auto Refresh off. Start, then End. PASS: the toggle stays off and no auto refresh happens during that recruitment.
+* **E. Reload.** With Auto Refresh on and no listing, run `/xlreload`. PASS: the toggle is still on, no recruitment starts, and no refresh fires.
+* **F. Venue switch.** Venue A on, Venue B off. End in each venue and switch between them. PASS: each venue keeps its own value.

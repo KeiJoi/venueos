@@ -42,5 +42,13 @@ receive it; both remain CODE PASS / AUTOMATED PASS / LIVE QA PENDING:
 
 Test count after the hotfix: 1393 / 1393 (Core 69, Venues 23, Services 1301).
 
+## Post-0.3.9 hotfix — shipped in VenueOS 0.3.10 (from live operator testing)
+
+| # | Finding | Module | Status | Report |
+|---|---|---|---|---|
+| 11 | End Party Finder also turned off the persistent "Auto Refresh on native 5 minute warning" preference. Earlier refresh problems were traced to interference from the old standalone Party Finder plugin; VenueOS refreshed correctly once that plugin was disabled. | Party Finder | **LIVE QA PASSED — accepted by the operator** ("Tested, works.": standalone plugin disabled, Auto Refresh on, recruitment started then ended, Auto Refresh stayed on). Root cause: `PartyFinderService.EndPartyFinder` called `SetAutoRefreshEnabled(false)`; End now changes run state only, and auto refresh also requires an active listing. | [`PARTY_FINDER_HARDENING.md`](PARTY_FINDER_HARDENING.md), "Post-0.3.9 hotfix" section |
+
+Test count at the fix: 1399 / 1399 (Core 69, Venues 23, Services 1307). VenueOS 0.3.10 also adds the packaged `CHANGELOG.md` and Settings → Changelog — see `RELEASE.md`.
+
 Rules for this batch (historical — they governed the work-package phase, before the release was requested): no version bump, packaging, commit, push, tag, GitHub Release, or `repo.json` change until the
 combined release is explicitly requested. Donor/backend repositories are never touched from this ledger's work — except WP2, where the owner explicitly authorised edits (working tree only, never committed/pushed/deployed) to the Bingo backend/web repo and the TournamentControl backend; the owner handles their commits, pushes, releases, Render deployment and environment variables.

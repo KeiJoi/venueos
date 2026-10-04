@@ -5,20 +5,23 @@ using VenueOS.Venues;
 
 namespace VenueOS.Plugin.Shell;
 
-/// <summary>The built-in, offline User Manual reader — a small, deliberately non-CommonMark Markdown renderer over
-/// whatever <see cref="ManualMarkdown"/> parsed from the bundled <c>docs/USER_MANUAL.md</c> copy (see
-/// <see cref="UserManualLoader"/>). Reached from Home's "User Manual" tile, rendered as an ordinary embedded VenueOS
-/// page (same <see cref="AppFrame"/> chrome every module/Settings page uses) — no detached window, no external
-/// browser, no network. A missing/empty manual renders a plain warning instead of crashing VenueOS.
+/// <summary>The built-in, offline reader for a bundled Markdown document — a small, deliberately non-CommonMark
+/// Markdown renderer over whatever <see cref="ManualMarkdown"/> parsed from the loaded file. Two instances exist: the
+/// User Manual (bundled <c>docs/USER_MANUAL.md</c>, see <see cref="UserManualLoader"/>; reached from Home's "User
+/// Manual" tile inside the usual <see cref="AppFrame"/> chrome) and the Changelog (bundled root <c>CHANGELOG.md</c>,
+/// see <see cref="ChangelogLoader"/>; Settings → Changelog). No detached window, no external browser, no network. A
+/// missing/empty document renders a plain warning instead of crashing VenueOS.
 ///
 /// Table cells and list items reuse the exact same inline-run word-wrap renderer paragraphs use — one rendering
 /// path for every piece of inline content, rather than a separate implementation per block kind. External links
 /// (anything not a same-document "#anchor") have no safe way to open a browser anywhere in this codebase today, so
 /// activating one copies the URL to the clipboard instead of launching anything — the same "Copy" convention already
 /// used elsewhere in VenueOS (ShoutRunner's Copy Terminal, Party Finder's Copy Link).</summary>
-internal sealed class UserManualScreen
+internal sealed class BundledDocumentScreen
 {
-    private readonly Func<UserManualLoadResult> load;
+    private readonly string documentName;
+    private readonly string idPrefix;
+    private readonly Func<BundledDocumentLoadResult> load;
     private readonly DiagnosticsService diagnostics;
     private bool loaded;
     private IReadOnlyList<MarkdownBlock> blocks = [];
@@ -33,10 +36,13 @@ internal sealed class UserManualScreen
     private double copiedLinkStatusUntil;
 
     /// <summary><paramref name="load"/> is called once here and again only when the operator explicitly presses
-    /// "Reload Manual" — never from <see cref="Draw"/>'s per-frame path — so a load failure is recorded to
-    /// Diagnostics exactly once per attempt, not spammed every frame.</summary>
-    public UserManualScreen(Func<UserManualLoadResult> load, DiagnosticsService diagnostics)
+    /// "Reload" — never from <see cref="Draw"/>'s per-frame path — so a load failure is recorded to Diagnostics
+    /// exactly once per attempt, not spammed every frame. <paramref name="idPrefix"/> namespaces every ImGui id and
+    /// the Diagnostics prefix, so the manual and the changelog never share scroll/child state.</summary>
+    public BundledDocumentScreen(string documentName, string idPrefix, Func<BundledDocumentLoadResult> load, DiagnosticsService diagnostics)
     {
+        this.documentName = documentName;
+        this.idPrefix = idPrefix;
         this.load = load;
         this.diagnostics = diagnostics;
         Reload();
@@ -59,7 +65,7 @@ internal sealed class UserManualScreen
         if (!loaded)
         {
             var detail = string.Join(" | ", result.Candidates.Select(c => $"{c.Directory} ({(c.FailureReason ?? "unknown")})"));
-            diagnostics.RecordFailure($"manual: User Manual could not be loaded. Checked: {detail}");
+            diagnostics.RecordFailure($"{idPrefix}: {documentName} could not be loaded. Checked: {detail}");
         }
     }
 
@@ -67,9 +73,9 @@ internal sealed class UserManualScreen
     {
         if (!loaded || blocks.Count == 0)
         {
-            UiKit.WarningState(theme, "User Manual could not be loaded.");
+            UiKit.WarningState(theme, $"{documentName} could not be loaded.");
             ImGui.Spacing();
-            if (UiKit.GhostButton(theme, "Reload Manual")) Reload();
+            if (UiKit.GhostButton(theme, $"Reload {documentName}")) Reload();
             ImGui.Spacing();
             ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary));
             ImGui.TextWrapped("Check Settings → Diagnostics for exactly which location(s) were checked.");
@@ -82,13 +88,13 @@ internal sealed class UserManualScreen
 
         var avail = ImGui.GetContentRegionAvail();
         const float sidebarWidth = 220f;
-        ImGui.BeginChild("manual-toc", new Vector2(sidebarWidth, avail.Y), true);
+        ImGui.BeginChild($"{idPrefix}-toc", new Vector2(sidebarWidth, avail.Y), true);
         foreach (var (title, index) in toc)
-            if (ImGui.Selectable($"{title}##manual-toc-{index}")) pendingScrollBlockIndex = index;
+            if (ImGui.Selectable($"{title}##{idPrefix}-toc-{index}")) pendingScrollBlockIndex = index;
         ImGui.EndChild();
 
         ImGui.SameLine();
-        ImGui.BeginChild("manual-content", new Vector2(0, avail.Y), false);
+        ImGui.BeginChild($"{idPrefix}-content", new Vector2(0, avail.Y), false);
         for (var i = 0; i < blocks.Count; i++)
         {
             if (pendingScrollBlockIndex == i) { ImGui.SetScrollHereY(0f); pendingScrollBlockIndex = null; }
@@ -100,7 +106,7 @@ internal sealed class UserManualScreen
     private void DrawToolbar(VenueTheme theme)
     {
         var width = ImGui.GetContentRegionAvail().X;
-        Forms.SearchBox(theme, "manual-search", ref search, "Find in manual...", MathF.Max(120, width - 116));
+        Forms.SearchBox(theme, $"{idPrefix}-search", ref search, $"Find in {documentName}...", MathF.Max(120, width - 116));
         ImGui.SameLine();
         if (UiKit.GhostButton(theme, "Find Next", new Vector2(100, 0))) FindNext();
 
@@ -179,11 +185,11 @@ internal sealed class UserManualScreen
         }
     }
 
-    private static void DrawCodeBlock(VenueTheme theme, IReadOnlyList<string> lines)
+    private void DrawCodeBlock(VenueTheme theme, IReadOnlyList<string> lines)
     {
         var height = lines.Count * ImGui.GetTextLineHeightWithSpacing() + theme.Metrics.Padding * 2;
         ImGui.PushStyleColor(ImGuiCol.ChildBg, UiKit.Color(theme.Tokens.RaisedSurface));
-        ImGui.BeginChild($"manual-code-{lines.GetHashCode()}", new Vector2(0, height), false);
+        ImGui.BeginChild($"{idPrefix}-code-{lines.GetHashCode()}", new Vector2(0, height), false);
         foreach (var line in lines) ImGui.TextUnformatted(line);
         ImGui.EndChild();
         ImGui.PopStyleColor();

@@ -21,6 +21,7 @@ internal sealed class SettingsScreen
         new("launcher", "launcher", "Launcher", "Quick-access hotbar"),
         new("general", "gear", "General", "System behavior"),
         new("diagnostics", "terminal", "Diagnostics", "Logs & troubleshooting"),
+        new("changelog", "book", "Changelog", "Release history"),
     ];
     private const float NarrowThreshold = 640f;
     private const float SidebarWidth = 240f;
@@ -31,10 +32,12 @@ internal sealed class SettingsScreen
     private readonly LauncherSettingsPage launcherPage;
     private readonly GeneralSettingsPage generalPage;
     private readonly DiagnosticsSettingsPage diagnosticsPage;
+    private readonly BundledDocumentScreen changelogScreen;
     private int activeCategory;
 
-    public SettingsScreen(VenueProfileService venues, ModuleHost modules, DiagnosticsService diagnostics, GlobalSettingsService globalSettings, VenueSwitchCoordinator switchCoordinator)
+    public SettingsScreen(VenueProfileService venues, ModuleHost modules, DiagnosticsService diagnostics, GlobalSettingsService globalSettings, VenueSwitchCoordinator switchCoordinator, BundledDocumentScreen changelogScreen)
     {
+        this.changelogScreen = changelogScreen;
         venuePage = new VenueSettingsPage(venues, switchCoordinator);
         appearancePage = new AppearanceSettingsPage(venues);
         modulesPage = new ModulesSettingsPage(modules, diagnostics, globalSettings, venues);
@@ -106,6 +109,7 @@ internal sealed class SettingsScreen
             case "modules": modulesPage.Draw(theme); break;
             case "launcher": launcherPage.Draw(theme); break;
             case "general": generalPage.Draw(theme); break;
+            case "changelog": changelogScreen.Draw(theme); break;
             default: diagnosticsPage.Draw(theme); break;
         }
     }

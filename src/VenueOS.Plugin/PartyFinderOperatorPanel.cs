@@ -113,10 +113,12 @@ internal sealed class PartyFinderOperatorPanel(PartyFinderService service, Party
         ImGui.SameLine();
         // End Party Finder is a deliberate shutdown, not a routine control — visually distinguished as the danger
         // action, but still built from VenueOS's semantic theme tokens like every other button here.
-        ImGui.BeginDisabled(service.IsEnding || (!service.HasOwnListing && !service.Settings.AutoRefreshEnabled));
+        // Gated on the listing only (formerly also kept enabled while Auto Refresh was on, because End used to turn
+        // that preference off). The engine treats End-with-no-listing as an already-ended no-op.
+        ImGui.BeginDisabled(service.IsEnding || !service.HasOwnListing);
         if (UiKit.DangerButton(theme, "End Party Finder")) service.EndPartyFinder("operator panel");
         ImGui.EndDisabled();
-        UiKit.Tooltip("Disables Auto Refresh, withdraws the active listing, and leaves Auto Refresh off until you explicitly re-enable it in Settings.");
+        UiKit.Tooltip("Withdraws the active listing. Your Auto Refresh setting is kept as-is for the next recruitment.");
 
         UiKit.EndSectionCard();
     }
