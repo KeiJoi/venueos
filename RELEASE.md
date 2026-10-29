@@ -1,6 +1,21 @@
-# VenueOS 0.3.10 release
+# VenueOS 0.3.11 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.11 — VIP Only Attendance Mode
+
+A small feature release. Automated validation is complete (full suite 1451 / 1451, Debug and Release builds with 0 warnings / 0 errors). **Live FFXIV QA is pending operator acceptance.**
+
+### Attendance — VIP Only Mode
+
+- **New checkbox:** **VIP Only Mode**, on Attendance → Live under *Greeting Mode*, right above **Start New Opening** / **Resume Latest**. Unchecked by default; existing installations are unaffected until an operator checks it.
+- **For a dedicated VIP host.** One staff member runs Attendance normally; another runs it with VIP Only Mode on a second client to welcome VIPs.
+- **Tracks everyone, greets only VIPs.** Guest detection, arrival/departure records, visit counts, statistics, samples, history and export are unchanged. Only greeting eligibility changes: an enabled VIP of the current venue (name + home world) gets their own private tell and then their public announcement; the Greeter preset sequence is bypassed; ordinary guests are never queued.
+- **Session-local and never saved.** The mode applies only to the opening started (or resumed) with it on that client. Pause, Close and venue switch end it; every new or resumed opening, including after a reload, starts in normal mode. It is locked for the running opening and shown as a **VIP Only Mode** badge.
+- **No configuration changes.** Greeter presets/settings, the VIP list and other clients are untouched. Separate clients share no greeting state, so a VIP can still get a VIP tell from a client running normal mode.
+- **Normal mode unchanged.** With the checkbox off, Attendance, Greeter and VIP behave exactly as in 0.3.10.
+
+Report: `docs/VIP_ONLY_MODE_IMPLEMENTATION.md`.
 
 ## 0.3.10 — Party Finder Refresh Persistence & Changelog
 

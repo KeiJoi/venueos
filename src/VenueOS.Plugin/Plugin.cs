@@ -158,6 +158,9 @@ public sealed class Plugin : IDalamudPlugin
         // for VIP and non-VIP guests alike) and Attendance's manual "Greet" action. See GreetingCoordinator's
         // and VipOrchestrationService's type-level doc comments for exactly what this replaces and why.
         var coordinator = new GreetingCoordinator(guest => attendanceService.IsGreeted(guest), greeterService, vipService, chat, msg => Log.Debug($"[Greeting] {msg}"));
+        // VIP Only Mode (0.3.11): the coordinator reads the active opening's session-local greeting mode and follows
+        // its open/end lifecycle — see GreetingCoordinator.AttachSession.
+        coordinator.AttachSession(attendanceService);
         shoutRunnerAutomation = new VenueOS.Plugin.ShoutRunner.ShoutRunnerAutomationService(PluginInterface, ClientState, ObjectTable, Condition, ChatGui, DataManager, Framework, chat, Log);
         // Crash-recovery journal: a single small JSON file directly in the plugin's own Dalamud config directory,
         // matching attendance.db's own top-level placement — see FileShoutRunnerRecoveryStore's doc comment for the

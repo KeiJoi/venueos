@@ -50,5 +50,13 @@ Test count after the hotfix: 1393 / 1393 (Core 69, Venues 23, Services 1301).
 
 Test count at the fix: 1399 / 1399 (Core 69, Venues 23, Services 1307). VenueOS 0.3.10 also adds the packaged `CHANGELOG.md` and Settings → Changelog — see `RELEASE.md`.
 
+## Feature request — shipped in VenueOS 0.3.11
+
+| # | Request | Module | Status | Report |
+|---|---|---|---|---|
+| 12 | A dedicated VIP host on a second client should recognise and greet returning VIPs without sending ordinary Greeter messages to everyone else. Product decision: track everyone, greet only VIPs. | Attendance / Greeter / VIP | **IMPLEMENTED — awaiting live QA** (Attendance → Live "VIP Only Mode" checkbox, session-local, default off; gate in `GreetingCoordinator.TryGreet`; Attendance tracking unchanged) | [`VIP_ONLY_MODE_IMPLEMENTATION.md`](VIP_ONLY_MODE_IMPLEMENTATION.md) |
+
+Test count at release: 1451 / 1451 (Core 69, Venues 23, Services 1359).
+
 Rules for this batch (historical — they governed the work-package phase, before the release was requested): no version bump, packaging, commit, push, tag, GitHub Release, or `repo.json` change until the
 combined release is explicitly requested. Donor/backend repositories are never touched from this ledger's work — except WP2, where the owner explicitly authorised edits (working tree only, never committed/pushed/deployed) to the Bingo backend/web repo and the TournamentControl backend; the owner handles their commits, pushes, releases, Render deployment and environment variables.

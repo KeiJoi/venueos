@@ -73,6 +73,15 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
     /// value for the shared continuous presence scan (VIP still needs guest detection with no session open) and for
     /// what the *next* opening will use unless the operator explicitly picks Outdoor before starting it.</summary>
     public PresenceAreaMode ActiveAreaMode { get; private set; } = PresenceAreaMode.FollowOperator;
+    /// <summary>VenueOS 0.3.11 VIP Only Mode — a per-opening, local-client greeting choice made on the Live screen
+    /// immediately before Start/Resume (like <see cref="ActiveAreaMode"/>), but deliberately <b>never persisted</b>:
+    /// it is this operator's own session role (a dedicated VIP host on a second client), not a property of the
+    /// opening, the venue, Greeter or VIP. It changes nothing about tracking — <see cref="Arrive"/>/<see cref="Depart"/>,
+    /// visit counts, samples and history behave identically either way; only <see cref="GreetingCoordinator.TryGreet"/>
+    /// reads it, to decide greeting eligibility. Cleared whenever the active opening ends (Pause/Close/venue switch),
+    /// so it can never leak into a later opening — every new or resumed opening starts in normal mode unless the
+    /// operator explicitly picks VIP Only again.</summary>
+    public bool VipOnlyMode { get; private set; }
     public event Action<GuestIdentity>? GuestArrived;
     public event Action<GuestIdentity>? GuestDeparted;
     /// <summary>Fires once per calendar night per guest, backed by <see cref="IVenueDatabase.MarkPresent"/>'s
@@ -105,6 +114,10 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
     /// opens is tracked as present everywhere (not just in Attendance) without any module treating them as an
     /// automatic-greeting-eligible arrival — see <see cref="Arrive"/>'s <c>isSessionSeed</c> parameter.</summary>
     public event Action? SessionOpened;
+    /// <summary>Fires whenever the active opening stops being active on this client — Pause, Close of the current
+    /// opening, or <see cref="DetachSession"/> (venue switch). <see cref="GreetingCoordinator.AttachSession"/> uses it to
+    /// cancel any VIP Only greeting work still pending for that opening.</summary>
+    public event Action? SessionEnded;
 
     public void AttachVenue(Guid id) => venueId = id;
 
@@ -127,9 +140,11 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
     /// stays open/resumable in its own venue's history until the operator explicitly returns and resumes it.</summary>
     public void DetachSession()
     {
-        CurrentSessionId = null; ActiveTerritoryLock = null; ActiveFixedCenter = null; ActiveAreaMode = PresenceAreaMode.FollowOperator; guests.Clear();
+        var hadSession = CurrentSessionId is not null;
+        CurrentSessionId = null; ActiveTerritoryLock = null; ActiveFixedCenter = null; ActiveAreaMode = PresenceAreaMode.FollowOperator; VipOnlyMode = false; guests.Clear();
         nextSampleAt = DateTimeOffset.MinValue; lastSampleBucket = DateTimeOffset.MinValue;
         autoGreetEligibilityConsumed.Clear();
+        if (hadSession) SessionEnded?.Invoke();
     }
 
     /// <summary>Donor parity for presence re-discovery: the donor's tracker only ever scans while its venue is
@@ -148,8 +163,10 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
     /// <paramref name="areaMode"/> is the Venue Area Type the operator picked on the Live screen immediately before
     /// pressing Start — it is snapshotted for this opening's entire lifetime (see <see cref="ActiveAreaMode"/>) and
     /// persisted onto the opening itself, along with the resulting fixed origin if applicable, so
-    /// <see cref="ResumeSession"/> can restore exactly this, never the *next* opening's own default.</summary>
-    public void StartSession(bool lockToOpenTerritory, PresenceAreaMode areaMode, DateTimeOffset now)
+    /// <see cref="ResumeSession"/> can restore exactly this, never the *next* opening's own default.
+    /// <paramref name="vipOnlyMode"/> is the Live screen's VIP Only Mode checkbox — see <see cref="VipOnlyMode"/>; it
+    /// is applied before <see cref="SessionOpened"/> fires so every listener sees this opening's real greeting mode.</summary>
+    public void StartSession(bool lockToOpenTerritory, PresenceAreaMode areaMode, DateTimeOffset now, bool vipOnlyMode = false)
     {
         var territoryLock = lockToOpenTerritory ? currentTerritory?.Invoke() : null;
         var fixedCenter = areaMode == PresenceAreaMode.FixedPoint ? currentPosition?.Invoke() : null;
@@ -157,6 +174,7 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
         ActiveTerritoryLock = territoryLock;
         ActiveFixedCenter = fixedCenter;
         ActiveAreaMode = areaMode;
+        VipOnlyMode = vipOnlyMode;
         guests.Clear(); nextSampleAt = DateTimeOffset.MinValue; lastSampleBucket = DateTimeOffset.MinValue;
         autoGreetEligibilityConsumed.Clear();
         presence.ResetKnownPresence(); SessionOpened?.Invoke();
@@ -165,8 +183,11 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
     /// <summary>Restores the opening exactly as it was — its saved <see cref="ActiveAreaMode"/>, territory lock, and
     /// (for Outdoor) fixed origin all come from what <see cref="StartSession"/> persisted for this specific opening,
     /// never re-captured from wherever the operator happens to be standing right now. There is deliberately no
-    /// "area mode"/"lock to territory" parameter here any more — resuming is not a second place to choose those.</summary>
-    public bool ResumeSession(long sessionId)
+    /// "area mode"/"lock to territory" parameter here any more — resuming is not a second place to choose those.
+    /// <paramref name="vipOnlyMode"/> is the exception, by design: VIP Only Mode is never stored on the opening (see
+    /// <see cref="VipOnlyMode"/>), so resuming applies whatever the operator has selected on the Live screen right now
+    /// — normal mode by default, never a silently remembered value.</summary>
+    public bool ResumeSession(long sessionId, bool vipOnlyMode = false)
     {
         var record = database.GetSession(venueId, sessionId);
         if (record is null || !database.ResumeSession(venueId, sessionId)) return false;
@@ -174,6 +195,7 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
         ActiveAreaMode = record.AreaMode;
         ActiveTerritoryLock = record.TerritoryLock;
         ActiveFixedCenter = record.FixedCenter;
+        VipOnlyMode = vipOnlyMode;
         guests.Clear();
         autoGreetEligibilityConsumed.Clear();
         presence.ResetKnownPresence(); SessionOpened?.Invoke();
@@ -183,7 +205,8 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
     public bool PauseSession(DateTimeOffset now)
     {
         if (CurrentSessionId is not long id || !database.PauseSession(venueId, id, now)) return false;
-        CurrentSessionId = null; ActiveTerritoryLock = null; ActiveFixedCenter = null; ActiveAreaMode = PresenceAreaMode.FollowOperator; guests.Clear();
+        CurrentSessionId = null; ActiveTerritoryLock = null; ActiveFixedCenter = null; ActiveAreaMode = PresenceAreaMode.FollowOperator; VipOnlyMode = false; guests.Clear();
+        SessionEnded?.Invoke();
         return true;
     }
 
@@ -192,7 +215,7 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
     public bool CloseSession(long sessionId, DateTimeOffset now)
     {
         if (!database.CloseSession(venueId, sessionId, now)) return false;
-        if (CurrentSessionId == sessionId) { CurrentSessionId = null; ActiveTerritoryLock = null; ActiveFixedCenter = null; ActiveAreaMode = PresenceAreaMode.FollowOperator; guests.Clear(); }
+        if (CurrentSessionId == sessionId) { CurrentSessionId = null; ActiveTerritoryLock = null; ActiveFixedCenter = null; ActiveAreaMode = PresenceAreaMode.FollowOperator; VipOnlyMode = false; guests.Clear(); SessionEnded?.Invoke(); }
         return true;
     }
 
@@ -237,6 +260,7 @@ public sealed class AttendanceService(PresenceService presence, IVenueDatabase d
         if (CurrentSessionId is long id) database.MarkGreeted(venueId, id, guest, greeted, now);
         if (greeted) greeter?.CancelPending(guest);
     }
+    public void MarkGreeted(GuestIdentity guest, bool greeted) => MarkGreeted(guest, greeted, clock.UtcNow);
     /// <summary>The authoritative greeted-state query for the current opening — backed by the same
     /// <see cref="IVenueDatabase.GetSessionVisitors"/> data <see cref="GetTonightVisitors"/> already exposes, not a
     /// second store. Returns false (never greeted) when no opening is active, matching a fresh session's semantics.</summary>
@@ -356,6 +380,10 @@ public sealed class GreeterService(IClock clock, ChatCommandService chat, IVenue
         if (current is not null && current.Guest.Key == guest.Key) { current = null; nextGuestStartAt = clock.UtcNow.AddSeconds(InterGuestDelaySeconds); }
     }
     public void ResetForVenue() { contextCancellation.Cancel(); contextCancellation.Dispose(); contextCancellation = new(); queue.Clear(); queued.Clear(); current = null; nextGuestStartAt = DateTimeOffset.MinValue; }
+    /// <summary>Drops every queued and in-flight greeting (same mechanics as <see cref="ResetForVenue"/>, without a
+    /// venue change). Used only when a VIP Only opening begins (see <see cref="GreetingCoordinator.AttachSession"/>), so
+    /// ordinary greetings still left over from an earlier normal opening can never be sent during it.</summary>
+    public void CancelAllPending() => ResetForVenue();
     /// <summary>A step is only ever considered sent once <see cref="ChatCommandService"/> confirms the transport
     /// actually accepted it (see <see cref="OnStepDispatched"/>) — merely calling <see cref="ChatCommandService.Enqueue"/>
     /// is not "sent." This was a live-verified bug: the previous version advanced <c>Step</c>/called <see cref="Complete"/>
@@ -524,9 +552,56 @@ public sealed class GreetingCoordinator(Func<GuestIdentity, bool> isGreeted, Gre
     private readonly Dictionary<string, VipRecord> awaitingPublic = new(StringComparer.Ordinal);
     private readonly HashSet<string> awaitingVipHandoff = new(StringComparer.Ordinal);
     private CancellationTokenSource contextCancellation = new();
+    // VIP Only Mode (0.3.11) state — kept apart from the normal-mode fields above so ending a VIP Only opening never
+    // touches normal-mode work. The generation number makes a callback from a cancelled attempt a no-op, even if the
+    // same guest has a newer attempt in flight by the time it arrives.
+    private readonly HashSet<string> vipOnlyInFlight = new(StringComparer.Ordinal);
+    private CancellationTokenSource vipOnlyCancellation = new();
+    private int vipOnlyGeneration;
+    private Func<bool> isVipOnlyMode = () => false;
+    private Action<GuestIdentity>? markGreeted;
+    private bool vipModuleEnabled = true;
+
+    /// <summary>Mirrors the VIP module's own enabled toggle (set by <see cref="VipModule.IsEnabled"/>). Only VIP Only
+    /// Mode reads it — a VIP Only opening sends nothing at all while VIP is disabled, and disabling it cancels any
+    /// VIP Only attempt already in flight. Normal-mode greeting ignores it, exactly as before.</summary>
+    public bool VipModuleEnabled
+    {
+        get => vipModuleEnabled;
+        set { vipModuleEnabled = value; if (!value) CancelVipOnlyWork(); }
+    }
+    /// <summary>True only while this client's active opening was started (or resumed) with VIP Only Mode.</summary>
+    public bool IsVipOnlyMode => isVipOnlyMode();
 
     public void Attach() => greeter.GreetingReadyToFinalize += OnGreetingReadyToFinalize;
-    public void ResetForVenue() { contextCancellation.Cancel(); contextCancellation.Dispose(); contextCancellation = new(); awaitingPublic.Clear(); awaitingVipHandoff.Clear(); }
+    public void ResetForVenue() { contextCancellation.Cancel(); contextCancellation.Dispose(); contextCancellation = new(); awaitingPublic.Clear(); awaitingVipHandoff.Clear(); CancelVipOnlyWork(); }
+
+    /// <summary>Connects VIP Only Mode to Attendance's session lifecycle. Reads the active opening's mode from
+    /// <see cref="AttendanceService.VipOnlyMode"/> (session-local, never persisted), records a VIP Only greeting as
+    /// greeted through Attendance's own <see cref="AttendanceService.MarkGreeted(GuestIdentity, bool)"/> (still the
+    /// single greeted-state authority), and cancels pending VIP Only work whenever an opening ends or a new one
+    /// opens. When a VIP Only opening opens, normal-mode work left over from an earlier opening (queued Greeter
+    /// greetings, an unconfirmed VIP tell awaiting its Greeter handoff, a pending VIP public announcement) is also
+    /// dropped, so none of it can be sent during the VIP Only opening. A normal opening opening or ending leaves
+    /// normal-mode work exactly as it always was.</summary>
+    public void AttachSession(AttendanceService attendance)
+    {
+        isVipOnlyMode = () => attendance.VipOnlyMode;
+        markGreeted = guest => attendance.MarkGreeted(guest, true);
+        attendance.SessionOpened += () =>
+        {
+            CancelVipOnlyWork();
+            if (!attendance.VipOnlyMode) return;
+            contextCancellation.Cancel(); contextCancellation.Dispose(); contextCancellation = new(); awaitingPublic.Clear(); awaitingVipHandoff.Clear();
+            greeter.CancelAllPending();
+            logDecision?.Invoke("VIP Only Mode opening started — ordinary greetings are bypassed for this opening.");
+        };
+        attendance.SessionEnded += CancelVipOnlyWork;
+    }
+
+    /// <summary>Whether a manual Greet is offered for <paramref name="guest"/>: always in normal mode; in VIP Only
+    /// Mode only for an enabled VIP of the current venue (and only while the VIP module is enabled).</summary>
+    public bool CanGreet(GuestIdentity guest) => !IsVipOnlyMode || (vipModuleEnabled && vip.TryFindEnabledVip(guest) is not null);
 
     /// <summary>Attempts to greet <paramref name="guest"/> right now: skips if Attendance already reports them
     /// greeted; otherwise resolves a VIP record — if found and its own <see cref="VipRecord.CustomTell"/> is
@@ -548,6 +623,7 @@ public sealed class GreetingCoordinator(Func<GuestIdentity, bool> isGreeted, Gre
     public bool TryGreet(GuestIdentity guest, GreetingSource source)
     {
         if (isGreeted(guest)) { logDecision?.Invoke($"{source}: {guest.Key} skipped — already greeted."); return false; }
+        if (IsVipOnlyMode) return TryGreetVipOnly(guest, source);
         var record = vip.TryFindEnabledVip(guest);
         if (record is not null)
         {
@@ -569,6 +645,71 @@ public sealed class GreetingCoordinator(Func<GuestIdentity, bool> isGreeted, Gre
         if (source == GreetingSource.AutomaticArrival && !greeter.Settings.AutoGreetEnabled) { logDecision?.Invoke($"{source}: {guest.Key} skipped — Auto Greet First Visit Tonight is disabled."); return false; }
         logDecision?.Invoke($"{source}: {guest.Key} is not an enabled VIP — continuing to the normal Greeter.");
         return greeter.QueueGreeting(guest);
+    }
+
+    /// <summary>VIP Only Mode's greeting path — the earliest eligibility boundary, so an ordinary guest is never
+    /// queued anywhere (no Greeter call at all, not a queue-then-cancel). An enabled VIP of the current venue (the
+    /// same <see cref="VipOrchestrationService.TryFindEnabledVip"/> name + home world lookup normal mode uses) receives
+    /// only their own VIP messages: the custom private tell, then the public announcement — the Greeter preset
+    /// sequence is bypassed. The guest is marked greeted in Attendance once the tell is confirmed sent (a failed tell
+    /// aborts, nothing marked), or, for a public-only VIP, once the announcement is confirmed sent. A VIP with neither
+    /// message configured is skipped. Already-greeted, already-in-flight and "VIP module disabled" all return false
+    /// without sending anything.</summary>
+    private bool TryGreetVipOnly(GuestIdentity guest, GreetingSource source)
+    {
+        if (!vipModuleEnabled) { logDecision?.Invoke($"{source}: {guest.Key} skipped — VIP Only Mode is active but the VIP module is disabled."); return false; }
+        var record = vip.TryFindEnabledVip(guest);
+        if (record is null) { logDecision?.Invoke($"{source}: {guest.Key} skipped — VIP Only Mode: not an enabled VIP for this venue (ordinary Greeter bypassed)."); return false; }
+        var hasTell = !string.IsNullOrWhiteSpace(record.CustomTell); var hasPublic = !string.IsNullOrWhiteSpace(record.PublicAnnouncement);
+        if (!hasTell && !hasPublic) { logDecision?.Invoke($"{source}: {guest.Key} skipped — VIP Only Mode: this VIP has no custom tell or public announcement configured."); return false; }
+        if (awaitingVipHandoff.Contains(guest.Key) || !vipOnlyInFlight.Add(guest.Key)) { logDecision?.Invoke($"{source}: {guest.Key} skipped — a VIP recognition attempt is already in flight."); return false; }
+        var generation = vipOnlyGeneration; var token = vipOnlyCancellation.Token;
+        if (hasTell)
+        {
+            logDecision?.Invoke($"{source}: {guest.Key} matched an enabled VIP record — VIP Only Mode: sending this VIP's custom private tell (Greeter bypassed).");
+            var safeName = guest.Name.Replace("\"", "'", StringComparison.Ordinal); var safeWorld = guest.HomeWorld.Replace("\"", "'", StringComparison.Ordinal);
+            chat.Enqueue(new($"/tell {safeName}@{safeWorld} {record.CustomTell.Replace("<name>", guest.Name, StringComparison.OrdinalIgnoreCase)}", token,
+                (success, error) => OnVipOnlyTellDispatched(guest, record, source, generation, success, error)));
+        }
+        else
+        {
+            logDecision?.Invoke($"{source}: {guest.Key} matched an enabled VIP record with no custom private tell — VIP Only Mode: sending the public announcement only.");
+            EnqueueVipOnlyPublic(guest, record, generation, token, completesGreeting: true);
+        }
+        return true;
+    }
+
+    private void OnVipOnlyTellDispatched(GuestIdentity guest, VipRecord record, GreetingSource source, int generation, bool success, Exception? error)
+    {
+        if (generation != vipOnlyGeneration) return;
+        if (!success) { vipOnlyInFlight.Remove(guest.Key); logDecision?.Invoke($"{source}: {guest.Key} VIP Only recognition tell failed to send ({error?.Message ?? "no confirmation from the transport"}) — aborting; not marked greeted."); return; }
+        vipOnlyInFlight.Remove(guest.Key);
+        logDecision?.Invoke($"{source}: {guest.Key} VIP Only recognition tell confirmed sent.");
+        if (!string.IsNullOrWhiteSpace(record.PublicAnnouncement)) EnqueueVipOnlyPublic(guest, record, generation, vipOnlyCancellation.Token, completesGreeting: false);
+        markGreeted?.Invoke(guest);
+    }
+
+    /// <summary>When the VIP also had a private tell, the announcement is fire-and-forget exactly like normal mode's
+    /// (the guest is already greeted). For a public-only VIP it is the whole greeting, so its confirmation is what
+    /// marks the guest greeted.</summary>
+    private void EnqueueVipOnlyPublic(GuestIdentity guest, VipRecord record, int generation, CancellationToken token, bool completesGreeting)
+    {
+        var command = record.Channel == VipAnnouncementChannel.Shout ? "/shout" : "/yell";
+        logDecision?.Invoke($"Transport: submitting VIP public announcement ({command}) for {guest.Key} (VIP Only Mode).");
+        chat.Enqueue(new($"{command} {record.PublicAnnouncement}", token, (success, error) =>
+        {
+            if (generation != vipOnlyGeneration) return;
+            if (!success) logDecision?.Invoke($"{guest.Key}: VIP public announcement failed to send ({error?.Message ?? "no confirmation from the transport"}).");
+            if (!completesGreeting) return;
+            vipOnlyInFlight.Remove(guest.Key);
+            if (success) markGreeted?.Invoke(guest);
+        }));
+    }
+
+    private void CancelVipOnlyWork()
+    {
+        vipOnlyCancellation.Cancel(); vipOnlyCancellation.Dispose(); vipOnlyCancellation = new();
+        vipOnlyInFlight.Clear(); vipOnlyGeneration++;
     }
 
     /// <summary>The real acceptance gate for the VIP recognition tell — the exact live-verified bug this exists to
@@ -618,7 +759,7 @@ public sealed class GreetingCoordinator(Func<GuestIdentity, bool> isGreeted, Gre
     /// greeted-state authority. A VIP recognition tell awaiting its own dispatch confirmation (before Greeter even
     /// knows about the guest) reports <see cref="GreetingProgress.Queued"/> so the operator never sees a false
     /// "Not Greeted"/actionable row during that brief window.</summary>
-    public GreetingProgress GetProgress(GuestIdentity guest) => awaitingVipHandoff.Contains(guest.Key) ? GreetingProgress.Queued : greeter.GetProgress(guest);
+    public GreetingProgress GetProgress(GuestIdentity guest) => awaitingVipHandoff.Contains(guest.Key) || vipOnlyInFlight.Contains(guest.Key) ? GreetingProgress.Queued : greeter.GetProgress(guest);
 }
 
 public sealed class AttendanceModule(AttendanceService attendance, PresenceService presence, VenueProfileService profiles, Action? draw = null, Action? drawSettings = null) : IVenueModule
@@ -667,7 +808,10 @@ public sealed class GreeterModule(GreeterService greeter, VenueProfileService pr
 /// <see cref="AttendanceService.AutomaticGreetingEligible"/> handler is the only automatic trigger, for VIP and
 /// non-VIP guests alike.</summary>
 public sealed class VipModule(VipOrchestrationService vip, GreetingCoordinator coordinator, VenueProfileService profiles, Action? draw = null, Action? drawSettings = null) : IVenueModule
-{ public ModuleDescriptor Descriptor { get; } = new("core.vip", "VIP", "VIP recognition and entrance announcements.", "star", ["core.greeter"], DisplayOrder: 4); public bool IsEnabled { get; set; } = true; public Task InitializeAsync(ModuleContext c, CancellationToken t) { coordinator.Attach(); return Task.CompletedTask; }
+{ public ModuleDescriptor Descriptor { get; } = new("core.vip", "VIP", "VIP recognition and entrance announcements.", "star", ["core.greeter"], DisplayOrder: 4);
+    // Forwarded to the coordinator so VIP Only Mode (0.3.11) stops sending VIP greetings while VIP is disabled.
+    public bool IsEnabled { get => coordinator.VipModuleEnabled; set => coordinator.VipModuleEnabled = value; }
+    public Task InitializeAsync(ModuleContext c, CancellationToken t) { coordinator.Attach(); return Task.CompletedTask; }
     public Task OnVenueChangedAsync(VenueContext c, CancellationToken t)
     {
         coordinator.ResetForVenue();

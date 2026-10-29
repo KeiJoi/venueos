@@ -29,6 +29,10 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
     // stale across venues or linger past the opening it was picked for.
     private Guid pendingAreaModeVenueId;
     private PresenceAreaMode pendingAreaMode = PresenceAreaMode.FollowOperator;
+    // VIP Only Mode (0.3.11): the same per-opening working-state pattern as pendingAreaMode — never persisted,
+    // unchecked by default, reset on venue change and after Start/Resume/Close consumes it.
+    private bool pendingVipOnlyMode;
+    private const string VipOnlyModeTooltip = "Track all guests normally, but only send greeting messages to guests saved in this venue's VIP list. Standard Greeter messages are bypassed.";
 
     /// <summary>Live operation only, split into the donor's own sections (Live/Visitors/History/Analytics) rather
     /// than one long scrolling page. Presence-filtering and Venue Details setup live in <see cref="DrawSettings"/>.</summary>
@@ -56,7 +60,7 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
 
         // A different venue's own pending selection must never leak in here — always reset to the safe default
         // when the active venue changes, exactly like a completed opening resetting it (see below).
-        if (venues.Current.Id != pendingAreaModeVenueId) { pendingAreaModeVenueId = venues.Current.Id; pendingAreaMode = PresenceAreaMode.FollowOperator; }
+        if (venues.Current.Id != pendingAreaModeVenueId) { pendingAreaModeVenueId = venues.Current.Id; pendingAreaMode = PresenceAreaMode.FollowOperator; pendingVipOnlyMode = false; }
 
         UiKit.BeginSectionCard("attendance-session", theme, "Session");
 
@@ -71,6 +75,19 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
             ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextPrimary));
             ImGui.TextUnformatted(attendance.ActiveAreaMode == PresenceAreaMode.FixedPoint ? "Outdoor Event Area (fixed origin)" : "Normal Venue Area");
             ImGui.PopStyleColor();
+            // VIP Only Mode is chosen before Start/Resume and locked for the opening, like Venue Area Type.
+            ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary));
+            ImGui.TextUnformatted("Greeting Mode:");
+            ImGui.PopStyleColor();
+            ImGui.SameLine();
+            if (attendance.VipOnlyMode) UiKit.StatusBadge(theme, "VIP Only Mode", ToastLevel.Warning);
+            else
+            {
+                ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextPrimary));
+                ImGui.TextUnformatted("Normal (Greeter + VIP)");
+                ImGui.PopStyleColor();
+            }
+            UiKit.Tooltip(attendance.VipOnlyMode ? $"{VipOnlyModeTooltip} Locked for this opening — Pause or Close it to change." : "Locked for this opening — Pause or Close it to change.");
         }
         else
         {
@@ -82,6 +99,15 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
                 ? "Outdoor Event Area: the radius center is captured once when this opening starts and stays fixed — for open-world venues where the operator may move around."
                 : "Normal Venue Area: the radius always follows the operator's current position — appropriate for a housing instance. This is the safe default for every new opening.");
             ImGui.PopStyleColor();
+            ImGui.Spacing();
+            Forms.FieldLabel(theme, "Greeting Mode");
+            UiKit.Toggle(theme, "VIP Only Mode", ref pendingVipOnlyMode);
+            UiKit.Tooltip(VipOnlyModeTooltip);
+            ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(theme.Tokens.TextSecondary));
+            ImGui.TextWrapped(pendingVipOnlyMode
+                ? "VIP Only Mode: every guest is still tracked, but only saved VIPs of this venue are greeted, with their own VIP messages. Normal Greeter messages are not sent from this client. Applies to Start New Opening and Resume."
+                : "Normal: Greeter and VIP greetings run as configured. Check VIP Only Mode if this client is a dedicated VIP host.");
+            ImGui.PopStyleColor();
         }
         ImGui.Spacing();
 
@@ -91,15 +117,15 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
         {
             if (UiKit.GhostButton(theme, "Pause Opening")) attendance.PauseSession(DateTimeOffset.UtcNow);
             ImGui.SameLine();
-            if (UiKit.DangerButton(theme, "Close Opening")) { attendance.CloseSession(DateTimeOffset.UtcNow); pendingAreaMode = PresenceAreaMode.FollowOperator; }
+            if (UiKit.DangerButton(theme, "Close Opening")) { attendance.CloseSession(DateTimeOffset.UtcNow); pendingAreaMode = PresenceAreaMode.FollowOperator; pendingVipOnlyMode = false; }
         }
         else
         {
-            if (UiKit.PrimaryButton(theme, "Start New Opening")) { attendance.StartSession(settings.LockToOpenTerritory, pendingAreaMode, DateTimeOffset.UtcNow); pendingAreaMode = PresenceAreaMode.FollowOperator; }
+            if (UiKit.PrimaryButton(theme, "Start New Opening")) { attendance.StartSession(settings.LockToOpenTerritory, pendingAreaMode, DateTimeOffset.UtcNow, pendingVipOnlyMode); pendingAreaMode = PresenceAreaMode.FollowOperator; pendingVipOnlyMode = false; }
             var resumable = attendance.GetRecentSessions().FirstOrDefault(x => x.IsResumable);
             ImGui.SameLine();
             if (resumable is null) ImGui.BeginDisabled();
-            if (UiKit.GhostButton(theme, "Resume Latest") && resumable is not null) attendance.ResumeSession(resumable.SessionId);
+            if (UiKit.GhostButton(theme, "Resume Latest") && resumable is not null) ResumeWithPendingMode(resumable.SessionId);
             if (resumable is null) ImGui.EndDisabled();
         }
         if (isActive && attendance.ActiveTerritoryLock is { } territory)
@@ -173,6 +199,8 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
             ImGui.PushID(visitor.Identity.Key);
             var progress = coordinator.GetProgress(visitor.Identity);
             var actionable = !visitor.Greeted && progress == GreetingProgress.None;
+            // VIP Only Mode: Greet is offered only for this venue's enabled VIPs; Mark Greeted stays available.
+            var canGreet = visitor.IsPresent && coordinator.CanGreet(visitor.Identity);
             var nameColor = visitor.Greeted ? theme.Tokens.Success : visitor.IsPresent ? theme.Tokens.Warning : theme.Tokens.TextPrimary;
             ImGui.PushStyleColor(ImGuiCol.Text, UiKit.Color(nameColor));
             ImGui.TextUnformatted(visitor.IsPresent ? visitor.CharacterName : $"({visitor.CharacterName})");
@@ -182,7 +210,7 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
                 if (tryTarget is not null && visitor.IsPresent && ImGui.MenuItem("Target")) tryTarget(visitor.Identity);
                 if (actionable)
                 {
-                    if (visitor.IsPresent && ImGui.MenuItem("Greet")) coordinator.TryGreet(visitor.Identity, GreetingSource.ManualAttendance);
+                    if (canGreet && ImGui.MenuItem("Greet")) coordinator.TryGreet(visitor.Identity, GreetingSource.ManualAttendance);
                     if (ImGui.MenuItem("Mark as Greeted")) attendance.MarkGreeted(visitor.Identity, true, DateTimeOffset.UtcNow);
                 }
                 ImGui.EndPopup();
@@ -199,7 +227,7 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
             if (tryTarget is not null && visitor.IsPresent) { ImGui.SameLine(); if (UiKit.GhostButton(theme, "Target", new Vector2(60, 0))) tryTarget(visitor.Identity); }
             if (actionable)
             {
-                if (visitor.IsPresent) { ImGui.SameLine(); if (UiKit.PrimaryButton(theme, "Greet", new Vector2(70, 0))) coordinator.TryGreet(visitor.Identity, GreetingSource.ManualAttendance); }
+                if (canGreet) { ImGui.SameLine(); if (UiKit.PrimaryButton(theme, "Greet", new Vector2(70, 0))) coordinator.TryGreet(visitor.Identity, GreetingSource.ManualAttendance); }
                 ImGui.SameLine();
                 if (UiKit.GhostButton(theme, "Mark Greeted", new Vector2(110, 0))) attendance.MarkGreeted(visitor.Identity, true, DateTimeOffset.UtcNow);
             }
@@ -229,7 +257,8 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
             if (isCurrent) UiKit.StatusBadge(theme, "Current", ToastLevel.Success);
             else if (session.IsResumable)
             {
-                if (UiKit.GhostButton(theme, "Resume", new Vector2(70, 0))) attendance.ResumeSession(session.SessionId);
+                if (UiKit.GhostButton(theme, "Resume", new Vector2(70, 0))) ResumeWithPendingMode(session.SessionId);
+                UiKit.Tooltip(pendingVipOnlyMode ? "Resumes in VIP Only Mode (selected on the Live tab)." : "Resumes in normal greeting mode. To resume as a VIP host, check VIP Only Mode on the Live tab first.");
                 ImGui.SameLine();
                 if (UiKit.GhostButton(theme, "Close", new Vector2(60, 0))) attendance.CloseSession(session.SessionId, DateTimeOffset.UtcNow);
             }
@@ -387,6 +416,13 @@ internal sealed class AttendanceOperatorPanel(AttendanceService attendance, Venu
         ImGui.TextWrapped($"Guest-count samples are recorded on a 5-minute grid, but never more often than this interval. Current: every {Math.Clamp(settings.TrackingPollIntervalSeconds, 5, 3600) / 60.0:F1} minute(s).");
         ImGui.PopStyleColor();
         UiKit.EndSectionCard();
+    }
+
+    /// <summary>Every resume path (Live → Resume Latest, History → Resume) applies the same pending VIP Only Mode
+    /// choice as Start New Opening — the mode is never stored on the opening, so it is never silently restored.</summary>
+    private void ResumeWithPendingMode(long sessionId)
+    {
+        if (attendance.ResumeSession(sessionId, pendingVipOnlyMode)) pendingVipOnlyMode = false;
     }
 
     private static void StatRow(VenueTheme theme, params (string Label, string Value)[] stats)

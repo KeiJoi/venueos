@@ -2,6 +2,12 @@
 
 A short summary of each VenueOS release. Detailed notes are in `RELEASE.md`, and full investigation reports are under `docs/`. Dates are release dates (UTC). Entries before 0.3.10 were reconstructed from the repository's tags, GitHub Releases, `RELEASE.md` and release commits.
 
+## 0.3.11 — 2026-10-28
+
+- **Attendance:** new **VIP Only Mode** checkbox on the Live tab, under Venue Area Type, unchecked by default. Check it before you start or resume an opening when this client is a dedicated VIP host.
+- **Attendance:** in VIP Only Mode every guest is still tracked and recorded as usual. Only saved VIPs of the current venue are greeted, with their own private tell and public announcement. Normal Greeter messages are not sent from that client.
+- **Attendance:** VIP Only Mode is never saved. It applies only to the opening you started with it, on your client, and does not change Greeter settings, the VIP list or other staff members' clients.
+
 ## 0.3.10 — 2026-10-04
 
 - **Party Finder:** **End Party Finder** no longer turns off your **Auto Refresh on native 5 minute warning** setting. Whether the setting was on or off, it stays that way for the next recruitment.

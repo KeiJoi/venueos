@@ -1,6 +1,6 @@
 # VenueOS User Manual
 
-**Current version:** 0.3.8
+**Current version:** 0.3.11
 **What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, live host trivia, Bingo, raffles, tournament brackets, block-letter text composition, timed giveaways, extended macros, and manual Shout announcements.
 **Supported environment:** Windows FFXIV with Dalamud installed (API level 15). VenueOS is unofficial, third-party, and not affiliated with Square Enix or the Dalamud/XIVLauncher project.
 
@@ -219,6 +219,7 @@ Guests are detected by presence (a periodic scan of nearby players), not by chat
   - *Outdoor Event Area:* "the radius center is captured once when this opening starts and stays fixed — for open-world venues where the operator may move around."
 
   This choice only matters **before** you start/resume an opening — pick it here, not in Settings. Once an opening is active, this becomes read-only status text ("Venue Area Type: Normal Venue Area" or "...Outdoor Event Area (fixed origin)") for as long as that opening runs; you can't switch modes mid-session. **Resuming** a past opening restores whichever mode it was originally started with. After you close or complete an Outdoor opening, the selector here resets to **Normal Venue Area** for the next one — Outdoor is a deliberate, per-opening choice, never a lingering default.
+- **Greeting Mode → VIP Only Mode** — a checkbox under Venue Area Type, **unchecked by default**. See [VIP Only Mode](#vip-only-mode) below. Once an opening is active, the Session card shows **Greeting Mode:** *Normal (Greeter + VIP)* or a **VIP Only Mode** badge instead of the checkbox.
 - Status badge: **Open**/**Closed**.
 - While open: **Pause Opening** / **Close Opening**.
 - While closed: **Start New Opening** / **Resume Latest** (disabled if nothing is resumable).
@@ -233,6 +234,24 @@ Also on the Live tab: a "Tonight Summary" card (Current/Max/Min guest counts, Un
 
 **Analytics** — a chart of the last 20 guest-count samples taken tonight.
 
+### VIP Only Mode
+
+VIP Only Mode is for venues that give one staff member the job of welcoming VIPs. For example, staff member A runs Attendance normally (Greeter and VIP greetings as usual) on their client, and staff member B runs Attendance with **VIP Only Mode** checked on theirs.
+
+**To use it:** on the Live tab, check **VIP Only Mode** (under *Greeting Mode*) before pressing **Start New Opening**, **Resume Latest**, or **History → Resume**. Hover the checkbox for a reminder of what it does.
+
+While an opening runs in VIP Only Mode:
+
+- **Attendance still tracks everyone.** Every guest is detected and recorded exactly as in a normal opening: Guests Nearby, Visitors, visit counts, Tonight Summary, samples, history and export are all complete.
+- **Only saved VIPs are greeted.** A guest who matches an *enabled* VIP record of the **current venue** (character name and home world) gets that VIP's own messages: the **Custom private tell** first, then the **Public entrance announcement** once the tell is confirmed sent. The VIP is marked **Greeted** when the tell is confirmed sent (or, for a VIP with only a public announcement, when the announcement is confirmed sent). A VIP with neither message set is not greeted.
+- **Normal Greeter messages are not sent from this client** — not to ordinary guests and not to VIPs. Ordinary guests are never queued; they stay **Not Greeted**. In Visitors, **Greet** is shown only for VIPs; **Mark Greeted** is still available for anyone.
+- The usual safeguards still apply: someone already present when the opening starts is not auto-greeted, each guest is auto-greeted at most once per opening, a failed private tell is not counted as greeted, and VIP records that are disabled are treated as ordinary guests. Greeter's Auto Greet toggle, active preset and enabled setting don't affect VIP Only greetings.
+- If the **VIP** module is disabled in Settings → Modules, a VIP Only opening sends nothing at all.
+
+**What it does not change:** your Greeter presets and settings, your VIP list, and other venues are untouched. VIP Only Mode is not saved anywhere — it applies only to the opening you started with it, on your client. Pause, Close or a venue switch ends it, the checkbox resets to unchecked afterward, and every new or resumed opening (including after a plugin reload) starts in normal mode unless you check it again. You can't switch modes during an opening; Pause or Close it first. If you stop an opening while a VIP greeting is still waiting to send, it is cancelled.
+
+**Multiple clients:** each client's VenueOS works on its own. VIP Only Mode on staff member B's client doesn't affect staff member A's Greeter or VIP greetings, and the two clients don't share greeting history. If A runs a normal opening, A's client will still greet VIPs too (VIP tell, Greeter message, public announcement), so a VIP can get the VIP tell from both clients. Agree between staff who handles VIPs, for example by leaving A's VIP records disabled or empty.
+
 ### Export
 
 Under History → Export: an **"Export folder"** field and an **Export Range to Excel** button. Produces a real `.xlsx` file (via ClosedXML) named `venue-stats-<timestamp>.xlsx` with three sheets — Daily Stats, Visitors, and Guest Samples — covering the range set by "Comparison days" (1–30). Shows "Exported: `<path>`" on success or "Export failed: `<message>`" on failure.
@@ -244,7 +263,7 @@ Under History → Export: an **"Export folder"** field and an **Export Range to 
 
 ### Relationship with Greeter/VIP
 
-Attendance is the single source of truth for "greeted" — Greeter and VIP both check with Attendance rather than tracking it themselves. A guest's first genuine arrival each opening (not someone already there when you opened) is what triggers automatic greeting.
+Attendance is the single source of truth for "greeted" — Greeter and VIP both check with Attendance rather than tracking it themselves. A guest's first genuine arrival each opening (not someone already there when you opened) is what triggers automatic greeting. In a [VIP Only Mode](#vip-only-mode) opening, that trigger greets saved VIPs only and skips Greeter.
 
 All attendance data is per-venue.
 
@@ -257,6 +276,8 @@ All attendance data is per-venue.
 ### Automatic greeting
 
 The first time a guest genuinely arrives during an open session (not someone already present when the session started), they're automatically queued for greeting. Repeat arrivals the same calendar night are not auto-greeted again. VIPs are always greeted on arrival regardless of this behavior.
+
+If the opening was started with **VIP Only Mode** (Attendance → Live), Greeter sends nothing during it. Your Greeter settings are not changed. See [VIP Only Mode](#vip-only-mode).
 
 ### Manual greeting
 
@@ -312,6 +333,8 @@ On a guest's arrival, VenueOS checks whether they match an enabled VIP record:
 - If Custom Tell is empty, it goes straight to the normal Greeter sequence.
 - Once the Greeter sequence finishes, if a Public Announcement is set, it's sent to the chosen channel.
 - Non-VIPs (or disabled VIP records) just get the normal Greeter sequence.
+
+In a **VIP Only Mode** opening (Attendance → Live), the Greeter sequence is skipped: a VIP gets only their private tell and then their public announcement, and non-VIPs get nothing. See [VIP Only Mode](#vip-only-mode).
 
 VIP records are usable for any "recognize this person specially" workflow you want — regular VIPs, staff, DJs, whatever fits your venue; VenueOS doesn't prescribe how you use them. VIP records are per-venue.
 
