@@ -1,6 +1,6 @@
 # VenueOS User Manual
 
-**Current version:** 0.3.11
+**Current version:** 0.3.12
 **What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, live host trivia, Bingo, raffles, tournament brackets, block-letter text composition, timed giveaways, extended macros, and manual Shout announcements.
 **Supported environment:** Windows FFXIV with Dalamud installed (API level 15). VenueOS is unofficial, third-party, and not affiliated with Square Enix or the Dalamud/XIVLauncher project.
 
@@ -172,13 +172,21 @@ Within a World, ShoutRunner checks your character's actual current location; if 
 
 Moving between Worlds in the same Data Center is a same-Data-Center transfer; moving to a different Data Center is a cross-Data-Center transfer — both go through Lifestream.
 
+**Arrival is always verified (0.3.12).** A World only counts as reached once your character's own current World matches it, stays settled briefly, and Lifestream reports it has finished. Lifestream accepting the command is not treated as arrival. Just before each shout, ShoutRunner checks the World once more. If your character is somewhere else, that shout is not sent.
+
 **Example:** select only **Aether**, keep the default three destinations. ShoutRunner will visit every World in Aether, and at each one walk Ul'dah → New Gridania → Limsa Lominsa Lower Decks (or the reverse, alternating per World), shouting your message at each stop, with your configured delay between actions.
 
 ### When something goes wrong
 
 - **World congested twice in a row:** that World is skipped; the route continues to the next World.
 - **Destination Data Center unreachable** (e.g. stuck at character select mid-transfer): the rest of that Data Center is skipped and the route moves to the next selected Data Center — *if* recovery to a playable state succeeds. If recovery itself fails, the whole run stops (Faulted).
+- **"Arrived at <World> instead of <World>"** — Lifestream finished its travel on a different World than the one requested (or *"Travel to <World> ended back on <World>"* if the character never left). The run stops (Faulted) so nothing is shouted in the wrong place. Your progress is kept: **Resume Run** travels to the World it was trying to reach and continues from there. Before 0.3.12 a single momentary reading could trigger this. ShoutRunner now waits a few seconds for a stable result, so a retry Lifestream is still performing on its own no longer stops the run.
+- **"Lifestream did not start travel to <World>…"** — Lifestream did not accept the request (nothing happened within about 10 seconds, or 15 for a Data Center change). Check Lifestream's own on-screen notification: for example "Another task is in progress", a Travel Block for this character, or Data Center travel being turned off in Lifestream's settings. The run stops instead of waiting several minutes.
+- **"Shout at <destination> withheld…"** — just before shouting, the character was not on the World that destination belongs to (for example after travelling manually during a run). Nothing was sent. The run stops and can be resumed.
+- **"<World> — SKIPPED: could not determine same-Data-Center vs cross-Data-Center travel"** — Lifestream could not confirm that it can reach that World from where you are. The World is skipped and the route continues.
 - ShoutRunner does not check whether Lifestream is installed before letting you press Start — if Lifestream isn't available, you'll see a generic failure/fault message rather than a dedicated "Lifestream not found" warning. Lifestream is required for any world travel to work.
+
+**Reporting a travel problem.** Every travel failure also writes one detailed line to **Settings → Diagnostics**. It includes the requested World and its World id, the World actually observed (with id and Data Center), every World seen during the attempt, whether Lifestream was busy, and how far the saved checkpoint had got. Dalamud's log (`/xllog`) has matching lines starting with `ShoutRunner transfer #`. If a wrong-World problem happens again, use **Copy Terminal** and copy the Diagnostics entry, then send both together with your Lifestream version. Neither contains character names.
 
 ### Terminal
 
@@ -196,7 +204,7 @@ ShoutRunner saves its progress through an active RUN to disk as it goes, so an u
 
 Two buttons: **Resume Run** and **Discard Recovery**.
 
-- **Resume Run** continues from exactly where it left off: a destination whose shout already went out is never repeated, but a destination that was interrupted before its shout completed is retried. Any Data Center the run had already skipped (congestion, an unreachable destination Data Center) stays skipped rather than being retried. Resume always uses that run's own original route — Data Centers/destinations you've edited in Settings since the interruption are not picked up until the *next* run.
+- **Resume Run** continues from exactly where it left off: a destination whose shout already went out is never repeated, but a destination that was interrupted before its shout completed is retried. That includes a destination that failed earlier in the same World (0.3.12: before this fix, an earlier failed destination could make Resume repeat a shout that had already been sent). Any Data Center the run had already skipped (congestion, an unreachable destination Data Center) stays skipped rather than being retried. Resume always uses that run's own original route — Data Centers/destinations you've edited in Settings since the interruption are not picked up until the *next* run.
 - **Discard Recovery** removes just the interrupted-run checkpoint; your saved route/settings are never affected.
 - Starting a fresh run instead (**Start New Run**) asks you to confirm first, since doing so discards the still-resumable interrupted run.
 

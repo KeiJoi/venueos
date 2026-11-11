@@ -58,5 +58,13 @@ Test count at the fix: 1399 / 1399 (Core 69, Venues 23, Services 1307). VenueOS 
 
 Test count at release: 1451 / 1451 (Core 69, Venues 23, Services 1359).
 
+## Field report — shipped in VenueOS 0.3.12
+
+| # | Report | Module | Status | Report |
+|---|---|---|---|---|
+| 13 | A ShoutRunner run stopped with "Arrived at Jenova instead of Cactuar" after "recent updates"; Lifestream suspected. | ShoutRunner | **IMPLEMENTED — Live QA pending (owner unavailable; release explicitly authorized based on automated validation)**. Lifestream IPC unchanged. VenueOS-side defects fixed: off-thread Lifestream IPC, single-sample wrong-World verdict, unreachable World classified as same-DC, rejected `/li` waiting out the timeout, no World check before shouting, Resume repeating a sent shout after an earlier failure, stale congestion-monitor ownership. The cause of the Jenova arrival itself is undetermined (most plausible: Lifestream's index-based World Visit selection; unverified). | [`SHOUTRUNNER_LIFESTREAM_COMPATIBILITY_AUDIT.md`](SHOUTRUNNER_LIFESTREAM_COMPATIBILITY_AUDIT.md) |
+
+Test count at release: 1492 / 1492 (Core 69, Venues 23, Services 1400).
+
 Rules for this batch (historical — they governed the work-package phase, before the release was requested): no version bump, packaging, commit, push, tag, GitHub Release, or `repo.json` change until the
 combined release is explicitly requested. Donor/backend repositories are never touched from this ledger's work — except WP2, where the owner explicitly authorised edits (working tree only, never committed/pushed/deployed) to the Bingo backend/web repo and the TournamentControl backend; the owner handles their commits, pushes, releases, Render deployment and environment variables.

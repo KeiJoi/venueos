@@ -39,7 +39,10 @@ public interface IShoutRunnerAutomation
     Task<ShoutRunnerCrossDataCenterCheck> ClassifyTransferAsync(string targetWorld, CancellationToken token);
 
     /// <summary>Drives Lifestream (<c>/li</c>) to <paramref name="targetWorld"/> and waits, internally and with a
-    /// bounded timeout, for arrival, a two-strike congestion skip, or (cross-Data-Center only) detection that the
+    /// bounded timeout, for VERIFIED arrival (the local player's own current World equals the target, stably, with
+    /// Lifestream idle; see <see cref="ShoutRunnerArrivalVerifier"/>), a confirmed wrong-World arrival (returned as
+    /// <see cref="ShoutRunnerTransferResult.Failed"/>), Lifestream never accepting the request (also
+    /// <see cref="ShoutRunnerTransferResult.Failed"/>), a two-strike congestion skip, or (cross-Data-Center only) detection that the
     /// target Data Center is unreachable. For the Data-Center-unavailable case this method itself performs the full
     /// recovery sequence (abort Lifestream, dismiss transfer UI, confirm the same character is logged in and
     /// controllable again) before returning
@@ -53,6 +56,11 @@ public interface IShoutRunnerAutomation
     /// <see cref="ShoutRunnerRoutePlanner.PlanWorldRoute"/>. Returns null if no reliable current location could be
     /// determined; the planner's own documented fallback applies in that case.</summary>
     Task<string?> TryGetCurrentPlaceNameAsync(CancellationToken token);
+
+    /// <summary>The character's current World name, read on the framework thread from the local player, or null if
+    /// no character is present. Used as the last guard before every shout (0.3.12) so an announcement meant for one
+    /// World is never sent on another: for example after manual or external travel between arrival and the shout.</summary>
+    Task<string?> TryGetCurrentWorldAsync(CancellationToken token);
 
     /// <summary>Teleports to an attuned Aetheryte matching <paramref name="destinationName"/> and waits, internally
     /// and with a bounded timeout, for the transition to actually begin and complete — never trusting a bare

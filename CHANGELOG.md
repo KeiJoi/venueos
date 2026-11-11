@@ -2,6 +2,14 @@
 
 A short summary of each VenueOS release. Detailed notes are in `RELEASE.md`, and full investigation reports are under `docs/`. Dates are release dates (UTC). Entries before 0.3.10 were reconstructed from the repository's tags, GitHub Releases, `RELEASE.md` and release commits.
 
+## 0.3.12 — 2026-11-11
+
+- **ShoutRunner:** a World now only counts as reached once your character's own current World matches it, stays settled, and Lifestream reports it has finished. One momentary reading can no longer stop the run as *"Arrived at X instead of Y"* while Lifestream is still retrying a World Visit on its own. A genuine wrong-World arrival still stops the run, and nothing is shouted there.
+- **ShoutRunner:** before every shout, the current World is checked again. If the character is not on the World the destination belongs to, the shout is withheld and the run stops so it can be resumed.
+- **ShoutRunner:** **Resume Run** no longer repeats an announcement that was already sent when an earlier destination in the same World had failed. The failed destination is retried instead.
+- **ShoutRunner:** if Lifestream does not accept a travel request, the run stops within about 10 seconds with a clear message, instead of waiting out a 3–5 minute timeout. A World Lifestream cannot confirm it can reach is skipped and reported, instead of being treated as same-Data-Center travel.
+- **ShoutRunner:** Lifestream is now always queried on the game's main thread. Every travel failure writes a detailed entry (requested and observed World with ids, Data Center, Worlds seen, Lifestream state, checkpoint) to **Settings → Diagnostics** and to `/xllog`.
+
 ## 0.3.11 — 2026-10-28
 
 - **Attendance:** new **VIP Only Mode** checkbox on the Live tab, under Venue Area Type, unchecked by default. Check it before you start or resume an opening when this client is a dedicated VIP host.

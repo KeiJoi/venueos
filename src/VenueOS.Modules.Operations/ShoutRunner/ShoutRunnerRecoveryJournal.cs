@@ -25,7 +25,8 @@ public sealed record ShoutRunnerRecoverySkippedDataCenter(string DataCenter, str
 ///
 /// <see cref="CompletedDestinationsInCurrentWorld"/>/<see cref="CurrentWorldPlan"/> exist so Resume never has to
 /// re-detect the character's location or re-run the ping-pong planner for a World that was already mid-traversal —
-/// it simply replays the remaining tail of the exact plan that was already computed before the crash, skipping
+/// it simply replays the exact plan that was already computed before the crash, skipping (by name, see
+/// <see cref="ShoutRunnerResumePlan"/>)
 /// whatever is already in <see cref="CompletedDestinationsInCurrentWorld"/>. A World with zero completed
 /// destinations yet is instead resumed exactly like a fresh entry (nothing to preserve) — see
 /// <see cref="ShoutRunnerService.Resume"/>.</summary>
@@ -87,4 +88,32 @@ public interface IShoutRunnerRecoveryStore
     /// <summary>Removes the journal if present. Never throws — a failure to delete a stale file is not worth
     /// crashing the plugin over.</summary>
     void Delete();
+}
+
+/// <summary>Which steps of an interrupted World still have to run on Resume (0.3.12, D7). Before 0.3.12 Resume restarted
+/// the saved plan at index <c>CompletedDestinationsInCurrentWorld.Count</c>. That index is only right when every
+/// earlier step succeeded. A failed step (a teleport failure, a failed shout) is not counted as completed, so the
+/// count fell behind the real position: plan [A, B, C] with A failed and B sent resumed at index 1 and re-announced
+/// at B, while A, never sent, was not retried. The journal's own contract (see
+/// <see cref="ShoutRunnerRecoveryJournal"/>) is "replay the plan, skipping whatever is already completed"; this is
+/// that contract, by name.</summary>
+public static class ShoutRunnerResumePlan
+{
+    /// <summary>The plan's steps, in plan order, minus one occurrence per completed destination (case-insensitive;
+    /// multiset semantics, so a destination listed twice is only skipped as often as it was completed). Every
+    /// returned step requires a teleport: after an interruption and the World re-entry that follows it, the character
+    /// cannot be assumed to still be standing at any destination.</summary>
+    public static IReadOnlyList<ShoutRunnerDestinationStep> RemainingSteps(IReadOnlyList<ShoutRunnerDestinationStep> plan, IReadOnlyList<string> completedDestinations)
+    {
+        var outstanding = new List<string>(completedDestinations);
+        var remaining = new List<ShoutRunnerDestinationStep>(plan.Count);
+        foreach (var step in plan)
+        {
+            var completedIndex = outstanding.FindIndex(d => string.Equals(d, step.Destination, StringComparison.OrdinalIgnoreCase));
+            if (completedIndex >= 0) { outstanding.RemoveAt(completedIndex); continue; }
+            remaining.Add(step with { RequiresTeleport = true });
+        }
+
+        return remaining;
+    }
 }

@@ -73,7 +73,12 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
     private readonly ChatCommandService chat;
     private readonly IPluginLog log;
 
+    // Every Lifestream IPC call is made ON THE FRAMEWORK THREAD (0.3.12). Lifestream's IsBusy reads its ECommons
+    // TaskManager's plain List/field state, which Lifestream mutates every framework tick; before 0.3.12 the transfer
+    // wait loops called it from thread-pool continuations (after ConfigureAwait(false)), i.e. concurrently with that
+    // mutation. See docs/SHOUTRUNNER_LIFESTREAM_COMPATIBILITY_AUDIT.md §5 (D1).
     private readonly ICallGateSubscriber<bool> lifestreamIsBusy;
+    private readonly ICallGateSubscriber<string, bool> lifestreamCanVisitSameDc;
     private readonly ICallGateSubscriber<string, bool> lifestreamCanVisitCrossDc;
     private readonly ICallGateSubscriber<object?> lifestreamAbort;
 
@@ -81,7 +86,11 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
     private readonly Dictionary<uint, string> territoryNames = new();
     private bool teleportDataLoaded;
 
+    // Congestion monitoring is owned by exactly one transfer operation at a time, identified by its operation id, so a
+    // cancelled transfer's late `finally` can never clear or disable the monitor of a newer transfer (0.3.12, D6).
     private readonly object transferMonitorLock = new();
+    private int transferOperationSequence;
+    private int monitoredTransferOperationId;
     private string? monitoredTransferWorld;
     private int monitoredTransferCongestionCount;
     private bool monitoredTransferShouldSkip;
@@ -101,6 +110,9 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
         // confirmed dead code (never called anywhere in the donor's own MacroRunner, familiarization report §6) and
         // deliberately not reproduced here.
         lifestreamIsBusy = pluginInterface.GetIpcSubscriber<bool>("Lifestream.IsBusy");
+        // 0.3.12: CanVisitSameDC is now consulted too. It was previously dismissed as donor dead code, but it is needed
+        // to tell "same Data Center" apart from "Lifestream cannot reach this World" (ShoutRunnerTransferClassification).
+        lifestreamCanVisitSameDc = pluginInterface.GetIpcSubscriber<string, bool>("Lifestream.CanVisitSameDC");
         lifestreamCanVisitCrossDc = pluginInterface.GetIpcSubscriber<string, bool>("Lifestream.CanVisitCrossDC");
         lifestreamAbort = pluginInterface.GetIpcSubscriber<object?>("Lifestream.Abort");
 
@@ -113,20 +125,25 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
     {
         lock (transferMonitorLock)
         {
+            monitoredTransferOperationId = 0;
             monitoredTransferWorld = null;
             monitoredTransferCongestionCount = 0;
             monitoredTransferShouldSkip = false;
         }
     }
 
-    /// <summary>Must return quickly (see the interface's doc comment) — a single quick IPC call plus a single quick
-    /// framework-thread-marshaled UI-dismissal attempt, fired without being awaited. The robust, multi-attempt
-    /// dismissal + recovery verification lives in <see cref="EnsureReadyAsync"/>/<see cref="TravelToWorldAsync"/>,
-    /// which the orchestration layer does properly await.</summary>
+    /// <summary>Must return quickly (see the interface's doc comment): one framework-thread-marshaled Lifestream abort
+    /// plus one UI-dismissal attempt, fired without being awaited. Called from the UI (Stop) and from module teardown,
+    /// both already on the framework thread, where <c>RunOnFrameworkThread</c> runs inline, so the abort still
+    /// happens before this returns. The robust, multi-attempt dismissal and recovery verification lives in
+    /// <see cref="EnsureReadyAsync"/>/<see cref="TravelToWorldAsync"/>, which the orchestration layer awaits.</summary>
     public void Abort()
     {
-        TryLifestreamAbort();
-        _ = framework.RunOnFrameworkThread(DismissTransferUiOnceUnsafe);
+        _ = framework.RunOnFrameworkThread(() =>
+        {
+            TryLifestreamAbortOnFrameworkThread();
+            DismissTransferUiOnceUnsafe();
+        });
     }
 
     public async Task<ShoutRunnerReadinessOutcome> EnsureReadyAsync(CancellationToken token)
@@ -150,7 +167,7 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
                 if (!recoveryAttempted && DateTime.UtcNow - loggedOutSince.Value >= LoggedOutRecoveryGrace)
                 {
                     recoveryAttempted = true;
-                    TryLifestreamAbort();
+                    await AbortLifestreamAsync().ConfigureAwait(false);
                     await DismissTransferUiAsync(token).ConfigureAwait(false);
                 }
 
@@ -174,68 +191,79 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
         return ShoutRunnerReadinessOutcome.RecoveryFailed($"Character was not confirmed logged in and controllable within {ReadinessTimeout.TotalSeconds:0}s.");
     }
 
-    public Task<ShoutRunnerCrossDataCenterCheck> ClassifyTransferAsync(string targetWorld, CancellationToken token)
+    public async Task<ShoutRunnerCrossDataCenterCheck> ClassifyTransferAsync(string targetWorld, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        try
-        {
-            var isCrossDc = lifestreamCanVisitCrossDc.InvokeFunc(targetWorld);
-            return Task.FromResult(isCrossDc ? ShoutRunnerCrossDataCenterCheck.CrossDataCenter : ShoutRunnerCrossDataCenterCheck.SameDataCenter);
-        }
-        catch (IpcNotReadyError)
-        {
-            return Task.FromResult(ShoutRunnerCrossDataCenterCheck.Unknown);
-        }
-        catch (Exception ex)
-        {
-            log.Debug(ex, "ShoutRunner: Lifestream.CanVisitCrossDC failed.");
-            return Task.FromResult(ShoutRunnerCrossDataCenterCheck.Unknown);
-        }
+        var (sameDc, crossDc) = await OnFrameworkAsync(() => (TryLifestreamQuery(lifestreamCanVisitSameDc, targetWorld, "CanVisitSameDC"), TryLifestreamQuery(lifestreamCanVisitCrossDc, targetWorld, "CanVisitCrossDC")), token).ConfigureAwait(false);
+        var check = ShoutRunnerTransferClassification.Classify(sameDc, crossDc);
+        if (check == ShoutRunnerCrossDataCenterCheck.Unknown)
+            log.Warning($"ShoutRunner: could not classify travel to {targetWorld}: Lifestream CanVisitSameDC={FormatBool(sameDc)}, CanVisitCrossDC={FormatBool(crossDc)}.");
+        return check;
     }
 
+    /// <summary>One Lifestream World transfer, owned end to end by a fresh operation id (<c>#n</c> in every log and
+    /// diagnostic line). Arrival is decided ONLY from the local player's own current World, sampled on the framework
+    /// thread together with Lifestream's busy state, and confirmed stable by <see cref="ShoutRunnerArrivalVerifier"/>.
+    /// The <c>/li</c> command being executed is never treated as proof of anything.</summary>
     public async Task<ShoutRunnerTransferOutcome> TravelToWorldAsync(string targetWorld, bool crossDataCenter, CancellationToken token)
     {
+        var operationId = Interlocked.Increment(ref transferOperationSequence);
+        var kind = crossDataCenter ? "cross-DC" : "same-DC";
+        var targetWorldId = await OnFrameworkAsync(() => ResolvePublicWorldId(targetWorld), token).ConfigureAwait(false);
+        var initialState = await GetGameStateAsync(token).ConfigureAwait(false);
+        var context = new TransferContext(operationId, kind, targetWorld, targetWorldId, initialState, DateTime.UtcNow);
+
+        if (targetWorldId is null)
+            return Finish(context, ShoutRunnerTransferOutcome.Failed($"{targetWorld} is not a World in the game data.", context.Describe(initialState, null, "requested World not found in the World sheet")));
+
         // Case 1 ("already on target World"): checked before ever touching Lifestream, so a World the character is
         // already standing on never issues an unnecessary /li command.
-        var initialState = await GetGameStateAsync(token).ConfigureAwait(false);
         if (initialState.IsLoggedIn && initialState.HasLocalPlayer && string.Equals(initialState.CurrentWorld, targetWorld, StringComparison.OrdinalIgnoreCase))
-            return ShoutRunnerTransferOutcome.Success();
+            return Finish(context, ShoutRunnerTransferOutcome.Success(context.Describe(initialState, null, "already on the requested World; no travel issued")));
 
         if (!await WaitForLifestreamReadyAsync(token).ConfigureAwait(false))
-            return ShoutRunnerTransferOutcome.Failed("Lifestream is unavailable or busy.");
+            return Finish(context, ShoutRunnerTransferOutcome.Failed("Lifestream is unavailable or busy.", context.Describe(initialState, null, "Lifestream IsBusy unreadable or busy for 30 s before the request")));
 
-        BeginTransferMonitoring(targetWorld);
+        log.Information($"ShoutRunner transfer #{operationId} ({kind}): {initialState.CurrentWorld} ({initialState.CurrentWorldId}) → {targetWorld} ({targetWorldId}); issuing /li {targetWorld}.");
+        BeginTransferMonitoring(operationId, targetWorld);
         try
         {
             if (!await IssueChatCommandAsync($"/li {targetWorld}", token).ConfigureAwait(false))
-                return ShoutRunnerTransferOutcome.Failed("Could not send the Lifestream travel command.");
+                return Finish(context, ShoutRunnerTransferOutcome.Failed("Could not send the Lifestream travel command.", context.Describe(initialState, null, "chat transport rejected /li")));
 
             // Donor-proven pacing delay before polling begins (familiarization report §6) — never the sole evidence
             // a transition occurred; both wait methods below drive off observed game/Lifestream state.
             await Task.Delay(1000, token).ConfigureAwait(false);
 
             var outcome = crossDataCenter
-                ? await WaitForCrossDataCenterTransferAsync(targetWorld, token).ConfigureAwait(false)
-                : await WaitForSameDataCenterTransferAsync(targetWorld, token).ConfigureAwait(false);
+                ? await WaitForCrossDataCenterTransferAsync(context, operationId, token).ConfigureAwait(false)
+                : await WaitForSameDataCenterTransferAsync(context, operationId, token).ConfigureAwait(false);
 
             if (outcome.Result == ShoutRunnerTransferResult.WorldCongestedSkip)
             {
-                TryLifestreamAbort();
+                await AbortLifestreamAsync().ConfigureAwait(false);
                 await DismissTransferUiAsync(token).ConfigureAwait(false);
                 await Task.Delay(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
             }
             else if (outcome.Result == ShoutRunnerTransferResult.Failed)
             {
-                TryLifestreamAbort();
+                await AbortLifestreamAsync().ConfigureAwait(false);
                 await DismissTransferUiAsync(token).ConfigureAwait(false);
             }
 
-            return outcome;
+            return Finish(context, outcome);
         }
         finally
         {
-            EndTransferMonitoring();
+            EndTransferMonitoring(operationId);
         }
+    }
+
+    private ShoutRunnerTransferOutcome Finish(TransferContext context, ShoutRunnerTransferOutcome outcome)
+    {
+        var line = $"ShoutRunner transfer #{context.OperationId} {outcome.Result}: {outcome.Detail ?? "arrived"} | {outcome.Diagnostic}";
+        if (outcome.Result == ShoutRunnerTransferResult.Success) log.Information(line); else log.Warning(line);
+        return outcome;
     }
 
     public async Task<string?> TryGetCurrentPlaceNameAsync(CancellationToken token)
@@ -288,109 +316,134 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
             : ShoutRunnerTeleportOutcome.Failed($"Teleport to {prepared.MatchedName} did not complete within {TeleportTransitionTimeout.TotalSeconds:0}s.");
     }
 
+    public Task<string?> TryGetCurrentWorldAsync(CancellationToken token) => OnFrameworkAsync(() =>
+    {
+        var name = objectTable.LocalPlayer?.CurrentWorld.ValueNullable?.Name.ExtractText().Trim();
+        return string.IsNullOrWhiteSpace(name) ? null : name;
+    }, token);
+
     private async Task<bool> WaitForLifestreamReadyAsync(CancellationToken token)
     {
         var deadline = DateTime.UtcNow + LifestreamBusyBeforeStartTimeout;
         while (DateTime.UtcNow < deadline)
         {
             token.ThrowIfCancellationRequested();
-            if (!TryLifestreamIsBusy(out var busy)) return false;
-            if (!busy) return true;
+            var state = await GetGameStateAsync(token).ConfigureAwait(false);
+            if (state.LifestreamBusy is null) return false;
+            if (state.LifestreamBusy == false) return true;
             await Task.Delay(500, token).ConfigureAwait(false);
         }
 
         return false;
     }
 
-    /// <summary>Live-verified bug fix — see <see cref="VenueOS.Modules.Operations.ShoutRunner.ShoutRunnerSameDataCenterArrival"/>'s
-    /// doc comment for the exact scenario and the reasoning. The wrong-World branch below now requires Lifestream to
-    /// also confirm it is no longer busy before trusting that result, exactly mirroring
-    /// <see cref="WaitForCrossDataCenterTransferAsync"/>'s own already-correct equivalent check — a same-Data-Center
-    /// World Visit can settle briefly at an intermediate World-Visit-capable city (Ul'dah/Limsa/Gridania) before
-    /// Lifestream performs the actual World Visit, and that intermediate settle must never be mistaken for the
-    /// transfer having finished on the wrong World.</summary>
-    private async Task<ShoutRunnerTransferOutcome> WaitForSameDataCenterTransferAsync(string targetWorld, CancellationToken token)
+    /// <summary>Same-Data-Center World Visit. Phase 1 (start window) requires evidence that Lifestream ACCEPTED the
+    /// request: it reported busy, or a zone transition began. If neither happens, the transfer fails fast with an
+    /// explicit "not accepted" reason instead of waiting out the full timeout (0.3.12, D4). Lifestream refuses
+    /// several requests with only a toast and no state change: "Another task is in progress", "Already in this world",
+    /// a configured Travel Block. Phase 2 hands every sample to <see cref="ShoutRunnerArrivalVerifier"/>, which keeps the
+    /// live-verified Halicarnassus fix (<see cref="ShoutRunnerSameDataCenterArrival"/>: an intermediate city settle
+    /// while Lifestream is still busy is never a verdict) and adds the stability window for both final verdicts.</summary>
+    private async Task<ShoutRunnerTransferOutcome> WaitForSameDataCenterTransferAsync(TransferContext context, int operationId, CancellationToken token)
     {
+        var targetWorld = context.TargetWorld;
+        var verifier = new ShoutRunnerArrivalVerifier(targetWorld, context.Initial.CurrentWorld);
         var deadline = DateTime.UtcNow + SameDataCenterTimeout;
         var startDeadline = DateTime.UtcNow + SameDataCenterStartWindow;
         var seenTransition = false;
+        var accepted = false;
+        var state = context.Initial;
 
         while (DateTime.UtcNow < startDeadline)
         {
             token.ThrowIfCancellationRequested();
-            if (ShouldSkipCurrentTransfer()) return ShoutRunnerTransferOutcome.WorldCongested("Congestion reported twice.");
-            if (TryLifestreamIsBusy(out var busy) && busy) break;
-            var state = await GetGameStateAsync(token).ConfigureAwait(false);
-            if (state.BetweenAreas || state.BetweenAreas51) { seenTransition = true; break; }
-            if (string.Equals(state.CurrentWorld, targetWorld, StringComparison.OrdinalIgnoreCase)) return ShoutRunnerTransferOutcome.Success();
+            if (ShouldSkipCurrentTransfer(operationId)) return ShoutRunnerTransferOutcome.WorldCongested("Congestion reported twice.", context.Describe(state, verifier, "two congestion messages"));
+            state = await GetGameStateAsync(token).ConfigureAwait(false);
+            if (state.BetweenAreas || state.BetweenAreas51) seenTransition = true;
+            verifier.Observe(Sample(state, seenTransition), DateTimeOffset.UtcNow);
+            if (state.LifestreamBusy == true || seenTransition) { accepted = true; break; }
+            if (string.Equals(state.CurrentWorld, targetWorld, StringComparison.OrdinalIgnoreCase)) return ShoutRunnerTransferOutcome.Success(context.Describe(state, verifier, "on the requested World during the start window"));
             await Task.Delay(500, token).ConfigureAwait(false);
         }
+
+        if (!accepted)
+            return ShoutRunnerTransferOutcome.Failed(
+                $"Lifestream did not start travel to {targetWorld} within {SameDataCenterStartWindow.TotalSeconds:0}s (request not accepted; check Lifestream's on-screen notifications).",
+                context.Describe(state, verifier, "no Lifestream busy state and no zone transition after /li"));
 
         while (DateTime.UtcNow < deadline)
         {
             token.ThrowIfCancellationRequested();
-            if (ShouldSkipCurrentTransfer()) return ShoutRunnerTransferOutcome.WorldCongested("Congestion reported twice.");
+            if (ShouldSkipCurrentTransfer(operationId)) return ShoutRunnerTransferOutcome.WorldCongested("Congestion reported twice.", context.Describe(state, verifier, "two congestion messages"));
 
-            var state = await GetGameStateAsync(token).ConfigureAwait(false);
-            var transitioning = state.BetweenAreas || state.BetweenAreas51;
-            if (transitioning) seenTransition = true;
-
-            if (!transitioning && seenTransition && state.IsLoggedIn && state.HasLocalPlayer)
-            {
-                bool? lifestreamBusy = TryLifestreamIsBusy(out var busy) ? busy : null;
-                var decision = ShoutRunnerSameDataCenterArrival.Evaluate(state.IsLoggedIn, state.HasLocalPlayer, transitioning, seenTransition, state.CurrentWorld, targetWorld, lifestreamBusy);
-                if (decision == ShoutRunnerSameDataCenterArrival.Decision.Success) return ShoutRunnerTransferOutcome.Success();
-                if (decision == ShoutRunnerSameDataCenterArrival.Decision.Failed) return ShoutRunnerTransferOutcome.Failed($"Arrived at {state.CurrentWorld} instead of {targetWorld}.");
-            }
+            state = await GetGameStateAsync(token).ConfigureAwait(false);
+            if (state.BetweenAreas || state.BetweenAreas51) seenTransition = true;
+            var verdict = verifier.Observe(Sample(state, seenTransition), DateTimeOffset.UtcNow);
+            if (verdict == ShoutRunnerArrivalVerifier.Verdict.Arrived) return ShoutRunnerTransferOutcome.Success(context.Describe(state, verifier, "arrival verified"));
+            if (verdict == ShoutRunnerArrivalVerifier.Verdict.WrongWorld) return ShoutRunnerTransferOutcome.Failed(verifier.DescribeWrongWorld(state.CurrentWorld), context.Describe(state, verifier, "wrong World confirmed stable with Lifestream idle"));
 
             await Task.Delay(500, token).ConfigureAwait(false);
         }
 
-        return ShoutRunnerTransferOutcome.Failed($"Same-Data-Center transfer to {targetWorld} timed out after {SameDataCenterTimeout.TotalMinutes:0} minutes.");
+        return ShoutRunnerTransferOutcome.Failed($"Same-Data-Center transfer to {targetWorld} timed out after {SameDataCenterTimeout.TotalMinutes:0} minutes.", context.Describe(state, verifier, "overall timeout"));
     }
 
     /// <summary>The entire-Data-Center-unavailable path (familiarization report §12) — reproduced with the "stuck at
     /// the login screen" idle-while-logged-out detector, but this version performs the full recovery sequence
     /// (abort, dismiss, confirm playable) itself before ever reporting a skip, satisfying the hard route invariant
-    /// that nothing continues while the character is still at character-select/login limbo.</summary>
-    private async Task<ShoutRunnerTransferOutcome> WaitForCrossDataCenterTransferAsync(string targetWorld, CancellationToken token)
+    /// that nothing continues while the character is still at character-select/login limbo. 0.3.12: same acceptance
+    /// fail-fast and stable-verdict rules as the same-Data-Center path. Lifestream refuses a Data Center transfer
+    /// outright, with only a notification, when "Allow Data Center travel" is off in its settings.</summary>
+    private async Task<ShoutRunnerTransferOutcome> WaitForCrossDataCenterTransferAsync(TransferContext context, int operationId, CancellationToken token)
     {
+        var targetWorld = context.TargetWorld;
+        var verifier = new ShoutRunnerArrivalVerifier(targetWorld, context.Initial.CurrentWorld);
         var deadline = DateTime.UtcNow + CrossDataCenterTimeout;
         var startDeadline = DateTime.UtcNow + CrossDataCenterStartWindow;
         var seenLogout = false;
+        var accepted = false;
         DateTime? loggedOutWhileIdleSince = null;
+        var state = context.Initial;
 
         while (DateTime.UtcNow < startDeadline)
         {
             token.ThrowIfCancellationRequested();
-            if (ShouldSkipCurrentTransfer()) return ShoutRunnerTransferOutcome.WorldCongested("Congestion reported twice.");
-            if (TryLifestreamIsBusy(out var busy) && busy) break;
-            var state = await GetGameStateAsync(token).ConfigureAwait(false);
-            if (!state.IsLoggedIn) { seenLogout = true; break; }
-            if (string.Equals(state.CurrentWorld, targetWorld, StringComparison.OrdinalIgnoreCase)) return ShoutRunnerTransferOutcome.Success();
+            if (ShouldSkipCurrentTransfer(operationId)) return ShoutRunnerTransferOutcome.WorldCongested("Congestion reported twice.", context.Describe(state, verifier, "two congestion messages"));
+            state = await GetGameStateAsync(token).ConfigureAwait(false);
+            if (!state.IsLoggedIn) seenLogout = true;
+            verifier.Observe(Sample(state, seenLogout), DateTimeOffset.UtcNow);
+            if (state.LifestreamBusy == true || seenLogout) { accepted = true; break; }
+            if (string.Equals(state.CurrentWorld, targetWorld, StringComparison.OrdinalIgnoreCase)) return ShoutRunnerTransferOutcome.Success(context.Describe(state, verifier, "on the requested World during the start window"));
             await Task.Delay(500, token).ConfigureAwait(false);
         }
+
+        if (!accepted)
+            return ShoutRunnerTransferOutcome.Failed(
+                $"Lifestream did not start Data Center travel to {targetWorld} within {CrossDataCenterStartWindow.TotalSeconds:0}s (request not accepted; check that Data Center travel is allowed in Lifestream's settings).",
+                context.Describe(state, verifier, "no Lifestream busy state and no logout after /li"));
 
         while (DateTime.UtcNow < deadline)
         {
             token.ThrowIfCancellationRequested();
-            if (ShouldSkipCurrentTransfer()) return ShoutRunnerTransferOutcome.WorldCongested("Congestion reported twice.");
+            if (ShouldSkipCurrentTransfer(operationId)) return ShoutRunnerTransferOutcome.WorldCongested("Congestion reported twice.", context.Describe(state, verifier, "two congestion messages"));
 
-            var state = await GetGameStateAsync(token).ConfigureAwait(false);
+            state = await GetGameStateAsync(token).ConfigureAwait(false);
+            if (!state.IsLoggedIn) seenLogout = true;
+            var verdict = verifier.Observe(Sample(state, seenLogout), DateTimeOffset.UtcNow);
+
             if (!state.IsLoggedIn)
             {
-                seenLogout = true;
-                if (TryLifestreamIsBusy(out var busy) && !busy)
+                if (state.LifestreamBusy == false)
                 {
                     loggedOutWhileIdleSince ??= DateTime.UtcNow;
                     if (DateTime.UtcNow - loggedOutWhileIdleSince.Value >= LoggedOutIdleStuckThreshold)
                     {
-                        TryLifestreamAbort();
+                        await AbortLifestreamAsync().ConfigureAwait(false);
                         await DismissTransferUiAsync(token).ConfigureAwait(false);
                         var recovered = await WaitForRecoveryAsync(token).ConfigureAwait(false);
                         return recovered
-                            ? ShoutRunnerTransferOutcome.DataCenterUnavailable($"Transfer to {targetWorld} stopped at the login screen; the destination data center is likely congested.")
-                            : ShoutRunnerTransferOutcome.Failed($"Transfer to {targetWorld} stopped at the login screen and the character could not be recovered to a playable state.");
+                            ? ShoutRunnerTransferOutcome.DataCenterUnavailable($"Transfer to {targetWorld} stopped at the login screen; the destination data center is likely congested.", context.Describe(state, verifier, "logged out with Lifestream idle; recovered"))
+                            : ShoutRunnerTransferOutcome.Failed($"Transfer to {targetWorld} stopped at the login screen and the character could not be recovered to a playable state.", context.Describe(state, verifier, "logged out with Lifestream idle; recovery failed"));
                     }
                 }
                 else
@@ -403,26 +456,35 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
             }
 
             loggedOutWhileIdleSince = null;
-            if (seenLogout && state.HasLocalPlayer)
-            {
-                if (string.Equals(state.CurrentWorld, targetWorld, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (TryLifestreamIsBusy(out var busy) && !busy) return ShoutRunnerTransferOutcome.Success();
-                }
-                else if (!string.IsNullOrEmpty(state.CurrentWorld) && TryLifestreamIsBusy(out var busyNow) && !busyNow)
-                {
-                    return ShoutRunnerTransferOutcome.Failed($"Arrived at {state.CurrentWorld} instead of {targetWorld}.");
-                }
-            }
-            else if (!seenLogout && state.HasLocalPlayer && string.Equals(state.CurrentWorld, targetWorld, StringComparison.OrdinalIgnoreCase))
-            {
-                return ShoutRunnerTransferOutcome.Success();
-            }
+            if (verdict == ShoutRunnerArrivalVerifier.Verdict.Arrived) return ShoutRunnerTransferOutcome.Success(context.Describe(state, verifier, "arrival verified"));
+            if (verdict == ShoutRunnerArrivalVerifier.Verdict.WrongWorld) return ShoutRunnerTransferOutcome.Failed(verifier.DescribeWrongWorld(state.CurrentWorld), context.Describe(state, verifier, "wrong World confirmed stable with Lifestream idle"));
+            if (!seenLogout && state.HasLocalPlayer && string.Equals(state.CurrentWorld, targetWorld, StringComparison.OrdinalIgnoreCase))
+                return ShoutRunnerTransferOutcome.Success(context.Describe(state, verifier, "on the requested World without a logout"));
 
             await Task.Delay(1000, token).ConfigureAwait(false);
         }
 
-        return ShoutRunnerTransferOutcome.Failed($"Cross-Data-Center transfer to {targetWorld} timed out after {CrossDataCenterTimeout.TotalMinutes:0} minutes.");
+        return ShoutRunnerTransferOutcome.Failed($"Cross-Data-Center transfer to {targetWorld} timed out after {CrossDataCenterTimeout.TotalMinutes:0} minutes.", context.Describe(state, verifier, "overall timeout"));
+    }
+
+    private static ShoutRunnerArrivalSample Sample(GameState state, bool prerequisiteSeen) =>
+        new(state.IsLoggedIn, state.HasLocalPlayer, state.BetweenAreas || state.BetweenAreas51, prerequisiteSeen, state.CurrentWorld, state.LifestreamBusy);
+
+    private static string FormatBool(bool? value) => value switch { true => "true", false => "false", null => "unavailable" };
+
+    /// <summary>Everything about one transfer that Diagnostics needs to separate "VenueOS asked for the wrong World",
+    /// "VenueOS misread where it is" and "the travel itself went elsewhere". It carries no character names: only World
+    /// names and ids, Data Centers, and whether the observed World is the character's home World.</summary>
+    private sealed record TransferContext(int OperationId, string Kind, string TargetWorld, uint? TargetWorldId, GameState Initial, DateTime StartedAtUtc)
+    {
+        public string Describe(GameState observed, ShoutRunnerArrivalVerifier? verifier, string note) =>
+            $"transfer #{OperationId} ({Kind}); requested {TargetWorld} (World id {TargetWorldId?.ToString() ?? "unknown"}); " +
+            $"started on {Display(Initial.CurrentWorld)} (id {Initial.CurrentWorldId}, DC {Display(Initial.CurrentDataCenter)}); " +
+            $"observed {Display(observed.CurrentWorld)} (id {observed.CurrentWorldId}, DC {Display(observed.CurrentDataCenter)}, home World: {(observed.OnHomeWorld ? "yes" : "no")}, logged in: {(observed.IsLoggedIn ? "yes" : "no")}); " +
+            (verifier is null ? string.Empty : verifier.DescribeHistory() + "; ") +
+            $"elapsed {(DateTime.UtcNow - StartedAtUtc).TotalSeconds:0.0}s; {note}";
+
+        private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "(unknown)" : value;
     }
 
     private async Task<bool> WaitForRecoveryAsync(CancellationToken token)
@@ -448,31 +510,37 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
 
     // ----- Congestion detection (familiarization report §11) -----
 
-    private void BeginTransferMonitoring(string targetWorld)
+    private void BeginTransferMonitoring(int operationId, string targetWorld)
     {
         lock (transferMonitorLock)
         {
+            monitoredTransferOperationId = operationId;
             monitoredTransferWorld = targetWorld;
             monitoredTransferCongestionCount = 0;
             monitoredTransferShouldSkip = false;
         }
     }
 
-    private void EndTransferMonitoring()
+    /// <summary>Only the operation that owns the monitor may clear it — a stale, cancelled transfer finishing late
+    /// must not disable congestion detection for the newer transfer that replaced it.</summary>
+    private void EndTransferMonitoring(int operationId)
     {
         lock (transferMonitorLock)
         {
+            if (monitoredTransferOperationId != operationId) return;
+            monitoredTransferOperationId = 0;
             monitoredTransferWorld = null;
             monitoredTransferCongestionCount = 0;
             monitoredTransferShouldSkip = false;
         }
     }
 
-    private bool ShouldSkipCurrentTransfer()
+    private bool ShouldSkipCurrentTransfer(int operationId)
     {
-        lock (transferMonitorLock) return monitoredTransferShouldSkip;
+        lock (transferMonitorLock) return monitoredTransferOperationId == operationId && monitoredTransferShouldSkip;
     }
 
+    /// <summary>Raised by Dalamud on the framework thread, so the Lifestream abort below is already thread-correct.</summary>
     private void OnChatMessageUnhandled(IChatMessage message)
     {
         var text = message.Message.TextValue;
@@ -482,29 +550,73 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
         {
             if (monitoredTransferWorld is null || monitoredTransferShouldSkip) return;
             monitoredTransferCongestionCount++;
+            log.Information($"ShoutRunner transfer #{monitoredTransferOperationId}: congestion message {monitoredTransferCongestionCount}/2 for {monitoredTransferWorld}.");
             if (monitoredTransferCongestionCount >= 2)
             {
                 monitoredTransferShouldSkip = true;
-                TryLifestreamAbort();
+                TryLifestreamAbortOnFrameworkThread();
             }
         }
     }
 
     private static bool IsCongestedTransferMessage(string text) => CongestionMarkers.Any(marker => text.Contains(marker, StringComparison.OrdinalIgnoreCase));
 
-    // ----- Lifestream IPC -----
+    // ----- Lifestream IPC (framework thread only) -----
 
-    private bool TryLifestreamIsBusy(out bool busy)
+    /// <summary>Lifestream.IsBusy, or null if the IPC is not available. Must be called on the framework thread.</summary>
+    private bool? TryLifestreamIsBusyOnFrameworkThread()
     {
-        try { busy = lifestreamIsBusy.InvokeFunc(); return true; }
-        catch (IpcNotReadyError) { busy = false; return false; }
-        catch (Exception ex) { log.Debug(ex, "ShoutRunner: Lifestream.IsBusy failed."); busy = false; return false; }
+        try { return lifestreamIsBusy.InvokeFunc(); }
+        catch (IpcNotReadyError) { return null; }
+        catch (Exception ex) { log.Debug(ex, "ShoutRunner: Lifestream.IsBusy failed."); return null; }
     }
 
-    private void TryLifestreamAbort()
+    /// <summary>A Lifestream world query, or null if the IPC is not available. Must be called on the framework thread.</summary>
+    private bool? TryLifestreamQuery(ICallGateSubscriber<string, bool> subscriber, string world, string name)
+    {
+        try { return subscriber.InvokeFunc(world); }
+        catch (IpcNotReadyError) { return null; }
+        catch (Exception ex) { log.Debug(ex, $"ShoutRunner: Lifestream.{name} failed."); return null; }
+    }
+
+    private void TryLifestreamAbortOnFrameworkThread()
     {
         try { lifestreamAbort.InvokeAction(); }
         catch { /* best-effort */ }
+    }
+
+    private async Task AbortLifestreamAsync()
+    {
+        try { await framework.RunOnFrameworkThread(TryLifestreamAbortOnFrameworkThread).ConfigureAwait(false); }
+        catch (Exception ex) { log.Debug(ex, "ShoutRunner: Lifestream abort could not be marshaled to the framework thread."); }
+    }
+
+    /// <summary>The World sheet row id for a public World name, or null if no such World exists. Framework thread.</summary>
+    private uint? ResolvePublicWorldId(string worldName)
+    {
+        try
+        {
+            var sheet = dataManager.GetExcelSheet<World>();
+            foreach (var row in sheet)
+            {
+                if (row.IsPublic && string.Equals(row.Name.ExtractText(), worldName, StringComparison.OrdinalIgnoreCase)) return row.RowId;
+            }
+        }
+        catch (Exception ex) { log.Debug(ex, "ShoutRunner: World sheet lookup failed."); }
+        return null;
+    }
+
+    /// <summary>Runs <paramref name="func"/> on the framework thread and observes <paramref name="token"/> while waiting.</summary>
+    private async Task<T> OnFrameworkAsync<T>(Func<T> func, CancellationToken token)
+    {
+        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var reg = token.Register(() => tcs.TrySetCanceled(token));
+        _ = framework.RunOnFrameworkThread(() =>
+        {
+            try { tcs.TrySetResult(func()); }
+            catch (Exception ex) { tcs.TrySetException(ex); }
+        });
+        return await tcs.Task.ConfigureAwait(false);
     }
 
     // ----- Transfer/travel UI dismissal -----
@@ -701,8 +813,11 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
 
     // ----- Game state -----
 
+    /// <summary>One framework-thread snapshot. <see cref="LifestreamBusy"/> is read in the SAME framework callback as
+    /// the World, so the two always describe the same frame (0.3.12).</summary>
     private sealed record GameState(bool IsLoggedIn, bool HasLocalPlayer, bool BetweenAreas, bool BetweenAreas51, bool LoggingOut,
-        bool OccupiedInCutSceneEvent, bool OccupiedInQuestEvent, bool OccupiedInEvent, bool Occupied, bool WatchingCutscene, string CurrentWorld);
+        bool OccupiedInCutSceneEvent, bool OccupiedInQuestEvent, bool OccupiedInEvent, bool Occupied, bool WatchingCutscene, string CurrentWorld,
+        uint CurrentWorldId, string CurrentDataCenter, bool OnHomeWorld, bool? LifestreamBusy);
 
     private async Task<GameState> GetGameStateAsync(CancellationToken token)
     {
@@ -724,7 +839,11 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
                     condition[ConditionFlag.OccupiedInEvent],
                     condition[ConditionFlag.Occupied],
                     condition[ConditionFlag.WatchingCutscene],
-                    localPlayer?.CurrentWorld.ValueNullable?.Name.ExtractText() ?? string.Empty));
+                    localPlayer?.CurrentWorld.ValueNullable?.Name.ExtractText() ?? string.Empty,
+                    localPlayer?.CurrentWorld.RowId ?? 0,
+                    localPlayer?.CurrentWorld.ValueNullable?.DataCenter.ValueNullable?.Name.ExtractText() ?? string.Empty,
+                    localPlayer != null && localPlayer.CurrentWorld.RowId != 0 && localPlayer.CurrentWorld.RowId == localPlayer.HomeWorld.RowId,
+                    TryLifestreamIsBusyOnFrameworkThread()));
             }
             catch (Exception ex) { tcs.TrySetException(ex); }
         });

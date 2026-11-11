@@ -78,6 +78,9 @@ public enum ShoutRunnerState
     RecoveringTravel,
     TravelingWorld,
     Teleporting,
+    /// <summary>0.3.12 pre-shout guard: confirming the character is on the World this destination belongs to before
+    /// Line 1 is handed to chat. Entered once per destination, immediately before <see cref="SendingShout"/>.</summary>
+    VerifyingWorld,
     SendingShout,
     /// <summary>Line 1 of a two-line shout was confirmed dispatched; Line 2 is held until
     /// <see cref="ShoutRunnerShoutLines.InterLineDelay"/> has elapsed since that confirmation. Never entered for a
@@ -170,14 +173,37 @@ public sealed record ShoutRunnerDestinationStep(string Destination, bool Require
 
 public enum ShoutRunnerCrossDataCenterCheck { SameDataCenter, CrossDataCenter, Unknown }
 
+/// <summary>Turns Lifestream's two reachability answers into a transfer type (0.3.12). In current Lifestream source
+/// (<c>IPC/IPCProvider.cs</c>), <c>CanVisitSameDC(world)</c> is "the World is in the character's CURRENT Data Center"
+/// and <c>CanVisitCrossDC(world)</c> is "the World is in another reachable Data Center". Both are plain list lookups,
+/// and the two lists never overlap. Before 0.3.12 only <c>CanVisitCrossDC</c> was asked, and <c>false</c> was taken
+/// to mean "same Data Center". But <c>false</c> also means "Lifestream does not know this World from here" (for
+/// example, its World lists are not built yet), so an unreachable World was silently sent down the same-DC path.
+/// Now a transfer type is only reported when Lifestream positively confirms it; anything else is
+/// <see cref="ShoutRunnerCrossDataCenterCheck.Unknown"/>, which the route treats as an explicit, reported skip.</summary>
+public static class ShoutRunnerTransferClassification
+{
+    /// <param name="canVisitSameDc">Lifestream's <c>CanVisitSameDC</c> answer, or null if the call failed.</param>
+    /// <param name="canVisitCrossDc">Lifestream's <c>CanVisitCrossDC</c> answer, or null if the call failed.</param>
+    public static ShoutRunnerCrossDataCenterCheck Classify(bool? canVisitSameDc, bool? canVisitCrossDc) => (canVisitSameDc, canVisitCrossDc) switch
+    {
+        (true, false) => ShoutRunnerCrossDataCenterCheck.SameDataCenter,
+        (false, true) => ShoutRunnerCrossDataCenterCheck.CrossDataCenter,
+        _ => ShoutRunnerCrossDataCenterCheck.Unknown,
+    };
+}
+
 public enum ShoutRunnerTransferResult { Success, WorldCongestedSkip, DataCenterUnavailableSkip, Failed }
 
-public sealed record ShoutRunnerTransferOutcome(ShoutRunnerTransferResult Result, string? Detail = null)
+/// <param name="Diagnostic">Technical detail for Diagnostics (operation id, requested/observed World ids, Data Center,
+/// Worlds observed, Lifestream state), kept out of the operator-facing terminal line
+/// (<paramref name="Detail"/>) so the terminal stays readable.</param>
+public sealed record ShoutRunnerTransferOutcome(ShoutRunnerTransferResult Result, string? Detail = null, string? Diagnostic = null)
 {
-    public static ShoutRunnerTransferOutcome Success() => new(ShoutRunnerTransferResult.Success);
-    public static ShoutRunnerTransferOutcome WorldCongested(string detail) => new(ShoutRunnerTransferResult.WorldCongestedSkip, detail);
-    public static ShoutRunnerTransferOutcome DataCenterUnavailable(string detail) => new(ShoutRunnerTransferResult.DataCenterUnavailableSkip, detail);
-    public static ShoutRunnerTransferOutcome Failed(string detail) => new(ShoutRunnerTransferResult.Failed, detail);
+    public static ShoutRunnerTransferOutcome Success(string? diagnostic = null) => new(ShoutRunnerTransferResult.Success, null, diagnostic);
+    public static ShoutRunnerTransferOutcome WorldCongested(string detail, string? diagnostic = null) => new(ShoutRunnerTransferResult.WorldCongestedSkip, detail, diagnostic);
+    public static ShoutRunnerTransferOutcome DataCenterUnavailable(string detail, string? diagnostic = null) => new(ShoutRunnerTransferResult.DataCenterUnavailableSkip, detail, diagnostic);
+    public static ShoutRunnerTransferOutcome Failed(string detail, string? diagnostic = null) => new(ShoutRunnerTransferResult.Failed, detail, diagnostic);
 }
 
 public enum ShoutRunnerTeleportResult { Success, Failed }

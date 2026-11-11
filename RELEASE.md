@@ -1,6 +1,28 @@
-# VenueOS 0.3.11 release
+# VenueOS 0.3.12 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.12 — ShoutRunner Travel Reliability
+
+A maintenance release from a field report: a run stopped with *"Arrived at Jenova instead of Cactuar"* during a same-Data-Center World Visit. Automated validation is complete (full suite 1492 / 1492, Debug and Release builds with 0 warnings / 0 errors). **Live QA: Pending — owner unavailable; release explicitly authorized based on automated validation.** Real-world ShoutRunner travel verification remains pending.
+
+### What was found
+
+- **The safety check fired on a real wrong-World observation, but decided too quickly.** One momentary "Lifestream idle" reading was enough to stop the run, and that reading was taken from a background thread (Lifestream's state is not thread-safe). Lifestream retries failed World Visits on its own by default, so a single reading is not a reliable final answer.
+- **VenueOS requested the right World and read the World correctly.** Lifestream's IPC (`IsBusy`, `Abort`, `CanVisitSameDC`, `CanVisitCrossDC`) is unchanged in current Lifestream source. Why the character ended up on Jenova is **not determined**. Lifestream picks the World Visit row by list index and does not check the World name when confirming. That is the most plausible external cause, but it is unverified.
+
+### ShoutRunner
+
+- **Stable arrival verification.** A World is reached only when the character's own current World matches it, stays settled for 1 s, and Lifestream reports idle. A wrong World must stay settled for 3 s before the run stops. A genuine wrong-World arrival still stops the run, and nothing is ever shouted there.
+- **Lifestream queried on the main thread only.** `IsBusy` is read in the same frame as the World.
+- **World check before every shout.** If the character is not on the destination's World, for example after manual travel, the shout is withheld and the run stops, resumably.
+- **Resume never repeats a sent announcement.** Resume skips completed destinations by name. Before, it used their count, so an earlier failed destination made Resume re-shout one that had already been sent.
+- **Rejected travel requests fail fast** (about 10 s same-DC, 15 s cross-DC) with *"Lifestream did not start travel …"*, instead of a 3–5 minute timeout.
+- **Unreachable Worlds are skipped and reported**, instead of being sent down the same-DC path.
+- **Diagnostics.** Each transfer has an operation id. Every travel failure writes requested and observed World (names and World ids), Data Center, Worlds seen, Lifestream state and checkpoint position to **Settings → Diagnostics** and `/xllog` (`ShoutRunner transfer #n`).
+- **Unchanged:** routing order, congestion two-strike skip, native teleport, Stop/disable/venue-switch behavior, and the ≥ 2 s Line 2 delay.
+
+Report: `docs/SHOUTRUNNER_LIFESTREAM_COMPATIBILITY_AUDIT.md`.
 
 ## 0.3.11 — VIP Only Attendance Mode
 

@@ -340,3 +340,13 @@ If Line 2 still drops at 2 s, the next step is a live measurement of FFXIV's sho
 `src/VenueOS.Plugin/ShoutRunnerOperatorPanel.cs` (help text), `docs/USER_MANUAL.md`,
 `tests/VenueOS.Services.Tests/ShoutRunnerMaintenanceTests.cs`, new `tests/VenueOS.Services.Tests/ShoutRunnerLine2TimingTests.cs`,
 this section, `docs/POST_0.3.7_TRAINING_AUDIT.md`.
+
+---
+
+## 20. Follow-up (0.3.12)
+
+The pre-existing Resume behavior noted in §15 ("the journal identifies completed steps by count, so any earlier failed
+step can shift where Resume replays from") is fixed in 0.3.12. Resume now skips completed destinations by name and
+never repeats a sent shout. Travel arrival verification, Lifestream thread affinity and a pre-shout World check were
+also changed. See [`SHOUTRUNNER_LIFESTREAM_COMPATIBILITY_AUDIT.md`](SHOUTRUNNER_LIFESTREAM_COMPATIBILITY_AUDIT.md).
+The Line 2 timing in §19 is unchanged.

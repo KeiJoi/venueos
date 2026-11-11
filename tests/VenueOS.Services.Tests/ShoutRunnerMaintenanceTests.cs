@@ -647,7 +647,10 @@ internal sealed class HarnessAutomation : IShoutRunnerAutomation
     public void Abort() { }
     public Task<ShoutRunnerReadinessOutcome> EnsureReadyAsync(CancellationToken token) => Task.FromResult(ShoutRunnerReadinessOutcome.ReadyNow());
     public Task<ShoutRunnerCrossDataCenterCheck> ClassifyTransferAsync(string targetWorld, CancellationToken token) => Task.FromResult(ShoutRunnerCrossDataCenterCheck.SameDataCenter);
-    public Task<ShoutRunnerTransferOutcome> TravelToWorldAsync(string targetWorld, bool crossDataCenter, CancellationToken token) => Task.FromResult(ShoutRunnerTransferOutcome.Success());
+    /// <summary>The World the fake character is on: the target of the most recent travel request (0.3.12 pre-shout guard).</summary>
+    public string? CurrentWorld;
+    public Task<ShoutRunnerTransferOutcome> TravelToWorldAsync(string targetWorld, bool crossDataCenter, CancellationToken token) { CurrentWorld = targetWorld; return Task.FromResult(ShoutRunnerTransferOutcome.Success()); }
+    public Task<string?> TryGetCurrentWorldAsync(CancellationToken token) => Task.FromResult(CurrentWorld);
     public Task<string?> TryGetCurrentPlaceNameAsync(CancellationToken token) => Task.FromResult<string?>(null);
     public Task<ShoutRunnerTeleportOutcome> TeleportToDestinationAsync(string destinationName, CancellationToken token) => OnTeleport(destinationName, token);
 }

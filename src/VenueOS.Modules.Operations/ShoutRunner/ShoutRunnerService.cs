@@ -72,6 +72,8 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     private Task<string?>? locateTask;
     private Task<ShoutRunnerTeleportOutcome>? teleportTask;
     private Task<ShoutLineOutcome>? shoutTask;
+    // 0.3.12 pre-shout guard: the World the character is actually on, read just before Line 1 is handed to chat.
+    private Task<string?>? shoutWorldCheckTask;
     private Task<ShoutRunnerReadinessOutcome>? stoppingTask;
 
     // The shout step's own sub-state: which of the (up to two) lines the in-flight shoutTask is for, and why a line
@@ -96,7 +98,6 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     // Set only by Resume(), for exactly the one World it identified as already in progress; consumed (and cleared)
     // the first time ProcessTransferCompletion's success branch runs afterward — see that method's doc comment.
     private IReadOnlyList<ShoutRunnerDestinationStep>? pendingResumedWorldSteps;
-    private int pendingResumedStepIndex;
 
     public ShoutRunnerState State { get; private set; } = ShoutRunnerState.Stopped;
 
@@ -393,6 +394,9 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
             case ShoutRunnerState.Teleporting:
                 if (teleportTask is { IsCompleted: true }) ProcessTeleportCompletion();
                 return;
+            case ShoutRunnerState.VerifyingWorld:
+                if (shoutWorldCheckTask is { IsCompleted: true }) ProcessShoutWorldCheckCompletion();
+                return;
             case ShoutRunnerState.SendingShout:
                 if (shoutTask is { IsCompleted: true }) ProcessShoutCompletion();
                 return;
@@ -498,13 +502,13 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         {
             ReadinessPurpose.EnterWorld => ShoutRunnerState.TravelingWorld,
             ReadinessPurpose.Teleport => ShoutRunnerState.Teleporting,
-            _ => ShoutRunnerState.SendingShout,
+            _ => ShoutRunnerState.VerifyingWorld,
         };
         switch (pendingReadinessPurpose)
         {
             case ReadinessPurpose.EnterWorld: BeginClassifyTransfer(); break;
             case ReadinessPurpose.Teleport: BeginTeleport(); break;
-            case ReadinessPurpose.Shout: BeginShout(); break;
+            case ReadinessPurpose.Shout: BeginShoutWorldCheck(); break;
         }
     }
 
@@ -535,6 +539,11 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         transferTask = null;
         var dc = runConfig!.DataCentersInOrder[dataCenterIndex];
         var world = currentWorlds[worldIndex];
+        // 0.3.12: every non-successful transfer leaves one structured Diagnostics entry (operation id, requested and
+        // observed World ids, Data Center, Worlds observed, Lifestream state) plus where the run's checkpoint stands,
+        // so a report like "Arrived at Jenova instead of Cactuar" can be traced to its cause. The terminal stays readable.
+        if (outcome.Result != ShoutRunnerTransferResult.Success)
+            diagnostics.RecordFailure($"ShoutRunner RUN {RunNumber} {dc}/{world} (World {worldIndex + 1} of {currentWorlds.Count}) transfer {outcome.Result}: {outcome.Detail} | {outcome.Diagnostic ?? "no transfer diagnostics"} | checkpoint: {RecoveredJournal?.CurrentDataCenter ?? "-"}/{RecoveredJournal?.CurrentWorld ?? "-"}, {RecoveredJournal?.CompletedDestinationsInCurrentWorld.Count ?? 0} destination(s) completed there");
         switch (outcome.Result)
         {
             case ShoutRunnerTransferResult.Success:
@@ -545,7 +554,7 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
                 if (pendingResumedWorldSteps is { } resumedSteps)
                 {
                     currentSteps = resumedSteps;
-                    stepIndex = pendingResumedStepIndex - 1;
+                    stepIndex = -1;
                     pendingResumedWorldSteps = null;
                     AdvanceToNextStep();
                     return;
@@ -617,6 +626,34 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         }
 
         BeginReadinessGate(ReadinessPurpose.Shout);
+    }
+
+    /// <summary>The last guard before any announcement (0.3.12). Asks automation which World the character is on, read
+    /// on the framework thread from the local player, before Line 1 is handed to chat. Travel success already
+    /// verified the World, but the character can still be moved between arrival and the shout (manual travel,
+    /// another plugin, a disconnect), and an announcement meant for one World must never be sent on another.</summary>
+    private void BeginShoutWorldCheck() => shoutWorldCheckTask = automation.TryGetCurrentWorldAsync(runCts!.Token);
+
+    /// <summary>Only a positive match lets the shout start. A different World, or a World that cannot be read at all,
+    /// withholds the shout and faults the RUN. The recovery checkpoint is kept, so Resume continues from the same
+    /// unfinished destination once the operator has checked where the character is.</summary>
+    private void ProcessShoutWorldCheckCompletion()
+    {
+        var observed = SafeResult(shoutWorldCheckTask!, (string?)null);
+        shoutWorldCheckTask = null;
+        var expected = currentWorlds[worldIndex];
+        if (observed is not null && string.Equals(observed, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            State = ShoutRunnerState.SendingShout;
+            BeginShout();
+            return;
+        }
+
+        var destination = currentSteps[stepIndex].Destination;
+        diagnostics.RecordFailure($"ShoutRunner RUN {RunNumber}: pre-shout World check failed at {destination} — expected {expected}, observed {observed ?? "(unknown)"}; no line was sent.");
+        EnterFaulted(observed is null
+            ? $"Shout at {destination} withheld: the character's current World could not be confirmed (expected {expected})."
+            : $"Shout at {destination} withheld: the character is on {observed}, not {expected}.");
     }
 
     /// <summary>Starts a destination's shout with Line 1. The shout text is read live here — not from the RUN-start
@@ -786,7 +823,7 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
 
     private void ClearPendingTasks()
     {
-        readinessTask = null; classifyTask = null; transferTask = null; locateTask = null; teleportTask = null; shoutTask = null;
+        readinessTask = null; classifyTask = null; transferTask = null; locateTask = null; teleportTask = null; shoutTask = null; shoutWorldCheckTask = null;
     }
 
     private void ClearCursor()
@@ -801,7 +838,8 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     /// snapshot (Data Center/World names actually exist within it) before committing any state, so a corrupt or
     /// internally-inconsistent journal is reported as such rather than leaving this service half-mutated.
     ///
-    /// A World with completed destinations already recorded resumes by replaying the exact remaining tail of its
+    /// A World with completed destinations already recorded resumes by replaying its not-yet-completed steps, matched
+    /// by destination name (<see cref="ShoutRunnerResumePlan.RemainingSteps"/>, 0.3.12; never by completed-count index), from its
     /// already-computed plan (see <see cref="ProcessTransferCompletion"/>'s <c>pendingResumedWorldSteps</c> branch);
     /// every other case (no Data Center/World recorded yet, or a World with zero completions) simply continues
     /// forward through the normal <see cref="AdvanceToNextDataCenter"/>/<see cref="AdvanceToNextWorld"/> path exactly
@@ -878,10 +916,7 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         StatusText = $"RUN {RunNumber} — {dc} / {world}";
 
         if (activeCompletedDestinationsInCurrentWorld.Count > 0 && activeCurrentWorldPlan is { Count: > 0 })
-        {
-            pendingResumedWorldSteps = activeCurrentWorldPlan;
-            pendingResumedStepIndex = activeCompletedDestinationsInCurrentWorld.Count;
-        }
+            pendingResumedWorldSteps = ShoutRunnerResumePlan.RemainingSteps(activeCurrentWorldPlan, activeCompletedDestinationsInCurrentWorld);
 
         BeginReadinessGate(ReadinessPurpose.EnterWorld);
         return ShoutRunnerResumeResult.Resumed;
