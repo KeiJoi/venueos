@@ -6,13 +6,15 @@ namespace VenueOS.Modules.Operations.ShoutRunner;
 /// <param name="PrerequisiteSeen">The transfer-type-specific proof that travel actually began: a zone transition
 /// (same Data Center) or a logout (cross Data Center).</param>
 /// <param name="LifestreamBusy">Lifestream's <c>IsBusy</c> IPC result, or null when it could not be read.</param>
+/// <param name="CurrentDataCenter">The logical Data Center of <paramref name="CurrentWorld"/> from game data (0.3.13).</param>
 public readonly record struct ShoutRunnerArrivalSample(
     bool IsLoggedIn,
     bool HasLocalPlayer,
     bool Transitioning,
     bool PrerequisiteSeen,
     string? CurrentWorld,
-    bool? LifestreamBusy);
+    bool? LifestreamBusy,
+    string? CurrentDataCenter = null);
 
 /// <summary>The final arrival decision for one Lifestream World transfer (0.3.12). It replaces the "decide on the first
 /// qualifying sample" rule both transfer loops used before, for the wrong-World incident in
@@ -52,14 +54,20 @@ public sealed class ShoutRunnerArrivalVerifier
     private DateTimeOffset candidateSince;
     private bool lastTransitioning;
 
-    public ShoutRunnerArrivalVerifier(string targetWorld, string? originWorld)
+    /// <param name="targetDataCenter">0.3.13: when given, arrival also requires the observed logical Data Center to match.
+    /// The right World name reported on a different Data Center (only possible with a stale catalog) is a wrong
+    /// destination, and an unknown Data Center is never accepted as arrival.</param>
+    public ShoutRunnerArrivalVerifier(string targetWorld, string? originWorld, string? targetDataCenter = null)
     {
         TargetWorld = targetWorld;
+        TargetDataCenter = string.IsNullOrWhiteSpace(targetDataCenter) ? null : targetDataCenter;
         OriginWorld = string.IsNullOrWhiteSpace(originWorld) ? null : originWorld;
         if (OriginWorld is not null) worldsObserved.Add(OriginWorld);
     }
 
     public string TargetWorld { get; }
+    public string? TargetDataCenter { get; }
+    private readonly Dictionary<string, string> dataCenterByWorld = new(StringComparer.OrdinalIgnoreCase);
     public string? OriginWorld { get; }
     public IReadOnlyList<string> WorldsObserved => worldsObserved;
     public int TransitionsObserved { get; private set; }
@@ -85,7 +93,15 @@ public sealed class ShoutRunnerArrivalVerifier
             && (worldsObserved.Count == 0 || !string.Equals(worldsObserved[^1], sample.CurrentWorld, StringComparison.OrdinalIgnoreCase)))
             worldsObserved.Add(sample.CurrentWorld!);
 
+        if (!string.IsNullOrWhiteSpace(sample.CurrentWorld) && !string.IsNullOrWhiteSpace(sample.CurrentDataCenter)) dataCenterByWorld[sample.CurrentWorld!] = sample.CurrentDataCenter!;
+
         var decision = ShoutRunnerSameDataCenterArrival.Evaluate(sample.IsLoggedIn, sample.HasLocalPlayer, sample.Transitioning, sample.PrerequisiteSeen, sample.CurrentWorld, TargetWorld, sample.LifestreamBusy);
+        if (decision == ShoutRunnerSameDataCenterArrival.Decision.Success && TargetDataCenter is not null)
+        {
+            // The right World name is only arrival if the Data Center matches too.
+            if (string.IsNullOrWhiteSpace(sample.CurrentDataCenter)) decision = ShoutRunnerSameDataCenterArrival.Decision.Continue;
+            else if (!string.Equals(sample.CurrentDataCenter, TargetDataCenter, StringComparison.OrdinalIgnoreCase)) decision = ShoutRunnerSameDataCenterArrival.Decision.Failed;
+        }
         if (decision == ShoutRunnerSameDataCenterArrival.Decision.Continue)
         {
             candidateWorld = null;
@@ -109,11 +125,15 @@ public sealed class ShoutRunnerArrivalVerifier
     /// another World, or never left the World it started on.</summary>
     public string DescribeWrongWorld(string? observedWorld) => EndedOnOriginWorld
         ? $"Travel to {TargetWorld} ended back on {OriginWorld}: Lifestream finished without completing the World Visit."
-        : $"Arrived at {observedWorld} instead of {TargetWorld} (Lifestream finished travel on a different World; details in Diagnostics).";
+        : string.Equals(observedWorld, TargetWorld, StringComparison.OrdinalIgnoreCase)
+            ? $"Arrived at {observedWorld} on Data Center {DataCenterOf(observedWorld) ?? "(unknown)"} instead of {TargetDataCenter} (details in Diagnostics)."
+            : $"Arrived at {observedWorld} instead of {TargetWorld} (Lifestream finished travel on a different World; details in Diagnostics).";
+
+    private string? DataCenterOf(string? world) => world is not null && dataCenterByWorld.TryGetValue(world, out var dc) ? dc : null;
 
     /// <summary>Compact, operator-shareable history for Diagnostics, with no character names.</summary>
     public string DescribeHistory() =>
-        $"Worlds observed: {(worldsObserved.Count == 0 ? "(none)" : string.Join(" → ", worldsObserved))}; transitions: {TransitionsObserved}; " +
+        $"Worlds observed: {(worldsObserved.Count == 0 ? "(none)" : string.Join(" → ", worldsObserved.Select(w => DataCenterOf(w) is { } dc ? $"{w} [{dc}]" : w)))}; transitions: {TransitionsObserved}; " +
         $"Lifestream seen busy: {(LifestreamSeenBusy ? "yes" : "no")}; last Lifestream busy: {FormatBusy(LastLifestreamBusy)}; samples: {SamplesObserved}";
 
     private static string FormatBusy(bool? busy) => busy switch { true => "busy", false => "idle", null => "unknown" };

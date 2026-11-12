@@ -99,6 +99,7 @@ public sealed class ChangelogTests
 
         Assert.Equal(CsprojVersion("Version"), versions[0]);
         Assert.Equal(versions.OrderByDescending(v => Version.Parse(v)).ToArray(), versions);
+        Assert.Contains("0.3.12", versions);
         Assert.Contains("0.3.11", versions);
         Assert.Contains("0.3.10", versions);
         Assert.Contains("0.3.9", versions);
@@ -132,13 +133,13 @@ public sealed class ChangelogTests
     }
 
     [Fact]
-    public void Version_metadata_is_0_3_12()
+    public void Version_metadata_is_0_3_13()
     {
-        Assert.Equal("0.3.12", CsprojVersion("Version"));
-        Assert.Equal("0.3.12.0", CsprojVersion("AssemblyVersion"));
-        Assert.Equal("0.3.12.0", CsprojVersion("FileVersion"));
+        Assert.Equal("0.3.13", CsprojVersion("Version"));
+        Assert.Equal("0.3.13.0", CsprojVersion("AssemblyVersion"));
+        Assert.Equal("0.3.13.0", CsprojVersion("FileVersion"));
 
         using var manifest = JsonDocument.Parse(File.ReadAllText(RepoFile("src", "VenueOS.Plugin", "VenueOS.json")));
-        Assert.Equal("0.3.12.0", manifest.RootElement.GetProperty("AssemblyVersion").GetString());
+        Assert.Equal("0.3.13.0", manifest.RootElement.GetProperty("AssemblyVersion").GetString());
     }
 }

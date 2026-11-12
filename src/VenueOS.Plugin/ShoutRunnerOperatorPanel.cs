@@ -92,6 +92,8 @@ internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, Venue
         ImGui.Spacing();
         UiKit.BeginSectionCard("shoutrunner-datacenters", theme, "Data Centers");
         UiKit.InfoBanner(theme, "Fixed order", "Selected Data Centers are always visited in this order — Aether, Crystal, Dynamis, Primal — and cannot be reordered. Every World in a selected Data Center is visited automatically.");
+        // 0.3.13: operators must know up front that a multi-Data-Center route currently covers only the DC they are on.
+        UiKit.InfoBanner(theme, "Patch 7.58", "Travel to another Data Center now happens in game, and the installed Lifestream cannot do that yet. ShoutRunner covers the Data Center your character is on and reports the other selected Data Centers as skipped. It never logs you out to change Data Center.");
         ImGui.Spacing();
         foreach (var dc in ShoutRunnerCatalog.CanonicalDataCenterOrder)
         {

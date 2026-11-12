@@ -350,3 +350,8 @@ step can shift where Resume replays from") is fixed in 0.3.12. Resume now skips 
 never repeats a sent shout. Travel arrival verification, Lifestream thread affinity and a pre-shout World check were
 also changed. See [`SHOUTRUNNER_LIFESTREAM_COMPATIBILITY_AUDIT.md`](SHOUTRUNNER_LIFESTREAM_COMPATIBILITY_AUDIT.md).
 The Line 2 timing in §19 is unchanged.
+
+## 21. Follow-up (0.3.13)
+
+Patch 7.58 travel migration: see [`SHOUTRUNNER_PATCH_758_TRAVEL_MIGRATION.md`](SHOUTRUNNER_PATCH_758_TRAVEL_MIGRATION.md).
+Nothing in Part A (Add Aetheryte) or Part B / §19 (second line and its 2-second delay) changed.

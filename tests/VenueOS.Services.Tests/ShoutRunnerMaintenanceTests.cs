@@ -650,7 +650,7 @@ internal sealed class HarnessAutomation : IShoutRunnerAutomation
     /// <summary>The World the fake character is on: the target of the most recent travel request (0.3.12 pre-shout guard).</summary>
     public string? CurrentWorld;
     public Task<ShoutRunnerTransferOutcome> TravelToWorldAsync(string targetWorld, bool crossDataCenter, CancellationToken token) { CurrentWorld = targetWorld; return Task.FromResult(ShoutRunnerTransferOutcome.Success()); }
-    public Task<string?> TryGetCurrentWorldAsync(CancellationToken token) => Task.FromResult(CurrentWorld);
+    public Task<ShoutRunnerObservedLocation?> TryGetCurrentLocationAsync(CancellationToken token) => Task.FromResult(CurrentWorld is null ? null : new ShoutRunnerObservedLocation(CurrentWorld, ShoutRunnerCatalog.DataCenterFor(CurrentWorld)));
     public Task<string?> TryGetCurrentPlaceNameAsync(CancellationToken token) => Task.FromResult<string?>(null);
     public Task<ShoutRunnerTeleportOutcome> TeleportToDestinationAsync(string destinationName, CancellationToken token) => OnTeleport(destinationName, token);
 }

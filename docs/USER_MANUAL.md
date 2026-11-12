@@ -1,6 +1,6 @@
 # VenueOS User Manual
 
-**Current version:** 0.3.12
+**Current version:** 0.3.13
 **What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, live host trivia, Bingo, raffles, tournament brackets, block-letter text composition, timed giveaways, extended macros, and manual Shout announcements.
 **Supported environment:** Windows FFXIV with Dalamud installed (API level 15). VenueOS is unofficial, third-party, and not affiliated with Square Enix or the Dalamud/XIVLauncher project.
 
@@ -170,23 +170,32 @@ Status values you'll see: Stopped, Faulted, Recovering, Running, Waiting for nex
 
 Within a World, ShoutRunner checks your character's actual current location; if it matches one of your configured destinations, it starts there (no teleport needed) and works outward — forward through the rest of the list, or backward if you happened to be at the last one. If your current location can't be matched, it continues in whichever direction it was already alternating, which is what gives the route its "ping-pong" pattern across Worlds. Every configured destination is visited exactly once per World.
 
-Moving between Worlds in the same Data Center is a same-Data-Center transfer; moving to a different Data Center is a cross-Data-Center transfer — both go through Lifestream.
+Moving between Worlds in the same Data Center is a World Visit through Lifestream.
 
-**Arrival is always verified (0.3.12).** A World only counts as reached once your character's own current World matches it, stays settled briefly, and Lifestream reports it has finished. Lifestream accepting the command is not treated as arrival. Just before each shout, ShoutRunner checks the World once more. If your character is somewhere else, that shout is not sent.
+**Other Data Centers since Patch 7.58 (VenueOS 0.3.13).** Patch 7.58 moved travel between Data Centers in the same region (for example Aether → Primal) into the game: it is now done from **Visit Another World Server** at an aetheryte, with a Data Center dropdown, and the old Data Center Travel from character select no longer allows it. The installed Lifestream (2.6.0.9, its newest release) still handles this travel by logging out, so ShoutRunner does not use it. Instead:
+- ShoutRunner runs the Data Center your character is on. Other selected Data Centers in the same region are listed in the terminal as *"<Data Center> — SKIPPED: travel to another Data Center now happens in game (Patch 7.58 World Visit)…"*.
+- ShoutRunner never logs you out, never goes to character select, and never sends you home to change Data Center.
+- To cover another Data Center, travel there yourself (Visit Another World Server → pick the Data Center and World) and start the run again.
+- Travel from another region (for example from Oceania into North America) still uses Data Center Travel, which the game still uses for that.
+
+Data Centers stay separate in your route settings: your selection and order are unchanged, so once supported travel exists, those Data Centers are included again.
+
+**Arrival is always verified (0.3.12; Data Center added in 0.3.13).** A World only counts as reached once your character's own current World and Data Center match it, stay settled briefly, and Lifestream reports it has finished. Lifestream accepting the command is not treated as arrival. Just before each shout, ShoutRunner checks the World and Data Center once more. If your character is somewhere else, that shout is not sent.
 
 **Example:** select only **Aether**, keep the default three destinations. ShoutRunner will visit every World in Aether, and at each one walk Ul'dah → New Gridania → Limsa Lominsa Lower Decks (or the reverse, alternating per World), shouting your message at each stop, with your configured delay between actions.
 
 ### When something goes wrong
 
 - **World congested twice in a row:** that World is skipped; the route continues to the next World.
-- **Destination Data Center unreachable** (e.g. stuck at character select mid-transfer): the rest of that Data Center is skipped and the route moves to the next selected Data Center — *if* recovery to a playable state succeeds. If recovery itself fails, the whole run stops (Faulted).
-- **"Arrived at <World> instead of <World>"** — Lifestream finished its travel on a different World than the one requested (or *"Travel to <World> ended back on <World>"* if the character never left). The run stops (Faulted) so nothing is shouted in the wrong place. Your progress is kept: **Resume Run** travels to the World it was trying to reach and continues from there. Before 0.3.12 a single momentary reading could trigger this. ShoutRunner now waits a few seconds for a stable result, so a retry Lifestream is still performing on its own no longer stops the run.
+- **Another Data Center in your region:** skipped as a whole, with the Patch 7.58 message above. This is the only case where a whole Data Center is skipped because of one check: every World in it needs the same unsupported travel.
+- **Destination Data Center unreachable during cross-region Data Center Travel** (e.g. stuck at character select mid-transfer): the rest of that Data Center is skipped and the route moves to the next selected Data Center — *if* recovery to a playable state succeeds. If recovery itself fails, the whole run stops (Faulted).
+- **"<World> — SKIPPED: Arrived at <World> instead of <World>"** — Lifestream finished its travel on a different World (or Data Center) than the one requested. If the character never left, the message reads *"Travel to <World> ended back on <World>"*, which is what happens when the World can't be selected, for example because it is congested. Nothing is shouted there, that World is skipped, and the route continues with the next World of the same Data Center (0.3.13; before, the whole run stopped). If **two transfers in a row** end on the wrong World, the run stops (Faulted) so you can check Lifestream; your progress is kept and **Resume Run** retries the World it stopped at. ShoutRunner waits a few seconds for a stable result before deciding, so a retry Lifestream is still performing on its own does not count.
 - **"Lifestream did not start travel to <World>…"** — Lifestream did not accept the request (nothing happened within about 10 seconds, or 15 for a Data Center change). Check Lifestream's own on-screen notification: for example "Another task is in progress", a Travel Block for this character, or Data Center travel being turned off in Lifestream's settings. The run stops instead of waiting several minutes.
-- **"Shout at <destination> withheld…"** — just before shouting, the character was not on the World that destination belongs to (for example after travelling manually during a run). Nothing was sent. The run stops and can be resumed.
+- **"Shout at <destination> withheld…"** — just before shouting, the character was not on the World or Data Center that destination belongs to (for example after travelling manually during a run). Nothing was sent. The run stops and can be resumed.
 - **"<World> — SKIPPED: could not determine same-Data-Center vs cross-Data-Center travel"** — Lifestream could not confirm that it can reach that World from where you are. The World is skipped and the route continues.
 - ShoutRunner does not check whether Lifestream is installed before letting you press Start — if Lifestream isn't available, you'll see a generic failure/fault message rather than a dedicated "Lifestream not found" warning. Lifestream is required for any world travel to work.
 
-**Reporting a travel problem.** Every travel failure also writes one detailed line to **Settings → Diagnostics**. It includes the requested World and its World id, the World actually observed (with id and Data Center), every World seen during the attempt, whether Lifestream was busy, and how far the saved checkpoint had got. Dalamud's log (`/xllog`) has matching lines starting with `ShoutRunner transfer #`. If a wrong-World problem happens again, use **Copy Terminal** and copy the Diagnostics entry, then send both together with your Lifestream version. Neither contains character names.
+**Reporting a travel problem.** Every travel failure also writes one detailed line to **Settings → Diagnostics**. It includes the requested World and Data Center with their ids, the transfer method, your Lifestream version, the World and Data Center actually observed, every World seen during the attempt, whether Lifestream was busy, and how far the saved checkpoint had got. Dalamud's log (`/xllog`) has matching lines starting with `ShoutRunner transfer #`. If a wrong-World problem happens again, use **Copy Terminal** and copy the Diagnostics entry, then send both together with your Lifestream version. Neither contains character names.
 
 ### Terminal
 

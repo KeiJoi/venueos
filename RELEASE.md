@@ -1,6 +1,26 @@
-# VenueOS 0.3.12 release
+# VenueOS 0.3.13 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.13 — ShoutRunner Patch 7.58 Travel Migration
+
+A ShoutRunner compatibility release for **Patch 7.58** (10 November 2026), which moved travel between logical Data Centers inside North America and inside Europe from Data Center Travel (character select) to the in-game **Visit Another World Server** window, with a new Data Center dropdown. Automated validation is complete (full suite 1518 / 1518, Debug and Release builds with 0 warnings / 0 errors). **Live QA: Pending — owner unavailable; release authorized based on automated verification.** Real-world Patch 7.58 cross-data-center travel verification remains pending.
+
+### Compatibility decision: partial (B)
+
+- **Same Data Center:** World Visit through Lifestream `/li`, unchanged, with 0.3.12's verified arrival plus Data Center verification.
+- **Another Data Center in the same region:** **not available.** Lifestream's newest release (2.6.0.9, 16 October 2026, before 7.58) still sends this travel through its logout → character select → Data Center Travel path, which 7.58 no longer allows. Lifestream has no in-game Data Center selection, and the game structs (FFXIVClientStructs' 7.58 update) document no interface for the new dropdown. VenueOS refuses this travel instead of logging the character out, and skips that Data Center with an explicit reason.
+- **Another region (e.g. Oceania → NA):** Data Center Travel through Lifestream, still the official method (unchanged, unverified live).
+
+### ShoutRunner
+
+- **No logout for Data Center changes.** Travel capability is now decided from game data (each World's logical Data Center and region). A guard immediately before every `/li` refuses any target in another logical Data Center of the current region. There are no Home World detours.
+- **Data Centers stay distinct.** The route catalog, selection and fixed order are unchanged. A Data Center is skipped as a whole only when its travel capability is unsupported. One congested, unavailable or wrong World no longer ends the run or skips its Data Center: that World is skipped and the route continues. Two wrong arrivals in a row stop the run (resumable).
+- **World and Data Center verified** at arrival and again before every shout.
+- **Diagnostics** add requested and observed Data Center (with ids), transfer method, capability result and the installed Lifestream version. The Data Centers card in Settings explains the 7.58 limitation.
+- **Unchanged:** route order, teleports, congestion two-strike skip, Stop/Resume/recovery, Line 1/Line 2 timing.
+
+Report: `docs/SHOUTRUNNER_PATCH_758_TRAVEL_MIGRATION.md`.
 
 ## 0.3.12 — ShoutRunner Travel Reliability
 

@@ -2,6 +2,13 @@
 
 A short summary of each VenueOS release. Detailed notes are in `RELEASE.md`, and full investigation reports are under `docs/`. Dates are release dates (UTC). Entries before 0.3.10 were reconstructed from the repository's tags, GitHub Releases, `RELEASE.md` and release commits.
 
+## 0.3.13 — 2026-11-12
+
+- **ShoutRunner (Patch 7.58):** travel between Data Centers in the same region (for example Aether → Primal) now happens in game through Visit Another World Server. The installed Lifestream still does it by logging out, so ShoutRunner no longer uses it: it runs the Data Center your character is on and reports other selected Data Centers in the region as skipped. It never logs you out, goes to character select or sends you home to change Data Center.
+- **ShoutRunner:** a World that ends in the wrong place (a different World, or back where you started, for example because it was congested) is now skipped and the route continues with the next World. Only two wrong arrivals in a row stop the run.
+- **ShoutRunner:** arrival and the check before every shout now verify the Data Center as well as the World.
+- **ShoutRunner:** diagnostics now include the requested and observed Data Center, the transfer method and your Lifestream version. The Data Centers card in Settings explains the Patch 7.58 limitation.
+
 ## 0.3.12 — 2026-11-11
 
 - **ShoutRunner:** a World now only counts as reached once your character's own current World matches it, stays settled, and Lifestream reports it has finished. One momentary reading can no longer stop the run as *"Arrived at X instead of Y"* while Lifestream is still retrying a World Visit on its own. A genuine wrong-World arrival still stops the run, and nothing is shouted there.

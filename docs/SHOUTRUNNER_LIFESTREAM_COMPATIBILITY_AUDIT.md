@@ -266,3 +266,20 @@ from VenueOS.
 
 Release artifact details (ZIP size, SHA-256, GitHub Release, `repo.json`) are recorded in the 0.3.12 publication
 commit message. The ZIP is built from the source release commit, so they cannot be part of it.
+
+---
+
+## Addendum — subsequent investigation (VenueOS 0.3.13, Patch 7.58)
+
+This report was written against pre-7.58 Lifestream source and did not account for Patch 7.58 (live 10 November
+2026). Its findings above are kept as originally written. A follow-up investigation,
+[`SHOUTRUNNER_PATCH_758_TRAVEL_MIGRATION.md`](SHOUTRUNNER_PATCH_758_TRAVEL_MIGRATION.md), corrects and extends them:
+
+- §4 row 11 ("Cross-DC … `CanVisitCrossDC` semantics are unchanged") is still literally true, but under 7.58 a
+  `CanVisitCrossDC` answer for another NA/EU logical DC leads to Data Center Travel the game no longer allows. VenueOS
+  0.3.12 sent such travel down that path. Fixed in 0.3.13 (migration report M1/M2).
+- L1 (index-based World Visit selection) becomes **more likely** as the Jenova cause: the incident very probably
+  happened on the 7.58 client, whose World Visit window gained a Data Center dropdown that Lifestream predates. It is
+  still unverified (migration report §6).
+- L3 (a wrong-World arrival faults the run) is changed by product requirement in 0.3.13: the World is skipped and the
+  route continues, and two consecutive wrong arrivals fault the run.

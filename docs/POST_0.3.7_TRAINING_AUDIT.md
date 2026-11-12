@@ -66,5 +66,13 @@ Test count at release: 1451 / 1451 (Core 69, Venues 23, Services 1359).
 
 Test count at release: 1492 / 1492 (Core 69, Venues 23, Services 1400).
 
+## Patch 7.58 migration — shipped in VenueOS 0.3.13
+
+| # | Report | Module | Status | Report |
+|---|---|---|---|---|
+| 14 | Patch 7.58 moved travel between logical Data Centers in a region into the in-game World Visit window (Data Center dropdown); the owner saw "must log out" errors and unnecessary trips home. | ShoutRunner | **IMPLEMENTED (partial compatibility) — Live QA pending (owner unavailable; release authorized based on automated verification)**. Lifestream 2.6.0.9 (newest) predates 7.58 and only offers obsolete logout-based Data Center Travel for this, so VenueOS refuses it, never logs out, and skips the unsupported Data Center with a reason. Same-DC World Visit is kept, with Data Center verification; one bad World is skipped instead of ending the run. In-game cross-DC automation is blocked on an external dependency. | [`SHOUTRUNNER_PATCH_758_TRAVEL_MIGRATION.md`](SHOUTRUNNER_PATCH_758_TRAVEL_MIGRATION.md) |
+
+Test count at release: 1518 / 1518 (Core 69, Venues 23, Services 1426).
+
 Rules for this batch (historical — they governed the work-package phase, before the release was requested): no version bump, packaging, commit, push, tag, GitHub Release, or `repo.json` change until the
 combined release is explicitly requested. Donor/backend repositories are never touched from this ledger's work — except WP2, where the owner explicitly authorised edits (working tree only, never committed/pushed/deployed) to the Bingo backend/web repo and the TournamentControl backend; the owner handles their commits, pushes, releases, Render deployment and environment variables.

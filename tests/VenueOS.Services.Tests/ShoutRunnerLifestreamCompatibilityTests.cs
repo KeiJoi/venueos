@@ -11,7 +11,7 @@ namespace VenueOS.Services.Tests;
 /// <see cref="ShoutRunnerService"/> runs against a fake automation layer, the real <see cref="ChatCommandService"/>
 /// and a hand-moved clock. These tests prove the VenueOS-side logic only. They do not prove anything about real FFXIV
 /// or Lifestream travel, which needs live QA.</summary>
-public sealed class ShoutRunnerLifestreamCompatibilityTests
+public sealed partial class ShoutRunnerLifestreamCompatibilityTests
 {
     private const string Uldah = "Ul'dah - Steps of Nald";
     private const string Gridania = "New Gridania";
@@ -211,43 +211,43 @@ public sealed class ShoutRunnerLifestreamCompatibilityTests
     // Service-level scenarios (real ShoutRunnerService).
     // =====================================================================================================
 
+    /// <summary>The reported sequence. 0.3.12 faulted the run at Jenova. Since 0.3.13 (product requirement: one failed
+    /// World must not end the route) Cactuar is skipped and the route continues. The safety assertions are unchanged:
+    /// nothing is announced on the wrong World, the diagnostics name the observed Worlds, and the checkpoint and Stop
+    /// behave as before.</summary>
     [Fact]
-    public void Exact_reported_sequence_Adamantoise_completed_Cactuar_requested_Jenova_observed_stop_recover_resume_Cactuar_stop()
+    public void Exact_reported_sequence_Adamantoise_completed_Cactuar_requested_Jenova_observed_Cactuar_skipped_route_continues_stop()
     {
         var rig = new Rig();
-        rig.Automation.Travel = (target, _) => target == "Cactuar"
-            ? SimulatedLifestreamTravel(rig.Automation, target, "Jenova")
-            : rig.Automation.ArriveAt(target);
+        var faerie = new TaskCompletionSource<ShoutRunnerTransferOutcome>();
+        rig.Automation.Travel = (target, token) => target switch
+        {
+            "Cactuar" => SimulatedLifestreamTravel(rig.Automation, target, "Jenova"),
+            "Faerie" => faerie.Task.WaitAsync(token),          // left in flight so Stop lands mid-travel
+            _ => rig.Automation.ArriveAt(target),
+        };
         rig.Service.Start();
-        rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Faulted);
+        rig.PumpUntil(() => rig.Automation.TravelRequests.Contains("Faerie"));
 
         var text = rig.Texts();
         Assert.Contains($"{Gridania} — SHOUT SENT.", text);
         Assert.Contains($"{Limsa} — SHOUT SENT.", text);
         Assert.Contains("Adamantoise — completed.", text);
         Assert.Contains("Cactuar — starting.", text);
-        Assert.Contains(text, t => t.StartsWith("RUN 1 stopped — Arrived at Jenova instead of Cactuar", StringComparison.Ordinal));
+        Assert.Contains(text, t => t.StartsWith("Cactuar — SKIPPED: Arrived at Jenova instead of Cactuar", StringComparison.Ordinal));
+        Assert.Contains("Faerie — starting.", text);
+        Assert.DoesNotContain(text, t => t.Contains("stopped —"));
 
         // No announcement at the wrong destination: every /shout so far was sent on Adamantoise.
         Assert.Equal(3, rig.Sent.Count);
         Assert.All(rig.Sent, s => Assert.Equal("Adamantoise", s.World));
+        Assert.Contains(rig.Diagnostics.Capture().RecentErrors, e => e.Message.Contains("transfer WrongDestination") && e.Message.Contains("Worlds observed: Adamantoise → Jenova") && e.Message.Contains("checkpoint: Aether/Cactuar"));
 
-        // The wrong-world fault keeps a checkpoint that names Cactuar, with nothing completed there.
-        Assert.Equal("Cactuar", rig.Store.Current!.CurrentWorld);
+        // The checkpoint has moved on to Faerie, with nothing completed there; Cactuar is behind the cursor.
+        Assert.Equal("Faerie", rig.Store.Current!.CurrentWorld);
         Assert.Empty(rig.Store.Current.CompletedDestinationsInCurrentWorld);
-        Assert.Contains(rig.Diagnostics.Capture().RecentErrors, e => e.Message.Contains("transfer Failed") && e.Message.Contains("Worlds observed: Adamantoise → Jenova") && e.Message.Contains("checkpoint: Aether/Cactuar"));
-
-        // Recover → resumes Cactuar (never Adamantoise again, never the stale Jenova). The resumed travel is left in
-        // flight so the operator's Stop lands mid-travel, as in the report.
-        rig.Automation.TravelRequests.Clear();
-        rig.Automation.Travel = (_, token) => new TaskCompletionSource<ShoutRunnerTransferOutcome>().Task.WaitAsync(token);
-        Assert.Equal(ShoutRunnerResumeResult.Resumed, rig.Service.Resume());
-        Assert.Contains("Recovered interrupted RUN 1.", rig.Texts());
-        Assert.Contains("Cactuar — resuming.", rig.Texts());
-        rig.PumpUntil(() => rig.Automation.TravelRequests.Count > 0);
-        Assert.Equal(["Cactuar"], rig.Automation.TravelRequests);
-
         Assert.Equal(ShoutRunnerState.TravelingWorld, rig.Service.State);
+
         rig.Service.Stop();
         rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Stopped);
         Assert.Contains("Stop requested.", rig.Texts());
@@ -255,22 +255,57 @@ public sealed class ShoutRunnerLifestreamCompatibilityTests
         Assert.Equal(3, rig.Sent.Count);
     }
 
+    /// <summary>The report's "recover → resume" half, under 0.3.13 rules: a crash after the wrong-World skip resumes at the
+    /// unfinished World (Faerie), never at the skipped Cactuar and never on Jenova.</summary>
     [Fact]
-    public void After_a_wrong_world_fault_Resume_completes_Cactuar_and_continues_to_the_next_world()
+    public void Crash_after_the_Jenova_skip_resumes_at_the_next_unfinished_world()
     {
         var rig = new Rig();
-        var cactuarAttempts = 0;
-        rig.Automation.Travel = (target, _) => target == "Cactuar" && cactuarAttempts++ == 0
-            ? SimulatedLifestreamTravel(rig.Automation, target, "Jenova")
-            : rig.Automation.ArriveAt(target);
+        var faerie = new TaskCompletionSource<ShoutRunnerTransferOutcome>();
+        rig.Automation.Travel = (target, token) => target switch
+        {
+            "Cactuar" => SimulatedLifestreamTravel(rig.Automation, target, "Jenova"),
+            "Faerie" => faerie.Task,
+            _ => rig.Automation.ArriveAt(target),
+        };
+        rig.Service.Start();
+        rig.PumpUntil(() => rig.Automation.TravelRequests.Contains("Faerie"));
+
+        var rig2 = rig.Restart();
+        rig2.Automation.CurrentWorld = "Jenova";
+        Assert.Equal("Faerie", rig2.Service.RecoveredSummary!.World);
+        Assert.Equal(ShoutRunnerResumeResult.Resumed, rig2.Service.Resume());
+        Assert.Contains("Faerie — resuming.", rig2.Texts());
+        rig2.PumpUntil(() => rig2.Sent.Count == 3);
+        Assert.All(rig2.Sent, s => Assert.Equal("Faerie", s.World));
+        Assert.Equal("Faerie", rig2.Automation.TravelRequests[0]);
+        Assert.DoesNotContain("Cactuar", rig2.Automation.TravelRequests);
+    }
+
+    /// <summary>0.3.12 version: one wrong arrival faulted the run. Since 0.3.13 the fault needs two consecutive wrong
+    /// arrivals (Cactuar, then Faerie), and Resume retries the World the run stopped at.</summary>
+    [Fact]
+    public void After_a_wrong_world_fault_Resume_retries_the_world_it_stopped_at_and_continues()
+    {
+        var rig = new Rig();
+        var faerieAttempts = 0;
+        rig.Automation.Travel = (target, _) => target switch
+        {
+            "Cactuar" => SimulatedLifestreamTravel(rig.Automation, target, "Jenova"),
+            "Faerie" when faerieAttempts++ == 0 => SimulatedLifestreamTravel(rig.Automation, target, "Jenova"),
+            _ => rig.Automation.ArriveAt(target),
+        };
         rig.Service.Start();
         rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Faulted);
+        Assert.Contains(rig.Texts(), t => t.StartsWith("RUN 1 stopped — Travel to Faerie ended back on Jenova", StringComparison.Ordinal) && t.Contains("2 transfers in a row"));
+        Assert.Equal("Faerie", rig.Store.Current!.CurrentWorld);
 
         rig.Service.Resume();
-        rig.PumpUntil(() => rig.Sent.Count(s => s.World == "Faerie") == 3);
+        rig.PumpUntil(() => rig.Sent.Count(s => s.World == "Gilgamesh") == 3);
 
         Assert.Equal(3, rig.Sent.Count(s => s.World == "Adamantoise"));
-        Assert.Equal(3, rig.Sent.Count(s => s.World == "Cactuar"));
+        Assert.Equal(0, rig.Sent.Count(s => s.World == "Cactuar"));   // skipped, behind the cursor
+        Assert.Equal(3, rig.Sent.Count(s => s.World == "Faerie"));
         Assert.DoesNotContain(rig.Sent, s => s.World == "Jenova");   // never announced on the wrong World
     }
 
@@ -481,19 +516,19 @@ public sealed class ShoutRunnerLifestreamCompatibilityTests
     public void Plugin_reload_during_recovery_offers_the_same_checkpoint_and_resumes_the_unfinished_world()
     {
         var rig = new Rig();
-        rig.Automation.Travel = (target, _) => target == "Cactuar"
+        rig.Automation.Travel = (target, _) => target is "Cactuar" or "Faerie"
             ? SimulatedLifestreamTravel(rig.Automation, target, "Jenova")
             : rig.Automation.ArriveAt(target);
         rig.Service.Start();
-        rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Faulted);
+        rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Faulted);   // second consecutive wrong arrival (0.3.13)
 
         var rig2 = rig.Restart();                                   // /xlreload
         Assert.True(rig2.Service.CanResume);
-        Assert.Equal("Cactuar", rig2.Service.RecoveredSummary!.World);
+        Assert.Equal("Faerie", rig2.Service.RecoveredSummary!.World);
         rig2.Service.Resume();
         rig2.PumpUntil(() => rig2.Sent.Count == 3);
-        Assert.All(rig2.Sent, s => Assert.Equal("Cactuar", s.World));
-        Assert.Equal("Cactuar", rig2.Automation.TravelRequests[0]);
+        Assert.All(rig2.Sent, s => Assert.Equal("Faerie", s.World));
+        Assert.Equal("Faerie", rig2.Automation.TravelRequests[0]);
     }
 
     [Fact]
@@ -559,7 +594,7 @@ public sealed class ShoutRunnerLifestreamCompatibilityTests
             var verdict = verifier.Observe(sample, T0.AddSeconds(at));
             if (verdict == ShoutRunnerArrivalVerifier.Verdict.Arrived) return Task.FromResult(ShoutRunnerTransferOutcome.Success(verifier.DescribeHistory()));
             if (verdict == ShoutRunnerArrivalVerifier.Verdict.WrongWorld)
-                return Task.FromResult(ShoutRunnerTransferOutcome.Failed(verifier.DescribeWrongWorld(sample.CurrentWorld), $"transfer (same-DC); requested {target}; {verifier.DescribeHistory()}"));
+                return Task.FromResult(ShoutRunnerTransferOutcome.WrongDestination(verifier.DescribeWrongWorld(sample.CurrentWorld), $"transfer (same-DC); requested {target}; {verifier.DescribeHistory()}"));
         }
 
         return Task.FromResult(ShoutRunnerTransferOutcome.Failed($"Same-Data-Center transfer to {target} timed out after 3 minutes."));
@@ -569,10 +604,12 @@ public sealed class ShoutRunnerLifestreamCompatibilityTests
     {
         public string? CurrentWorld = "Siren";
         public Func<string?>? CurrentWorldOverride;
+        public string? CurrentDataCenterOverride;
         public readonly List<string> TravelRequests = [];
         public readonly List<string> Teleports = [];
         public int LocateCount, AbortCount;
-        public Func<string, ShoutRunnerCrossDataCenterCheck> Classify = _ => ShoutRunnerCrossDataCenterCheck.SameDataCenter;
+        public Func<string, ShoutRunnerCrossDataCenterCheck>? Classify;
+        public readonly List<(string World, bool CrossDataCenter)> TravelMethods = [];
         public Func<string, CancellationToken, Task<ShoutRunnerTransferOutcome>> Travel;
         public Func<string, CancellationToken, Task<ShoutRunnerTeleportOutcome>> Teleport;
 
@@ -587,10 +624,15 @@ public sealed class ShoutRunnerLifestreamCompatibilityTests
         public void ResetForVenue() { }
         public void Abort() => AbortCount++;
         public Task<ShoutRunnerReadinessOutcome> EnsureReadyAsync(CancellationToken token) => Task.FromResult(ShoutRunnerReadinessOutcome.ReadyNow());
-        public Task<ShoutRunnerCrossDataCenterCheck> ClassifyTransferAsync(string targetWorld, CancellationToken token) => Task.FromResult(Classify(targetWorld));
-        public Task<ShoutRunnerTransferOutcome> TravelToWorldAsync(string targetWorld, bool crossDataCenter, CancellationToken token) { TravelRequests.Add(targetWorld); return Travel(targetWorld, token); }
+        public Task<ShoutRunnerCrossDataCenterCheck> ClassifyTransferAsync(string targetWorld, CancellationToken token) =>
+            Task.FromResult(Classify?.Invoke(targetWorld) ?? Patch758Classify(CurrentWorld, targetWorld));
+        public Task<ShoutRunnerTransferOutcome> TravelToWorldAsync(string targetWorld, bool crossDataCenter, CancellationToken token) { TravelRequests.Add(targetWorld); TravelMethods.Add((targetWorld, crossDataCenter)); return Travel(targetWorld, token); }
         public Task<string?> TryGetCurrentPlaceNameAsync(CancellationToken token) { LocateCount++; return Task.FromResult<string?>(null); }
-        public Task<string?> TryGetCurrentWorldAsync(CancellationToken token) => Task.FromResult(CurrentWorldOverride is null ? CurrentWorld : CurrentWorldOverride());
+        public Task<ShoutRunnerObservedLocation?> TryGetCurrentLocationAsync(CancellationToken token)
+        {
+            var world = CurrentWorldOverride is null ? CurrentWorld : CurrentWorldOverride();
+            return Task.FromResult(world is null ? null : new ShoutRunnerObservedLocation(world, CurrentDataCenterOverride ?? ShoutRunnerCatalog.DataCenterFor(world)));
+        }
         public Task<ShoutRunnerTeleportOutcome> TeleportToDestinationAsync(string destinationName, CancellationToken token) => Teleport(destinationName, token);
     }
 

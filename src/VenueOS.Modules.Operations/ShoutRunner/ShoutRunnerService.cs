@@ -73,7 +73,14 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     private Task<ShoutRunnerTeleportOutcome>? teleportTask;
     private Task<ShoutLineOutcome>? shoutTask;
     // 0.3.12 pre-shout guard: the World the character is actually on, read just before Line 1 is handed to chat.
-    private Task<string?>? shoutWorldCheckTask;
+    private Task<ShoutRunnerObservedLocation?>? shoutWorldCheckTask;
+    // 0.3.13: consecutive transfers that ended on the wrong World or Data Center. One is skipped and the route continues;
+    // reaching MaxConsecutiveWrongDestinations in a row faults the run, so a systematically misbehaving World selector
+    // cannot wander the route.
+    private int consecutiveWrongDestinations;
+
+    /// <summary>How many transfers in a row may end on the wrong World or Data Center before the run faults (0.3.13).</summary>
+    public const int MaxConsecutiveWrongDestinations = 2;
     private Task<ShoutRunnerReadinessOutcome>? stoppingTask;
 
     // The shout step's own sub-state: which of the (up to two) lines the in-flight shoutTask is for, and why a line
@@ -416,6 +423,7 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         // Start() used to reset these, so RUN 2's journal could silently still list RUN 1's already-resolved skips).
         activeRunId = Guid.NewGuid();
         activeSkippedDataCenters = [];
+        consecutiveWrongDestinations = 0;
         pendingResumedWorldSteps = null;
         terminal.Add(Event(ShoutRunnerEventSeverity.InProgress, $"RUN {RunNumber} started."));
         dataCenterIndex = -1;
@@ -520,6 +528,17 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         classifyTask = null;
         var dc = runConfig!.DataCentersInOrder[dataCenterIndex];
         var world = currentWorlds[worldIndex];
+        if (check == ShoutRunnerCrossDataCenterCheck.InGameDataCenterTravelUnsupported)
+        {
+            // 0.3.13 (Patch 7.58): every World of this logical Data Center needs the in-game Data Center dropdown, which
+            // nothing supported can drive yet, and Lifestream's own path for it is the obsolete logout-based Data Center
+            // Travel. That is a Data-Center-wide capability gap, not one World failing, so it is the one case that skips
+            // the whole Data Center, and no travel command is issued.
+            diagnostics.RecordFailure($"ShoutRunner RUN {RunNumber}: {dc} skipped at {world}: in-game travel to another logical Data Center (Patch 7.58) is not supported by the installed Lifestream; no travel command was issued.");
+            SkipRemainingDataCenter("travel to another Data Center now happens in game (Patch 7.58 World Visit), which the installed Lifestream cannot do yet. VenueOS did not log out or use the old Data Center Travel.");
+            return;
+        }
+
         if (check == ShoutRunnerCrossDataCenterCheck.Unknown)
         {
             // Familiarization report §9: the donor silently defaulted an unclassifiable transfer to same-Data-Center
@@ -544,8 +563,23 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         // so a report like "Arrived at Jenova instead of Cactuar" can be traced to its cause. The terminal stays readable.
         if (outcome.Result != ShoutRunnerTransferResult.Success)
             diagnostics.RecordFailure($"ShoutRunner RUN {RunNumber} {dc}/{world} (World {worldIndex + 1} of {currentWorlds.Count}) transfer {outcome.Result}: {outcome.Detail} | {outcome.Diagnostic ?? "no transfer diagnostics"} | checkpoint: {RecoveredJournal?.CurrentDataCenter ?? "-"}/{RecoveredJournal?.CurrentWorld ?? "-"}, {RecoveredJournal?.CompletedDestinationsInCurrentWorld.Count ?? 0} destination(s) completed there");
+        if (outcome.Result == ShoutRunnerTransferResult.Success) consecutiveWrongDestinations = 0;
         switch (outcome.Result)
         {
+            case ShoutRunnerTransferResult.WrongDestination:
+                // 0.3.13: the character is controllable on some other World. Nothing is announced there; the route skips
+                // this World (like a congested one) and continues. Reaching the consecutive limit faults the run.
+                consecutiveWrongDestinations++;
+                if (consecutiveWrongDestinations >= MaxConsecutiveWrongDestinations)
+                {
+                    EnterFaulted($"{outcome.Detail} {consecutiveWrongDestinations} transfers in a row ended on the wrong World, so the run stopped. Check Lifestream before resuming.");
+                    return;
+                }
+
+                currentDataCenterHadSkip = true;
+                terminal.Add(Event(ShoutRunnerEventSeverity.Failure, $"{world} — SKIPPED: {outcome.Detail}".Trim(), dc, world));
+                AdvanceToNextWorld();
+                return;
             case ShoutRunnerTransferResult.Success:
                 // Resume's one special case: a World that already has a persisted, partially-completed plan from
                 // before a crash replays its exact remaining steps (never re-detects location or re-plans) — see
@@ -632,17 +666,20 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     /// on the framework thread from the local player, before Line 1 is handed to chat. Travel success already
     /// verified the World, but the character can still be moved between arrival and the shout (manual travel,
     /// another plugin, a disconnect), and an announcement meant for one World must never be sent on another.</summary>
-    private void BeginShoutWorldCheck() => shoutWorldCheckTask = automation.TryGetCurrentWorldAsync(runCts!.Token);
+    private void BeginShoutWorldCheck() => shoutWorldCheckTask = automation.TryGetCurrentLocationAsync(runCts!.Token);
 
     /// <summary>Only a positive match lets the shout start. A different World, or a World that cannot be read at all,
     /// withholds the shout and faults the RUN. The recovery checkpoint is kept, so Resume continues from the same
     /// unfinished destination once the operator has checked where the character is.</summary>
     private void ProcessShoutWorldCheckCompletion()
     {
-        var observed = SafeResult(shoutWorldCheckTask!, (string?)null);
+        var observed = SafeResult(shoutWorldCheckTask!, (ShoutRunnerObservedLocation?)null);
         shoutWorldCheckTask = null;
         var expected = currentWorlds[worldIndex];
-        if (observed is not null && string.Equals(observed, expected, StringComparison.OrdinalIgnoreCase))
+        var expectedDc = runConfig!.DataCentersInOrder[dataCenterIndex];
+        var worldMatches = observed is not null && string.Equals(observed.World, expected, StringComparison.OrdinalIgnoreCase);
+        var dcMatches = observed?.DataCenter is { } observedDc && string.Equals(observedDc, expectedDc, StringComparison.OrdinalIgnoreCase);
+        if (worldMatches && dcMatches)
         {
             State = ShoutRunnerState.SendingShout;
             BeginShout();
@@ -650,10 +687,12 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         }
 
         var destination = currentSteps[stepIndex].Destination;
-        diagnostics.RecordFailure($"ShoutRunner RUN {RunNumber}: pre-shout World check failed at {destination} — expected {expected}, observed {observed ?? "(unknown)"}; no line was sent.");
+        diagnostics.RecordFailure($"ShoutRunner RUN {RunNumber}: pre-shout World check failed (World and Data Center) at {destination} — expected {expected} [{expectedDc}], observed {observed?.World ?? "(unknown)"} [{observed?.DataCenter ?? "unknown"}]; no line was sent.");
         EnterFaulted(observed is null
             ? $"Shout at {destination} withheld: the character's current World could not be confirmed (expected {expected})."
-            : $"Shout at {destination} withheld: the character is on {observed}, not {expected}.");
+            : !worldMatches
+                ? $"Shout at {destination} withheld: the character is on {observed.World}, not {expected}."
+                : $"Shout at {destination} withheld: the character's Data Center ({observed.DataCenter ?? "unknown"}) could not be confirmed as {expectedDc}.");
     }
 
     /// <summary>Starts a destination's shout with Line 1. The shout text is read live here — not from the RUN-start
@@ -877,6 +916,7 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         activeCompletedDestinationsInCurrentWorld = [.. journal.CompletedDestinationsInCurrentWorld];
         activeCurrentWorldPlan = journal.CurrentWorldPlan is null ? null : [.. journal.CurrentWorldPlan];
         pendingResumedWorldSteps = null;
+        consecutiveWrongDestinations = 0;
 
         automation.ResetForVenue();
         runCts?.Dispose();

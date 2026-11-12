@@ -40,8 +40,9 @@ public interface IShoutRunnerAutomation
 
     /// <summary>Drives Lifestream (<c>/li</c>) to <paramref name="targetWorld"/> and waits, internally and with a
     /// bounded timeout, for VERIFIED arrival (the local player's own current World equals the target, stably, with
-    /// Lifestream idle; see <see cref="ShoutRunnerArrivalVerifier"/>), a confirmed wrong-World arrival (returned as
-    /// <see cref="ShoutRunnerTransferResult.Failed"/>), Lifestream never accepting the request (also
+    /// Lifestream idle; see <see cref="ShoutRunnerArrivalVerifier"/>; 0.3.13: and the logical Data Center matches), a
+    /// confirmed wrong-World or wrong-Data-Center arrival (returned as <see cref="ShoutRunnerTransferResult.WrongDestination"/>
+    /// since 0.3.13), Lifestream never accepting the request (returned as
     /// <see cref="ShoutRunnerTransferResult.Failed"/>), a two-strike congestion skip, or (cross-Data-Center only) detection that the
     /// target Data Center is unreachable. For the Data-Center-unavailable case this method itself performs the full
     /// recovery sequence (abort Lifestream, dismiss transfer UI, confirm the same character is logged in and
@@ -49,6 +50,10 @@ public interface IShoutRunnerAutomation
     /// <see cref="ShoutRunnerTransferResult.DataCenterUnavailableSkip"/> — if that recovery itself cannot restore a
     /// playable state within its bounded timeout, this returns <see cref="ShoutRunnerTransferResult.Failed"/>
     /// instead, which the caller treats as a fatal recovery failure ending the entire automation.</summary>
+    /// <remarks>0.3.13 (Patch 7.58): <paramref name="crossDataCenter"/> true means cross-REGION Data Center Travel only.
+    /// The implementation must refuse, without issuing any travel command, a target in another logical Data Center of
+    /// the current region (<see cref="ShoutRunnerTravelClassification.WouldUseObsoleteDataCenterTravel"/>), because
+    /// Lifestream would send that through Data Center Travel, which the game no longer allows inside a region.</remarks>
     Task<ShoutRunnerTransferOutcome> TravelToWorldAsync(string targetWorld, bool crossDataCenter, CancellationToken token);
 
     /// <summary>Best-effort current-location lookup (attuned Aetheryte/zone name), for the caller to match
@@ -57,10 +62,11 @@ public interface IShoutRunnerAutomation
     /// determined; the planner's own documented fallback applies in that case.</summary>
     Task<string?> TryGetCurrentPlaceNameAsync(CancellationToken token);
 
-    /// <summary>The character's current World name, read on the framework thread from the local player, or null if
-    /// no character is present. Used as the last guard before every shout (0.3.12) so an announcement meant for one
-    /// World is never sent on another: for example after manual or external travel between arrival and the shout.</summary>
-    Task<string?> TryGetCurrentWorldAsync(CancellationToken token);
+    /// <summary>The character's current World and its logical Data Center, read on the framework thread from the local
+    /// player and the game's World sheet, or null if no character is present. Used as the last guard before every shout
+    /// (0.3.12: World; 0.3.13: World and Data Center) so an announcement meant for one destination is never sent on
+    /// another: for example after manual or external travel between arrival and the shout.</summary>
+    Task<ShoutRunnerObservedLocation?> TryGetCurrentLocationAsync(CancellationToken token);
 
     /// <summary>Teleports to an attuned Aetheryte matching <paramref name="destinationName"/> and waits, internally
     /// and with a bounded timeout, for the transition to actually begin and complete — never trusting a bare
