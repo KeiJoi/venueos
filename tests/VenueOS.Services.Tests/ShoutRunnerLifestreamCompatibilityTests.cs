@@ -170,21 +170,9 @@ public sealed partial class ShoutRunnerLifestreamCompatibilityTests
         Assert.Contains("last Lifestream busy: idle", text);
     }
 
-    // =====================================================================================================
-    // Transfer classification (pure): Lifestream CanVisitSameDC / CanVisitCrossDC.
-    // =====================================================================================================
-
-    [Theory]
-    [InlineData(true, false, ShoutRunnerCrossDataCenterCheck.SameDataCenter)]
-    [InlineData(false, true, ShoutRunnerCrossDataCenterCheck.CrossDataCenter)]
-    [InlineData(false, false, ShoutRunnerCrossDataCenterCheck.Unknown)]  // was silently SameDataCenter before 0.3.12
-    [InlineData(true, true, ShoutRunnerCrossDataCenterCheck.Unknown)]    // contradictory: never guess
-    [InlineData(null, true, ShoutRunnerCrossDataCenterCheck.Unknown)]
-    [InlineData(true, null, ShoutRunnerCrossDataCenterCheck.Unknown)]
-    [InlineData(false, null, ShoutRunnerCrossDataCenterCheck.Unknown)]
-    [InlineData(null, null, ShoutRunnerCrossDataCenterCheck.Unknown)]
-    public void Transfer_type_is_only_reported_when_Lifestream_positively_confirms_it(bool? sameDc, bool? crossDc, ShoutRunnerCrossDataCenterCheck expected) =>
-        Assert.Equal(expected, ShoutRunnerTransferClassification.Classify(sameDc, crossDc));
+    // Transfer classification: the 0.3.12 Lifestream CanVisitSameDC/CanVisitCrossDC rule and its 8 cases were removed in
+    // 0.3.14 together with the classifier itself (native travel no longer uses Lifestream; owner requirement). The
+    // replacement rule, from game data, is tested in ShoutRunnerPatch758TravelTests.
 
     // =====================================================================================================
     // Resume plan (pure).

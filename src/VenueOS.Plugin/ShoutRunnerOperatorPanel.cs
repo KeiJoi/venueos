@@ -12,7 +12,7 @@ namespace VenueOS.Plugin;
 /// §21/§33 (not grown into <c>NativeOperationsPanels.cs</c>). <c>Draw()</c> is deliberately compact: Shout Line 1 and
 /// the optional Shout Line 2, Status + Start/Stop, then the Run Terminal — no macro editor, no preset page, no giant
 /// settings copy (per the reconstruction brief's "SHOUTRUNNER LIVE MODULE UI").</summary>
-internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, VenueProfileService venues)
+internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, VenueProfileService venues, VenueOS.Plugin.Travel.NativeTravelQaPanel? nativeTravelQa = null)
 {
     private Guid bufferVenueId;
     private string shoutMessageBuffer = string.Empty;
@@ -92,8 +92,8 @@ internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, Venue
         ImGui.Spacing();
         UiKit.BeginSectionCard("shoutrunner-datacenters", theme, "Data Centers");
         UiKit.InfoBanner(theme, "Fixed order", "Selected Data Centers are always visited in this order — Aether, Crystal, Dynamis, Primal — and cannot be reordered. Every World in a selected Data Center is visited automatically.");
-        // 0.3.13: operators must know up front that a multi-Data-Center route currently covers only the DC they are on.
-        UiKit.InfoBanner(theme, "Patch 7.58", "Travel to another Data Center now happens in game, and the installed Lifestream cannot do that yet. ShoutRunner covers the Data Center your character is on and reports the other selected Data Centers as skipped. It never logs you out to change Data Center.");
+        // 0.3.14: native travel; the Data Center dropdown step stays off until it is verified live.
+        UiKit.InfoBanner(theme, "Travel (Patch 7.58)", "ShoutRunner travels with VenueOS's own World Visit (Lifestream is no longer used) and never logs you out. Moving to another Data Center uses the new Data Center selector in the World Visit window, which stays switched off until it has been verified in game: until then, other Data Centers are reported as skipped. A test switch is in Native Travel QA at the bottom of this page.");
         ImGui.Spacing();
         foreach (var dc in ShoutRunnerCatalog.CanonicalDataCenterOrder)
         {
@@ -104,6 +104,8 @@ internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, Venue
 
         ImGui.Spacing();
         DrawDestinationsEditor(theme, settings);
+        // 0.3.14: diagnostic tool for live native-travel QA, collapsed by default.
+        nativeTravelQa?.Draw();
     }
 
     private void DrawStatusAndControls(VenueTheme theme)

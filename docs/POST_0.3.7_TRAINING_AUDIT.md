@@ -74,5 +74,11 @@ Test count at release: 1492 / 1492 (Core 69, Venues 23, Services 1400).
 
 Test count at release: 1518 / 1518 (Core 69, Venues 23, Services 1426).
 
+## Native travel — VenueOS 0.3.14 (UNRELEASED QA build)
+
+| # | Request | Module | Status | Report |
+|---|---|---|---|---|
+| 15 | ShoutRunner should travel on its own (no Lifestream), across all NA Data Centers, using the Patch 7.58 World Visit Data Center selector. | ShoutRunner | **IMPLEMENTED — automated tests pass; LIVE QA PENDING (owner, next session); NOT RELEASED.** Native World Visit engine with verified confirmation; the Data Center selector step is gated off until live verification; Native Travel QA tool for the session. | [`SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md`](SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md), [`SHOUTRUNNER_NATIVE_TRAVEL_LIVE_QA.md`](SHOUTRUNNER_NATIVE_TRAVEL_LIVE_QA.md) |
+
 Rules for this batch (historical — they governed the work-package phase, before the release was requested): no version bump, packaging, commit, push, tag, GitHub Release, or `repo.json` change until the
 combined release is explicitly requested. Donor/backend repositories are never touched from this ledger's work — except WP2, where the owner explicitly authorised edits (working tree only, never committed/pushed/deployed) to the Bingo backend/web repo and the TournamentControl backend; the owner handles their commits, pushes, releases, Render deployment and environment variables.

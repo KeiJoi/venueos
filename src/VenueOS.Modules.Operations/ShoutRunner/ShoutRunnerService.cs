@@ -528,14 +528,13 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         classifyTask = null;
         var dc = runConfig!.DataCentersInOrder[dataCenterIndex];
         var world = currentWorlds[worldIndex];
-        if (check == ShoutRunnerCrossDataCenterCheck.InGameDataCenterTravelUnsupported)
+        if (check == ShoutRunnerCrossDataCenterCheck.CrossRegionUnsupported)
         {
-            // 0.3.13 (Patch 7.58): every World of this logical Data Center needs the in-game Data Center dropdown, which
-            // nothing supported can drive yet, and Lifestream's own path for it is the obsolete logout-based Data Center
-            // Travel. That is a Data-Center-wide capability gap, not one World failing, so it is the one case that skips
-            // the whole Data Center, and no travel command is issued.
-            diagnostics.RecordFailure($"ShoutRunner RUN {RunNumber}: {dc} skipped at {world}: in-game travel to another logical Data Center (Patch 7.58) is not supported by the installed Lifestream; no travel command was issued.");
-            SkipRemainingDataCenter("travel to another Data Center now happens in game (Patch 7.58 World Visit), which the installed Lifestream cannot do yet. VenueOS did not log out or use the old Data Center Travel.");
+            // 0.3.14: the character is outside this Data Center's region (or outside its Home World's region). Reaching
+            // it needs Data Center Travel from character select, which VenueOS does not automate, and every World of this
+            // Data Center has the same problem, so the whole Data Center is skipped and no travel is attempted.
+            diagnostics.RecordFailure($"ShoutRunner RUN {RunNumber}: {dc} skipped at {world}: the character is outside this region; cross-region Data Center Travel is not automated; no travel was attempted.");
+            SkipRemainingDataCenter("this Data Center is in another region. Reaching it needs Data Center Travel from character select, which ShoutRunner does not automate; it never logs you out.");
             return;
         }
 

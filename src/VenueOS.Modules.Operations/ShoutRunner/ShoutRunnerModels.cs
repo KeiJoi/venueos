@@ -171,90 +171,63 @@ public static class ShoutRunnerShoutLines
 /// first stop, and only when the character's detected current location already matches it).</summary>
 public sealed record ShoutRunnerDestinationStep(string Destination, bool RequiresTeleport);
 
-/// <summary>How (and whether) VenueOS can travel to a World from where the character is now. Since 0.3.13 this
-/// reflects the Patch 7.58 rules (see <c>docs/SHOUTRUNNER_PATCH_758_TRAVEL_MIGRATION.md</c>), not just Lifestream's raw
-/// "same DC"/"cross DC" lists.</summary>
+/// <summary>How (and whether) ShoutRunner can travel to a World from where the character is now. Since 0.3.14 every
+/// supported case is native World Visit (<see cref="VenueOS.Modules.Operations.Travel.NativeTravelService"/>); Lifestream is
+/// no longer involved. History: 0.3.12 classified from Lifestream's lists; 0.3.13 from game data's <c>World.DataCenter</c>,
+/// which the 7.58 game data turned out to merge for every North American World (see
+/// <c>docs/SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md</c> §2).</summary>
 public enum ShoutRunnerCrossDataCenterCheck
 {
-    /// <summary>Same logical Data Center: in-game World Visit through Lifestream (<c>/li</c>).</summary>
+    /// <summary>Same logical Data Center: native World Visit.</summary>
     SameDataCenter,
-    /// <summary>Another REGION (physical data center, e.g. NA → Oceania): Data Center Travel through Lifestream
-    /// (logout → character select). Still the official method for cross-region travel after Patch 7.58.</summary>
+    /// <summary>Another logical Data Center of the same region: native World Visit with the Patch 7.58 Data Center dropdown.</summary>
     CrossDataCenter,
-    /// <summary>Not determinable, or Lifestream cannot confirm it can reach the World: an explicit, reported World skip.</summary>
+    /// <summary>Not determinable (the World or the character's location is not in game data, or the catalog disagrees
+    /// with game data): an explicit, reported World skip.</summary>
     Unknown,
-    /// <summary>Another logical Data Center in the SAME region (e.g. Aether → Primal). Since Patch 7.58 this travel is
-    /// done in game through the Visit Another World Server Data Center dropdown, and Data Center Travel no longer allows
-    /// it. No supported automation for it exists (Lifestream ≤ 2.6.0.9 only offers its obsolete logout-based Data
-    /// Center Travel, and the new dropdown has no documented interface), so the route skips that Data Center with an
-    /// explicit reason and never logs out.</summary>
-    InGameDataCenterTravelUnsupported,
+    /// <summary>The target is in another REGION, or the character is outside its Home World's region. That needs Data
+    /// Center Travel from character select, which VenueOS does not automate: the route skips that Data Center.</summary>
+    CrossRegionUnsupported,
 }
 
-/// <summary>Where a World sits, from the game's own World sheet: its logical Data Center and its region (the
-/// physical data center: <c>WorldDCGroupType.Region</c>).</summary>
-public sealed record ShoutRunnerWorldPlacement(string World, uint WorldId, string DataCenter, uint DataCenterId, uint RegionId);
-
-/// <summary>The character's observed location, read on the framework thread from the local player.</summary>
+/// <summary>The character's observed location, read on the framework thread: World name and its REAL logical Data Center
+/// (from <c>World.Unknown0</c>, see <see cref="VenueOS.Modules.Operations.Travel.TravelWorld"/>).</summary>
 public sealed record ShoutRunnerObservedLocation(string World, string? DataCenter);
 
-/// <summary>The Patch 7.58 travel-capability rule (0.3.13). The decision comes from game data (the logical DC and region
-/// of the current and target World); Lifestream's reachability answer only confirms it. This keeps three separate
-/// questions apart: logical routing (which DC/World is next, which is <see cref="ShoutRunnerCatalog"/>'s job), travel
-/// capability (this class), and execution (the automation layer).</summary>
+/// <summary>ShoutRunner's travel-capability rule (0.3.14), from game data only: logical routing (the catalog) stays
+/// separate from capability (this class) and execution (<see cref="VenueOS.Modules.Operations.Travel.NativeTravelService"/>).</summary>
 public static class ShoutRunnerTravelClassification
 {
-    /// <param name="canVisitSameDc">Lifestream <c>CanVisitSameDC</c>, or null if it could not be read.</param>
-    /// <param name="canVisitCrossDc">Lifestream <c>CanVisitCrossDC</c>, or null if it could not be read.</param>
-    /// <param name="current">The character's current World placement, or null if unknown.</param>
-    /// <param name="target">The target World's placement from game data, or null if the World is not in the game data.</param>
     /// <param name="catalogDataCenter">The Data Center <see cref="ShoutRunnerCatalog"/> files the target under. A
-    /// disagreement with the game data means the catalog is stale, so the result is Unknown rather than guessing.</param>
-    public static ShoutRunnerCrossDataCenterCheck Classify(bool? canVisitSameDc, bool? canVisitCrossDc, ShoutRunnerWorldPlacement? current, ShoutRunnerWorldPlacement? target, string? catalogDataCenter)
+    /// disagreement with the game data's logical Data Center means the catalog is stale, so the result is Unknown.</param>
+    public static ShoutRunnerCrossDataCenterCheck Classify(VenueOS.Modules.Operations.Travel.TravelWorld? current, VenueOS.Modules.Operations.Travel.TravelWorld? home, VenueOS.Modules.Operations.Travel.TravelWorld? target, string? catalogDataCenter)
     {
-        if (current is null || target is null) return ShoutRunnerCrossDataCenterCheck.Unknown;
-        if (catalogDataCenter is not null && !string.Equals(catalogDataCenter, target.DataCenter, StringComparison.OrdinalIgnoreCase)) return ShoutRunnerCrossDataCenterCheck.Unknown;
-
-        if (target.DataCenterId == current.DataCenterId)
-            return ShoutRunnerTransferClassification.Classify(canVisitSameDc, canVisitCrossDc) == ShoutRunnerCrossDataCenterCheck.SameDataCenter
-                ? ShoutRunnerCrossDataCenterCheck.SameDataCenter
-                : ShoutRunnerCrossDataCenterCheck.Unknown;
-
-        if (target.RegionId == current.RegionId) return ShoutRunnerCrossDataCenterCheck.InGameDataCenterTravelUnsupported;
-
-        return ShoutRunnerTransferClassification.Classify(canVisitSameDc, canVisitCrossDc) == ShoutRunnerCrossDataCenterCheck.CrossDataCenter
-            ? ShoutRunnerCrossDataCenterCheck.CrossDataCenter
-            : ShoutRunnerCrossDataCenterCheck.Unknown;
+        if (current is null || home is null || target is null) return ShoutRunnerCrossDataCenterCheck.Unknown;
+        if (catalogDataCenter is not null && !string.Equals(catalogDataCenter, target.LogicalDataCenter, StringComparison.OrdinalIgnoreCase)) return ShoutRunnerCrossDataCenterCheck.Unknown;
+        if (!VenueOS.Modules.Operations.Travel.NativeTravelPolicy.CanVisit(current, home, target)) return ShoutRunnerCrossDataCenterCheck.CrossRegionUnsupported;
+        return target.LogicalDataCenterId == current.LogicalDataCenterId ? ShoutRunnerCrossDataCenterCheck.SameDataCenter : ShoutRunnerCrossDataCenterCheck.CrossDataCenter;
     }
-
-    /// <summary>The travel-time guard (0.3.13). True when a <c>/li</c> to <paramref name="target"/> would make current
-    /// Lifestream take its obsolete Data Center Travel path (Home World detour, logout, character select) for travel
-    /// that Patch 7.58 moved in game: a different logical DC in the same region. The engine refuses to issue the
-    /// command in that case, whatever the earlier classification said.</summary>
-    public static bool WouldUseObsoleteDataCenterTravel(ShoutRunnerWorldPlacement current, ShoutRunnerWorldPlacement target) =>
-        target.DataCenterId != current.DataCenterId && target.RegionId == current.RegionId;
 }
 
-/// <summary>Lifestream's RAW reachability answer (0.3.12), used by <see cref="ShoutRunnerTravelClassification"/> as a
-/// confirmation since 0.3.13. Under Patch 7.58 a "cross DC" answer alone no longer names a travel method; see that
-/// class. Original 0.3.12 description: turns Lifestream's two reachability answers into a transfer type. In current Lifestream source
-/// (<c>IPC/IPCProvider.cs</c>), <c>CanVisitSameDC(world)</c> is "the World is in the character's CURRENT Data Center"
-/// and <c>CanVisitCrossDC(world)</c> is "the World is in another reachable Data Center". Both are plain list lookups,
-/// and the two lists never overlap. Before 0.3.12 only <c>CanVisitCrossDC</c> was asked, and <c>false</c> was taken
-/// to mean "same Data Center". But <c>false</c> also means "Lifestream does not know this World from here" (for
-/// example, its World lists are not built yet), so an unreachable World was silently sent down the same-DC path.
-/// Now a transfer type is only reported when Lifestream positively confirms it; anything else is
-/// <see cref="ShoutRunnerCrossDataCenterCheck.Unknown"/>, which the route treats as an explicit, reported skip.</summary>
-public static class ShoutRunnerTransferClassification
+/// <summary>Maps a native travel result onto ShoutRunner's existing route outcomes (0.3.14). World-level problems skip
+/// one World, Data-Center-wide ones skip the Data Center, and anything that leaves the UI or the character in an
+/// unverified state faults the run (resumable) instead of clicking on.</summary>
+public static class ShoutRunnerNativeTravelMapping
 {
-    /// <param name="canVisitSameDc">Lifestream's <c>CanVisitSameDC</c> answer, or null if the call failed.</param>
-    /// <param name="canVisitCrossDc">Lifestream's <c>CanVisitCrossDC</c> answer, or null if the call failed.</param>
-    public static ShoutRunnerCrossDataCenterCheck Classify(bool? canVisitSameDc, bool? canVisitCrossDc) => (canVisitSameDc, canVisitCrossDc) switch
+    public static ShoutRunnerTransferOutcome ToTransferOutcome(VenueOS.Modules.Operations.Travel.NativeTravelResult result)
     {
-        (true, false) => ShoutRunnerCrossDataCenterCheck.SameDataCenter,
-        (false, true) => ShoutRunnerCrossDataCenterCheck.CrossDataCenter,
-        _ => ShoutRunnerCrossDataCenterCheck.Unknown,
-    };
+        var detail = result.Detail;
+        var diagnostic = result.Diagnostic;
+        return result.Outcome switch
+        {
+            VenueOS.Modules.Operations.Travel.NativeTravelOutcome.Arrived or VenueOS.Modules.Operations.Travel.NativeTravelOutcome.AlreadyThere => ShoutRunnerTransferOutcome.Success(diagnostic),
+            VenueOS.Modules.Operations.Travel.NativeTravelOutcome.Congested => ShoutRunnerTransferOutcome.WorldCongested(detail, diagnostic),
+            VenueOS.Modules.Operations.Travel.NativeTravelOutcome.WorldUnavailable => ShoutRunnerTransferOutcome.WorldCongested(detail, diagnostic),
+            VenueOS.Modules.Operations.Travel.NativeTravelOutcome.DataCenterUnavailable or VenueOS.Modules.Operations.Travel.NativeTravelOutcome.Unsupported => ShoutRunnerTransferOutcome.DataCenterUnavailable(detail, diagnostic),
+            VenueOS.Modules.Operations.Travel.NativeTravelOutcome.WrongDestination or VenueOS.Modules.Operations.Travel.NativeTravelOutcome.NotStarted => ShoutRunnerTransferOutcome.WrongDestination(detail, diagnostic),
+            _ => ShoutRunnerTransferOutcome.Failed($"Native travel to {result.Target?.Name ?? "the World"} stopped: {result.Outcome} — {detail}", diagnostic),
+        };
+    }
 }
 
 /// <summary><see cref="WrongDestination"/> (0.3.13): travel finished, stably, somewhere other than the requested World or

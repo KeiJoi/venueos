@@ -216,3 +216,22 @@ If something goes wrong, send Copy Terminal, the Diagnostics entry, the `/xllog`
 Lifestream lines from that minute, and the Lifestream version (now also in the diagnostics).
 
 Release artifact details are recorded in the 0.3.13 publication commit message.
+
+---
+
+## Addendum — subsequent investigation (0.3.14, unreleased QA build)
+
+This report's findings above are kept as written. Later research (2026-11-11/12) corrects two of them; details are in
+[`SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md`](SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md) §2:
+
+- **`World.DataCenter` is merged on 7.58.** The installed 7.58 game data on the owner's PC lists every North American
+  World with `DataCenter = 4` (Aether); the real logical Data Center is `World.Unknown0`. 0.3.13's classifier therefore
+  saw every NA World as Aether. It failed safe: the catalog check skipped non-Aether Worlds, and the pre-shout guard
+  withheld (it read the merged value too). But the "Aether → Primal is same-region other-DC" classification in §4/§5
+  never happened in practice.
+- **M1's premise does not hold on 7.58 data.** Lifestream builds its lists from the same merged column, so it would
+  attempt a same-DC World Visit (index-based row selection on the new window), not logout-based Data Center Travel. The
+  owner's "must log out" errors remain unexplained by source.
+- §6 (Jenova): the new window and Lifestream's index-based selection remain the most likely explanation, still unverified.
+
+0.3.14 replaces Lifestream with native travel and the classifier with the logical-DC rule.

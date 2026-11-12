@@ -1,6 +1,20 @@
-# VenueOS 0.3.13 release
+# VenueOS 0.3.14 (UNRELEASED QA build)
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
+
+## 0.3.14 — Native World Visit & Data Center Travel (UNRELEASED QA BUILD)
+
+**Not released.** A local QA build (`release/qa/VenueOS-0.3.14-QA.zip`) for the owner's live test. There is no tag, GitHub Release or `repo.json` change. Automated validation is complete (full suite 1581 / 1581, Debug and Release builds with 0 warnings / 0 errors; 15 / 15 safety mutants killed; see `docs/SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md` §6). **Live QA: Pending — owner testing; publication requires separate authorization.**
+
+### ShoutRunner
+
+- **Native travel, no Lifestream.** A new reusable `NativeTravelService` drives the aetheryte → "Visit Another World Server" → World Visit window → verified confirmation → stable arrival flow. Every game access runs on the framework thread, one operation per client, with bounded timeouts.
+- **Safety.** OK is pressed only when the dialog's first line is exactly the game's "Travel to <World>?" template for the target and the game's own destination field agrees. World rows are chosen by the World their label names, never by position. Rows left over from the previous Data Center page are never used. Nothing is clicked unless the list's click event is registered to its expected owner.
+- **Patch 7.58 Data Centers.** Logical Data Center comes from `World.Unknown0`; 7.58 game data merges `World.DataCenter` to Aether for every NA World. The Data Center selector step is implemented but gated off until live verification (session-only QA switch).
+- **Route.** An unavailable World is skipped and its Data Center continues. A disabled Data Center or an unsupported combination (another region) skips the Data Center. Wrong arrivals keep the 0.3.13 skip-then-fault rule.
+- **Native Travel QA** diagnostic tool (Settings → Modules → ShoutRunner): single trips without announcements, read-only Inspect, Copy Diagnostics.
+
+Reports: `docs/SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md`, `docs/SHOUTRUNNER_NATIVE_TRAVEL_LIVE_QA.md`.
 
 ## 0.3.13 — ShoutRunner Patch 7.58 Travel Migration
 

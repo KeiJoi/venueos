@@ -31,29 +31,21 @@ public interface IShoutRunnerAutomation
     /// donor's <c>WaitUntilChatReadyAsync</c> (familiarization report §13).</summary>
     Task<ShoutRunnerReadinessOutcome> EnsureReadyAsync(CancellationToken token);
 
-    /// <summary>Whether transferring to <paramref name="targetWorld"/> from the character's current World is a
-    /// same-Data-Center or cross-Data-Center Lifestream operation. Returns
-    /// <see cref="ShoutRunnerCrossDataCenterCheck.Unknown"/> if Lifestream's own classification IPC call fails —
-    /// the caller must treat that as an explicit failure, never silently assume same-Data-Center the way the donor
-    /// did (familiarization report §9).</summary>
+    /// <summary>How travel to <paramref name="targetWorld"/> would work from the character's current World, from GAME
+    /// DATA (0.3.14: logical Data Center and region, see <see cref="ShoutRunnerTravelClassification"/>). Returns
+    /// <see cref="ShoutRunnerCrossDataCenterCheck.Unknown"/> when it cannot be determined; the caller treats that as an
+    /// explicit, reported skip, never as a guess.</summary>
     Task<ShoutRunnerCrossDataCenterCheck> ClassifyTransferAsync(string targetWorld, CancellationToken token);
 
-    /// <summary>Drives Lifestream (<c>/li</c>) to <paramref name="targetWorld"/> and waits, internally and with a
-    /// bounded timeout, for VERIFIED arrival (the local player's own current World equals the target, stably, with
-    /// Lifestream idle; see <see cref="ShoutRunnerArrivalVerifier"/>; 0.3.13: and the logical Data Center matches), a
-    /// confirmed wrong-World or wrong-Data-Center arrival (returned as <see cref="ShoutRunnerTransferResult.WrongDestination"/>
-    /// since 0.3.13), Lifestream never accepting the request (returned as
-    /// <see cref="ShoutRunnerTransferResult.Failed"/>), a two-strike congestion skip, or (cross-Data-Center only) detection that the
-    /// target Data Center is unreachable. For the Data-Center-unavailable case this method itself performs the full
-    /// recovery sequence (abort Lifestream, dismiss transfer UI, confirm the same character is logged in and
-    /// controllable again) before returning
-    /// <see cref="ShoutRunnerTransferResult.DataCenterUnavailableSkip"/> — if that recovery itself cannot restore a
-    /// playable state within its bounded timeout, this returns <see cref="ShoutRunnerTransferResult.Failed"/>
-    /// instead, which the caller treats as a fatal recovery failure ending the entire automation.</summary>
-    /// <remarks>0.3.13 (Patch 7.58): <paramref name="crossDataCenter"/> true means cross-REGION Data Center Travel only.
-    /// The implementation must refuse, without issuing any travel command, a target in another logical Data Center of
-    /// the current region (<see cref="ShoutRunnerTravelClassification.WouldUseObsoleteDataCenterTravel"/>), because
-    /// Lifestream would send that through Data Center Travel, which the game no longer allows inside a region.</remarks>
+    /// <summary>0.3.14: native World Visit to <paramref name="targetWorld"/> through
+    /// <see cref="VenueOS.Modules.Operations.Travel.NativeTravelService"/> (aetheryte → Visit Another World Server → Data
+    /// Center dropdown → World row → verified confirmation), waiting with bounded timeouts for VERIFIED arrival on the
+    /// target World and logical Data Center. The result is mapped by <see cref="ShoutRunnerNativeTravelMapping"/>: a
+    /// wrong destination is <see cref="ShoutRunnerTransferResult.WrongDestination"/>; an unavailable or congested World is
+    /// <see cref="ShoutRunnerTransferResult.WorldCongestedSkip"/>; an unavailable Data Center or an unsupported
+    /// combination is <see cref="ShoutRunnerTransferResult.DataCenterUnavailableSkip"/>; anything unverified is
+    /// <see cref="ShoutRunnerTransferResult.Failed"/>. No logout, character select, Home World detour or Lifestream call is
+    /// involved. <paramref name="crossDataCenter"/> is informational (the engine decides from the live window).</summary>
     Task<ShoutRunnerTransferOutcome> TravelToWorldAsync(string targetWorld, bool crossDataCenter, CancellationToken token);
 
     /// <summary>Best-effort current-location lookup (attuned Aetheryte/zone name), for the caller to match

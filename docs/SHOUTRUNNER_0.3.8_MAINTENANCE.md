@@ -355,3 +355,9 @@ The Line 2 timing in §19 is unchanged.
 
 Patch 7.58 travel migration: see [`SHOUTRUNNER_PATCH_758_TRAVEL_MIGRATION.md`](SHOUTRUNNER_PATCH_758_TRAVEL_MIGRATION.md).
 Nothing in Part A (Add Aetheryte) or Part B / §19 (second line and its 2-second delay) changed.
+
+## 22. Follow-up (0.3.14, unreleased QA build)
+
+Native World Visit / Data Center travel replaces Lifestream: see
+[`SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md`](SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md). Add Aetheryte (Part A) and the
+second line with its 2-second delay (Part B / §19) are unchanged.

@@ -1,61 +1,28 @@
 using VenueOS.Modules.Operations.ShoutRunner;
+using VenueOS.Modules.Operations.Travel;
 
 namespace VenueOS.Services.Tests;
 
-/// <summary>0.3.13 Patch 7.58 travel-migration tests (<c>docs/SHOUTRUNNER_PATCH_758_TRAVEL_MIGRATION.md</c>). These share
-/// the harness of the 0.3.12 compatibility tests. The fake's reachability answers are computed exactly as current
-/// Lifestream source defines them (<c>DataStore.BuildWorlds</c>: <c>CanVisitSameDC</c> = target in the character's
-/// current logical DC; <c>CanVisitCrossDC</c> = target in another logical DC of the home region, or Oceania), and are
-/// fed through the REAL <see cref="ShoutRunnerTravelClassification"/>. No Lifestream API is invented. Data Center and
-/// region ids below are test-local values, not game row ids.</summary>
+/// <summary>Patch 7.58 travel rules for ShoutRunner. History: 0.3.13 added these tests for "skip other Data Centers"
+/// (Lifestream could not do in-game Data Center travel); 0.3.14 replaces that with native World Visit across every
+/// logical Data Center of the region, so the expectations below changed by owner requirement. The safety assertions
+/// (no shout on a wrong World or Data Center, verified Data Center, bounded wrong-arrival skips, no repeats on Resume)
+/// are kept. Classification uses the REAL <see cref="ShoutRunnerTravelClassification"/> over a catalog whose logical Data
+/// Centers match the installed 7.58 game data (<see cref="TestTravelWorldCatalog"/>).</summary>
 public sealed partial class ShoutRunnerLifestreamCompatibilityTests
 {
-    private const uint RegionNorthAmerica = 2, RegionOceania = 4;
+    private static readonly TestTravelWorldCatalog Worlds = new();
 
-    private static readonly Dictionary<string, (uint Id, uint Region)> TestDataCenters = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["Aether"] = (4, RegionNorthAmerica),
-        ["Primal"] = (5, RegionNorthAmerica),
-        ["Crystal"] = (8, RegionNorthAmerica),
-        ["Dynamis"] = (11, RegionNorthAmerica),
-        ["Materia"] = (9, RegionOceania),
-    };
-
-    private static readonly string[] MateriaWorlds = ["Bismarck", "Ravana", "Sephirot", "Sophia", "Zurvan"];
-
-    private static string? TestDataCenterOf(string? world) =>
-        world is null ? null : MateriaWorlds.Contains(world, StringComparer.OrdinalIgnoreCase) ? "Materia" : ShoutRunnerCatalog.DataCenterFor(world);
-
-    /// <summary>A World's placement as the game's World sheet would report it (test-local ids).</summary>
-    internal static ShoutRunnerWorldPlacement? TestPlacement(string? world)
-    {
-        var dc = TestDataCenterOf(world);
-        if (world is null || dc is null) return null;
-        var (id, region) = TestDataCenters[dc];
-        return new ShoutRunnerWorldPlacement(world, (uint)Math.Abs(world.GetHashCode() % 1000) + 1, dc, id, region);
-    }
-
-    /// <summary>Lifestream's two lists, exactly as its source builds them (home region: North America).</summary>
-    private static (bool SameDc, bool CrossDc) LifestreamLists(ShoutRunnerWorldPlacement current, ShoutRunnerWorldPlacement target) =>
-        (target.DataCenterId == current.DataCenterId,
-         target.DataCenterId != current.DataCenterId && (target.RegionId == RegionNorthAmerica || target.RegionId == RegionOceania));
-
-    /// <summary>The fake engine's classification: Lifestream's real list semantics through the real 7.58 classifier.</summary>
-    private static ShoutRunnerCrossDataCenterCheck Patch758Classify(string? currentWorld, string targetWorld)
-    {
-        var current = TestPlacement(currentWorld);
-        var target = TestPlacement(targetWorld);
-        if (current is null || target is null) return ShoutRunnerTravelClassification.Classify(null, null, current, target, ShoutRunnerCatalog.DataCenterFor(targetWorld));
-        var (sameDc, crossDc) = LifestreamLists(current, target);
-        return ShoutRunnerTravelClassification.Classify(sameDc, crossDc, current, target, ShoutRunnerCatalog.DataCenterFor(targetWorld));
-    }
+    /// <summary>The fake engine's classification: the real rule, with an NA Home World (Cuchulainn) by default.</summary>
+    private static ShoutRunnerCrossDataCenterCheck Patch758Classify(string? currentWorld, string targetWorld, string home = "Cuchulainn") =>
+        ShoutRunnerTravelClassification.Classify(currentWorld is null ? null : Worlds.Resolve(currentWorld), Worlds.Resolve(home), Worlds.Resolve(targetWorld), ShoutRunnerCatalog.DataCenterFor(targetWorld));
 
     // =====================================================================================================
     // Capability rule (pure)
     // =====================================================================================================
 
     [Fact]
-    public void Same_logical_DC_World_Visit_is_supported()
+    public void Same_logical_DC_is_World_Visit()
     {
         Assert.Equal(ShoutRunnerCrossDataCenterCheck.SameDataCenter, Patch758Classify("Adamantoise", "Cactuar"));
         Assert.Equal(ShoutRunnerCrossDataCenterCheck.SameDataCenter, Patch758Classify("Balmung", "Zalera"));
@@ -65,59 +32,40 @@ public sealed partial class ShoutRunnerLifestreamCompatibilityTests
     [InlineData("Adamantoise", "Behemoth")]   // Aether → Primal
     [InlineData("Siren", "Balmung")]          // Aether → Crystal
     [InlineData("Ultros", "Cuchulainn")]      // Primal → Dynamis
-    [InlineData("Seraph", "Adamantoise")]     // Dynamis → Aether (a "guest to guest" or "guest to home" move under the old rules)
-    public void Another_logical_DC_in_the_same_region_is_the_7_58_in_game_travel_and_is_reported_unsupported(string from, string to)
+    [InlineData("Seraph", "Adamantoise")]     // Dynamis → Aether
+    public void Another_logical_DC_of_the_region_is_native_cross_DC_World_Visit(string from, string to) =>
+        Assert.Equal(ShoutRunnerCrossDataCenterCheck.CrossDataCenter, Patch758Classify(from, to));
+
+    [Fact]
+    public void Logical_DC_comes_from_the_real_logical_column_not_the_merged_DataCenter_column()
     {
-        // Lifestream answers CanVisitCrossDC = true here, which 0.3.12 turned into its logout-based Data Center Travel.
-        var current = TestPlacement(from)!;
-        var target = TestPlacement(to)!;
-        Assert.Equal((false, true), LifestreamLists(current, target));
-        Assert.Equal(ShoutRunnerCrossDataCenterCheck.InGameDataCenterTravelUnsupported, Patch758Classify(from, to));
-        Assert.True(ShoutRunnerTravelClassification.WouldUseObsoleteDataCenterTravel(current, target));
+        // In the installed 7.58 game data every NA World has DataCenter = 4 (Aether); only World.Unknown0 tells them apart.
+        // A World resolved with the merged value would look like the same DC; the real logical DC must decide.
+        var current = Worlds["Adamantoise"];
+        var mergedLookingTarget = Worlds["Behemoth"] with { LogicalDataCenterId = 4, LogicalDataCenter = "Aether" };
+        Assert.Equal(ShoutRunnerCrossDataCenterCheck.Unknown, ShoutRunnerTravelClassification.Classify(current, current, mergedLookingTarget, "Primal"));   // catalog disagrees → never guessed
+        Assert.Equal(ShoutRunnerCrossDataCenterCheck.CrossDataCenter, ShoutRunnerTravelClassification.Classify(current, current, Worlds["Behemoth"], "Primal"));
     }
 
     [Fact]
-    public void Same_region_other_DC_is_unsupported_whatever_Lifestream_answers()
+    public void Another_region_or_being_outside_the_home_region_is_unsupported()
     {
-        var current = TestPlacement("Adamantoise");
-        var target = TestPlacement("Behemoth");
-        foreach (bool? same in new bool?[] { true, false, null })
-            foreach (bool? cross in new bool?[] { true, false, null })
-                Assert.Equal(ShoutRunnerCrossDataCenterCheck.InGameDataCenterTravelUnsupported, ShoutRunnerTravelClassification.Classify(same, cross, current, target, "Primal"));
+        Assert.Equal(ShoutRunnerCrossDataCenterCheck.CrossRegionUnsupported, Patch758Classify("Ravana", "Adamantoise"));                  // visiting Oceania, NA home
+        Assert.Equal(ShoutRunnerCrossDataCenterCheck.CrossRegionUnsupported, Patch758Classify("Ravana", "Adamantoise", home: "Ravana"));  // OC character → NA
+        Assert.Equal(ShoutRunnerCrossDataCenterCheck.CrossRegionUnsupported, Patch758Classify("Adamantoise", "Ravana"));
     }
 
     [Fact]
-    public void Cross_region_travel_keeps_Data_Center_Travel_which_is_still_the_official_method()
+    public void Missing_data_or_a_stale_catalog_is_unknown()
     {
-        Assert.Equal(ShoutRunnerCrossDataCenterCheck.CrossDataCenter, Patch758Classify("Ravana", "Adamantoise"));
-        Assert.False(ShoutRunnerTravelClassification.WouldUseObsoleteDataCenterTravel(TestPlacement("Ravana")!, TestPlacement("Adamantoise")!));
-        // ...but only when Lifestream confirms it can reach the World.
-        Assert.Equal(ShoutRunnerCrossDataCenterCheck.Unknown, ShoutRunnerTravelClassification.Classify(false, false, TestPlacement("Ravana"), TestPlacement("Adamantoise"), "Aether"));
+        Assert.Equal(ShoutRunnerCrossDataCenterCheck.Unknown, ShoutRunnerTravelClassification.Classify(null, Worlds["Siren"], Worlds["Cactuar"], "Aether"));
+        Assert.Equal(ShoutRunnerCrossDataCenterCheck.Unknown, ShoutRunnerTravelClassification.Classify(Worlds["Siren"], null, Worlds["Cactuar"], "Aether"));
+        Assert.Equal(ShoutRunnerCrossDataCenterCheck.Unknown, ShoutRunnerTravelClassification.Classify(Worlds["Siren"], Worlds["Siren"], null, "Aether"));
+        Assert.Equal(ShoutRunnerCrossDataCenterCheck.Unknown, ShoutRunnerTravelClassification.Classify(Worlds["Siren"], Worlds["Siren"], Worlds["Cactuar"], "Primal"));
     }
 
     [Fact]
-    public void Same_DC_target_that_Lifestream_does_not_list_is_unknown_not_guessed() =>
-        Assert.Equal(ShoutRunnerCrossDataCenterCheck.Unknown, ShoutRunnerTravelClassification.Classify(false, false, TestPlacement("Adamantoise"), TestPlacement("Cactuar"), "Aether"));
-
-    [Fact]
-    public void Missing_placements_or_a_stale_catalog_are_unknown()
-    {
-        Assert.Equal(ShoutRunnerCrossDataCenterCheck.Unknown, ShoutRunnerTravelClassification.Classify(true, false, null, TestPlacement("Cactuar"), "Aether"));
-        Assert.Equal(ShoutRunnerCrossDataCenterCheck.Unknown, ShoutRunnerTravelClassification.Classify(true, false, TestPlacement("Adamantoise"), null, "Aether"));
-        // The game data files Cactuar under Aether; a catalog claiming Primal must not be trusted.
-        Assert.Equal(ShoutRunnerCrossDataCenterCheck.Unknown, ShoutRunnerTravelClassification.Classify(true, false, TestPlacement("Adamantoise"), TestPlacement("Cactuar"), "Primal"));
-    }
-
-    [Fact]
-    public void The_travel_time_guard_only_blocks_other_logical_DCs_of_the_same_region()
-    {
-        Assert.False(ShoutRunnerTravelClassification.WouldUseObsoleteDataCenterTravel(TestPlacement("Adamantoise")!, TestPlacement("Cactuar")!));
-        Assert.True(ShoutRunnerTravelClassification.WouldUseObsoleteDataCenterTravel(TestPlacement("Adamantoise")!, TestPlacement("Behemoth")!));
-        Assert.False(ShoutRunnerTravelClassification.WouldUseObsoleteDataCenterTravel(TestPlacement("Adamantoise")!, TestPlacement("Ravana")!));
-    }
-
-    [Fact]
-    public void Catalog_keeps_the_four_North_American_Data_Centers_distinct_with_their_eight_Worlds()
+    public void Catalog_keeps_the_four_North_American_Data_Centers_distinct_and_matches_game_data_membership()
     {
         Assert.Equal(["Aether", "Crystal", "Dynamis", "Primal"], ShoutRunnerCatalog.CanonicalDataCenterOrder);
         foreach (var dc in ShoutRunnerCatalog.CanonicalDataCenterOrder)
@@ -126,10 +74,31 @@ public sealed partial class ShoutRunnerLifestreamCompatibilityTests
             Assert.Equal(8, worlds.Count);
             Assert.All(worlds, w => Assert.Equal(dc, ShoutRunnerCatalog.DataCenterFor(w)));
         }
+
+        // Membership as read from the installed 7.58 World sheet (World.Unknown0) — spot checks from the owner's screenshots.
+        Assert.Equal(["Behemoth", "Excalibur", "Exodus", "Famfrit", "Hyperion", "Lamia", "Leviathan", "Ultros"], ShoutRunnerCatalog.WorldsIn("Primal"));
+        Assert.Equal(["Cuchulainn", "Golem", "Halicarnassus", "Kraken", "Maduin", "Marilith", "Rafflesia", "Seraph"], ShoutRunnerCatalog.WorldsIn("Dynamis"));
+    }
+
+    [Fact]
+    public void Native_travel_results_map_to_the_right_route_outcome()
+    {
+        static ShoutRunnerTransferResult Map(NativeTravelOutcome o) =>
+            ShoutRunnerNativeTravelMapping.ToTransferOutcome(new NativeTravelResult(1, o, "detail", null, null, null, "diag")).Result;
+        Assert.Equal(ShoutRunnerTransferResult.Success, Map(NativeTravelOutcome.Arrived));
+        Assert.Equal(ShoutRunnerTransferResult.Success, Map(NativeTravelOutcome.AlreadyThere));
+        Assert.Equal(ShoutRunnerTransferResult.WorldCongestedSkip, Map(NativeTravelOutcome.Congested));
+        Assert.Equal(ShoutRunnerTransferResult.WorldCongestedSkip, Map(NativeTravelOutcome.WorldUnavailable));
+        Assert.Equal(ShoutRunnerTransferResult.DataCenterUnavailableSkip, Map(NativeTravelOutcome.DataCenterUnavailable));
+        Assert.Equal(ShoutRunnerTransferResult.DataCenterUnavailableSkip, Map(NativeTravelOutcome.Unsupported));
+        Assert.Equal(ShoutRunnerTransferResult.WrongDestination, Map(NativeTravelOutcome.WrongDestination));
+        Assert.Equal(ShoutRunnerTransferResult.WrongDestination, Map(NativeTravelOutcome.NotStarted));
+        foreach (var o in new[] { NativeTravelOutcome.SelectionMismatch, NativeTravelOutcome.UnexpectedUi, NativeTravelOutcome.TimedOut, NativeTravelOutcome.NotReady, NativeTravelOutcome.Busy, NativeTravelOutcome.Cancelled, NativeTravelOutcome.Failed })
+            Assert.Equal(ShoutRunnerTransferResult.Failed, Map(o));
     }
 
     // =====================================================================================================
-    // Data Center verification (pure)
+    // Data Center verification (pure; unchanged from 0.3.13)
     // =====================================================================================================
 
     [Fact]
@@ -165,7 +134,7 @@ public sealed partial class ShoutRunnerLifestreamCompatibilityTests
     }
 
     // =====================================================================================================
-    // Service scenarios
+    // Service scenarios (fake engine)
     // =====================================================================================================
 
     private static Rig MultiDcRig(string startWorld, params string[] dataCenters)
@@ -178,46 +147,57 @@ public sealed partial class ShoutRunnerLifestreamCompatibilityTests
     }
 
     [Fact]
-    public void Multi_DC_route_from_Aether_completes_Aether_and_skips_other_NA_DCs_without_any_logout_or_travel_command()
+    public void Full_route_across_all_four_NA_Data_Centers_visits_every_World_once_in_canonical_order()
     {
-        var rig = MultiDcRig("Siren", "Aether", "Crystal", "Primal");
+        var rig = MultiDcRig("Siren", "Aether", "Primal", "Crystal", "Dynamis");
         rig.Service.Start();
         rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Stopped);
 
-        Assert.Equal(ShoutRunnerCatalog.WorldsIn("Aether"), rig.Automation.TravelRequests);   // nothing outside Aether requested
-        Assert.DoesNotContain(rig.Automation.TravelMethods, m => m.CrossDataCenter);          // no Data Center Travel (logout) at all
-        Assert.Equal(8 * 3, rig.Sent.Count);
-        Assert.All(rig.Sent, s => Assert.Equal("Aether", ShoutRunnerCatalog.DataCenterFor(s.World!)));
-        Assert.Contains(rig.Texts(), t => t.StartsWith("Crystal — SKIPPED: travel to another Data Center now happens in game (Patch 7.58", StringComparison.Ordinal));
-        Assert.Contains(rig.Texts(), t => t.StartsWith("Primal — SKIPPED: travel to another Data Center now happens in game (Patch 7.58", StringComparison.Ordinal));
-        Assert.Contains("Aether — completed.", rig.Texts());
+        var expected = ShoutRunnerCatalog.CanonicalDataCenterOrder.SelectMany(ShoutRunnerCatalog.WorldsIn).ToList();
+        Assert.Equal(expected, rig.Automation.TravelRequests);
+        Assert.Equal(32 * 3, rig.Sent.Count);
+        Assert.Equal(expected, rig.Sent.Select(s => s.World).Distinct());
+        // Cross-DC travel happens exactly at the Data Center boundaries (Aether→Crystal, Crystal→Dynamis, Dynamis→Primal).
+        Assert.Equal(["Balmung", "Cuchulainn", "Behemoth"], rig.Automation.TravelMethods.Where(m => m.CrossDataCenter).Select(m => m.World));
         Assert.Contains("RUN 1 complete.", rig.Texts());
-        Assert.Contains(rig.Diagnostics.Capture().RecentErrors, e => e.Message.Contains("Crystal skipped at Balmung") && e.Message.Contains("no travel command was issued"));
+        Assert.DoesNotContain(rig.Texts(), t => t.Contains("SKIPPED"));
     }
 
     [Fact]
-    public void Starting_on_Primal_skips_Aether_and_runs_Primal_so_the_route_still_works_from_the_current_DC()
+    public void Starting_on_Primal_goes_to_Aether_first_because_the_order_is_fixed_and_then_returns_to_Primal_last()
     {
         var rig = MultiDcRig("Ultros", "Aether", "Primal");
         rig.Service.Start();
         rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Stopped);
-
-        Assert.Equal(ShoutRunnerCatalog.WorldsIn("Primal"), rig.Automation.TravelRequests);
-        Assert.Equal(8 * 3, rig.Sent.Count(s => ShoutRunnerCatalog.DataCenterFor(s.World!) == "Primal"));
-        Assert.Contains(rig.Texts(), t => t.StartsWith("Aether — SKIPPED: travel to another Data Center", StringComparison.Ordinal));
-        Assert.DoesNotContain(rig.Automation.TravelMethods, m => m.CrossDataCenter);
+        Assert.Equal([.. ShoutRunnerCatalog.WorldsIn("Aether"), .. ShoutRunnerCatalog.WorldsIn("Primal")], rig.Automation.TravelRequests);
+        Assert.Equal(("Adamantoise", true), rig.Automation.TravelMethods[0]);
+        Assert.Equal(16 * 3, rig.Sent.Count);
     }
 
     [Fact]
-    public void Cross_region_start_uses_Data_Center_Travel_once_then_World_Visit_inside_the_DC()
+    public void A_Data_Center_whose_travel_is_unavailable_is_skipped_and_the_next_one_still_runs()
     {
-        var rig = MultiDcRig("Ravana", "Aether");
+        var rig = MultiDcRig("Siren", "Aether", "Crystal", "Primal");
+        rig.Automation.Travel = (target, _) => ShoutRunnerCatalog.DataCenterFor(target) == "Crystal"
+            ? Task.FromResult(ShoutRunnerTransferOutcome.DataCenterUnavailable("Crystal is disabled in the Data Center selector", "diag"))
+            : rig.Automation.ArriveAt(target);
         rig.Service.Start();
         rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Stopped);
+        Assert.Contains(rig.Texts(), t => t.StartsWith("Crystal — SKIPPED: data center unavailable. Crystal is disabled", StringComparison.Ordinal));
+        Assert.Equal(1, rig.Automation.TravelRequests.Count(w => ShoutRunnerCatalog.DataCenterFor(w) == "Crystal"));   // one attempt, not 8
+        Assert.Equal(8 * 3, rig.Sent.Count(s => ShoutRunnerCatalog.DataCenterFor(s.World!) == "Primal"));
+    }
 
-        Assert.Equal(("Adamantoise", true), rig.Automation.TravelMethods[0]);
-        Assert.All(rig.Automation.TravelMethods.Skip(1), m => Assert.False(m.CrossDataCenter));
-        Assert.Equal(8 * 3, rig.Sent.Count);
+    [Fact]
+    public void Cross_region_start_skips_NA_Data_Centers_without_any_travel_attempt()
+    {
+        var rig = MultiDcRig("Ravana", "Aether", "Primal");
+        rig.Service.Start();
+        rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Stopped);
+        Assert.Empty(rig.Automation.TravelRequests);
+        Assert.Empty(rig.Sent);
+        Assert.Contains(rig.Texts(), t => t.StartsWith("Aether — SKIPPED: this Data Center is in another region", StringComparison.Ordinal));
+        Assert.Contains(rig.Texts(), t => t.StartsWith("Primal — SKIPPED: this Data Center is in another region", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -226,7 +206,7 @@ public sealed partial class ShoutRunnerLifestreamCompatibilityTests
         var rig = MultiDcRig("Siren", "Aether");
         rig.Automation.Travel = (target, _) => target switch
         {
-            "Cactuar" => Task.FromResult(ShoutRunnerTransferOutcome.WorldCongested("Congestion reported twice.")),
+            "Cactuar" => Task.FromResult(ShoutRunnerTransferOutcome.WorldCongested("Cactuar is listed but cannot be selected (congested or unavailable)")),
             "Gilgamesh" => SimulatedLifestreamTravel(rig.Automation, target, "Jenova"),
             _ => rig.Automation.ArriveAt(target),
         };
@@ -238,31 +218,7 @@ public sealed partial class ShoutRunnerLifestreamCompatibilityTests
         Assert.Contains(rig.Texts(), t => t.StartsWith("Cactuar — SKIPPED: congested", StringComparison.Ordinal));
         Assert.Contains(rig.Texts(), t => t.StartsWith("Gilgamesh — SKIPPED: Arrived at Jenova instead of Gilgamesh", StringComparison.Ordinal));
         Assert.Contains("Aether — completed with skips.", rig.Texts());
-        Assert.DoesNotContain(rig.Texts(), t => t.StartsWith("Aether — SKIPPED", StringComparison.Ordinal));
-        Assert.Equal(1, rig.Automation.TravelRequests.Count(w => w == "Gilgamesh"));   // no retry loop
-    }
-
-    [Fact]
-    public void After_a_skipped_world_the_next_world_gets_a_fresh_plan_and_its_own_checkpoint()
-    {
-        var rig = MultiDcRig("Siren", "Aether");
-        var faerie = new TaskCompletionSource<ShoutRunnerTransferOutcome>();
-        rig.Automation.Travel = (target, _) => target switch
-        {
-            "Cactuar" => SimulatedLifestreamTravel(rig.Automation, target, "Jenova"),
-            "Faerie" => faerie.Task,
-            _ => rig.Automation.ArriveAt(target),
-        };
-        rig.Service.Start();
-        rig.PumpUntil(() => rig.Automation.TravelRequests.Contains("Faerie"));
-        Assert.Equal("Faerie", rig.Store.Current!.CurrentWorld);
-        Assert.Empty(rig.Store.Current.CompletedDestinationsInCurrentWorld);
-        Assert.Null(rig.Store.Current.CurrentWorldPlan);
-
-        rig.Automation.CurrentWorld = "Faerie";
-        faerie.SetResult(ShoutRunnerTransferOutcome.Success());
-        rig.PumpUntil(() => rig.Sent.Count(s => s.World == "Faerie") == 3);
-        Assert.Equal(new[] { Uldah, Gridania, Limsa }.Order(), rig.Automation.Teleports.TakeLast(3).Order());   // every Faerie stop, each once
+        Assert.Equal(1, rig.Automation.TravelRequests.Count(w => w == "Gilgamesh"));
     }
 
     [Fact]
@@ -287,7 +243,7 @@ public sealed partial class ShoutRunnerLifestreamCompatibilityTests
             : rig.Automation.ArriveAt(target);
         rig.Service.Start();
         rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Faulted);
-        Assert.Equal(ShoutRunnerService.MaxConsecutiveWrongDestinations, 2);
+        Assert.Equal(2, ShoutRunnerService.MaxConsecutiveWrongDestinations);
         Assert.Equal("Faerie", rig.Store.Current!.CurrentWorld);
         Assert.Equal(3, rig.Sent.Count);
         Assert.DoesNotContain(rig.Sent, s => s.World is "Jenova" or "Cactuar" or "Faerie");
@@ -322,40 +278,41 @@ public sealed partial class ShoutRunnerLifestreamCompatibilityTests
     }
 
     [Fact]
-    public void Resume_after_an_unsupported_DC_skip_never_retries_that_DC_or_repeats_announcements()
+    public void Resume_across_a_Data_Center_boundary_continues_in_the_next_DC_without_repeats()
+    {
+        var rig = MultiDcRig("Siren", "Aether", "Primal");
+        rig.Service.Start();
+        rig.PumpUntil(() => rig.Store.Current!.CurrentDataCenter == "Primal" && rig.Store.Current.CompletedDestinationsInCurrentWorld.Count == 1);
+        Assert.Equal(8 * 3 + 1, rig.Sent.Count);
+
+        var rig2 = rig.Restart();                       // crash mid-Behemoth
+        rig2.Automation.CurrentWorld = "Behemoth";
+        Assert.Equal(ShoutRunnerResumeResult.Resumed, rig2.Service.Resume());
+        rig2.PumpUntil(() => rig2.Service.State is ShoutRunnerState.Stopped or ShoutRunnerState.WaitingRepeat);
+        Assert.DoesNotContain(rig2.Automation.TravelRequests, w => ShoutRunnerCatalog.DataCenterFor(w) == "Aether");
+        Assert.Equal(2, rig2.Sent.Count(s => s.World == "Behemoth"));
+        Assert.Equal(8 * 3 - 1, rig2.Sent.Count);
+    }
+
+    [Fact]
+    public void Resume_after_a_Data_Center_skip_never_retries_that_DC_or_repeats_announcements()
     {
         var rig = MultiDcRig("Siren", "Aether", "Crystal", "Dynamis");
-        // Crystal is skipped as unsupported; crash right after, while the route has moved on to Dynamis.
+        rig.Automation.Travel = (target, _) => ShoutRunnerCatalog.DataCenterFor(target) == "Crystal"
+            ? Task.FromResult(ShoutRunnerTransferOutcome.DataCenterUnavailable("Crystal is disabled in the Data Center selector"))
+            : rig.Automation.ArriveAt(target);
         rig.Service.Start();
         rig.PumpUntil(() => rig.Texts().Any(t => t.StartsWith("Crystal — SKIPPED", StringComparison.Ordinal)));
         Assert.Contains(rig.Store.Current!.SkippedDataCenters, s => s.DataCenter == "Crystal");
-        var sentBefore = rig.Sent.Count;
+        Assert.Equal(24, rig.Sent.Count);
 
         var rig2 = rig.Restart();
-        rig2.Automation.CurrentWorld = "Siren";
+        rig2.Automation.CurrentWorld = "Balmung";
         Assert.Equal(ShoutRunnerResumeResult.Resumed, rig2.Service.Resume());
         rig2.PumpUntil(() => rig2.Service.State is ShoutRunnerState.Stopped or ShoutRunnerState.WaitingRepeat);
         Assert.Contains(rig2.Texts(), t => t.StartsWith("Skipped Data Centers (recovered): Crystal", StringComparison.Ordinal));
         Assert.DoesNotContain(rig2.Automation.TravelRequests, w => ShoutRunnerCatalog.DataCenterFor(w) is "Crystal" or "Aether");
-        Assert.Contains(rig2.Texts(), t => t.StartsWith("Dynamis — SKIPPED: travel to another Data Center", StringComparison.Ordinal));
-        Assert.Empty(rig2.Sent);
-        Assert.Equal(24, sentBefore);
-    }
-
-    [Fact]
-    public void Resume_inside_a_DC_after_a_crash_continues_at_the_unfinished_world_without_repeats()
-    {
-        var rig = MultiDcRig("Siren", "Aether", "Primal");
-        rig.Service.Start();
-        rig.PumpUntil(() => rig.Store.Current!.CurrentWorld == "Gilgamesh" && rig.Store.Current.CompletedDestinationsInCurrentWorld.Count == 1);
-        Assert.Equal(10, rig.Sent.Count);                                                  // Adamantoise, Cactuar, Faerie + one Gilgamesh stop
-
-        var rig2 = rig.Restart();
-        rig2.Automation.CurrentWorld = "Gilgamesh";
-        rig2.Service.Resume();
-        rig2.PumpUntil(() => rig2.Service.State is ShoutRunnerState.Stopped or ShoutRunnerState.WaitingRepeat);
-        Assert.Equal(2, rig2.Sent.Count(s => s.World == "Gilgamesh"));                    // the two unfinished stops only
-        Assert.Equal(8 * 3 - 10, rig2.Sent.Count);
-        Assert.DoesNotContain(rig2.Automation.TravelRequests, w => ShoutRunnerCatalog.DataCenterFor(w) == "Primal");
+        Assert.Equal(8 * 3, rig2.Sent.Count);
+        Assert.All(rig2.Sent, s => Assert.Equal("Dynamis", ShoutRunnerCatalog.DataCenterFor(s.World!)));
     }
 }
