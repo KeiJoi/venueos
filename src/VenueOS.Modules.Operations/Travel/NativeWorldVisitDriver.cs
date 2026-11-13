@@ -263,7 +263,7 @@ public sealed class NativeWorldVisitDriver
 
         if (window.DataCenters is not { } dcs || dcs.Pending || !dcs.EventVerified || !SelectorLooksValid(dcs, out var why))
             return Elapsed(now) >= ListSettleTimeout
-                ? Fail(now, NativeTravelOutcome.UnexpectedUi, $"the Data Center selector could not be verified ({(window.DataCenters is null ? "missing" : !window.DataCenters.EventVerified ? "its click event is not registered to the dropdown" : window.DataCenters.Pending ? "a change is still pending" : DescribeInvalid(window.DataCenters))}); nothing was clicked")
+                ? Fail(now, NativeTravelOutcome.UnexpectedUi, $"the Data Center selector could not be verified ({(window.DataCenters is null ? "it is shown, but not readable as a dropdown list" : !window.DataCenters.EventVerified ? "its click event is not registered to the dropdown" : window.DataCenters.Pending ? "a change is still pending" : DescribeInvalid(window.DataCenters))}); nothing was clicked")
                 : NativeTravelAction.Wait("waiting for a verifiable Data Center selector");
 
         if (string.Equals(SelectedDataCenter(window), target.LogicalDataCenter, StringComparison.OrdinalIgnoreCase))

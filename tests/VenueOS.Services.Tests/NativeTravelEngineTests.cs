@@ -192,6 +192,55 @@ public sealed class NativeTravelEngineTests
     }
 
     [Fact]
+    public void An_unexpected_UI_stop_captures_the_window_read_only_before_closing_it()
+    {
+        var (service, sim) = Rig("Diabolos");
+        sim.DcEventUnverified = true;
+        var result = Travel(service, "Adamantoise");
+        Assert.Equal(NativeTravelOutcome.UnexpectedUi, result.Outcome);
+        Assert.Equal([true], sim.UiCaptures);                 // exactly one capture, taken while the window was still open
+        Assert.Contains("Travel UI at the moment it stopped", result.Diagnostic);
+        Assert.Contains("SIMULATED UI: window open", result.Diagnostic);
+        Assert.Equal(NativeTravelActionKind.CloseTravelUi, sim.Executed[^1].Kind);
+        Assert.False(sim.WindowOpen);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectDataCenter));
+    }
+
+    [Fact]
+    public void A_selection_mismatch_also_captures_the_UI_and_still_never_confirms()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.PromptOverride = "Travel to Jenova?";
+        var result = Travel(service, "Cactuar");
+        Assert.Equal(NativeTravelOutcome.SelectionMismatch, result.Outcome);
+        Assert.Single(sim.UiCaptures);
+        Assert.Contains("SIMULATED UI", result.Diagnostic);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.ConfirmTravel));
+    }
+
+    [Fact]
+    public void Successful_travel_and_ordinary_skips_take_no_UI_capture()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        Assert.Equal(NativeTravelOutcome.Arrived, Travel(service, "Cactuar").Outcome);
+        sim.DisabledWorlds.Add("Faerie");
+        Assert.Equal(NativeTravelOutcome.WorldUnavailable, Travel(service, "Faerie").Outcome);
+        Assert.Empty(sim.UiCaptures);
+    }
+
+    [Fact]
+    public void A_failing_UI_capture_never_changes_the_outcome_or_skips_the_close()
+    {
+        var (service, sim) = Rig("Diabolos");
+        sim.DcEventUnverified = true;
+        sim.UiCaptureThrows = true;
+        var result = Travel(service, "Adamantoise");
+        Assert.Equal(NativeTravelOutcome.UnexpectedUi, result.Outcome);
+        Assert.Contains("UI capture failed: addon vanished", result.Diagnostic);
+        Assert.False(sim.WindowOpen);
+    }
+
+    [Fact]
     public void A_dropdown_with_distinct_labels_including_another_regions_Data_Center_is_never_clicked()
     {
         var (service, sim) = Rig("Cuchulainn");

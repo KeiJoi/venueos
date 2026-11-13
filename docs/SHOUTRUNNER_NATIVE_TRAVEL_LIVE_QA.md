@@ -52,7 +52,7 @@ plus steps to reproduce.
 
 | # | Step | Expected | Result |
 |---|---|---|---|
-| D1 | Open the World Visit window by hand (aetheryte → Visit Another World Server). Press **Inspect (read-only)**. Copy Diagnostics and keep it. | "DC selector (node 2): selected N … click event owned True; items [0] Aether \| [1] … " with the four DCs; "World list (node 7) … click event owned True; rows … → World/DC" for the shown page; nothing was clicked. | ☐ Pass ☐ Fail ☐ Not Tested |
+| D1 | Open the World Visit window by hand (aetheryte → Visit Another World Server). Press **Inspect (read-only)**. Copy Diagnostics and keep it. | "Node 4 diagnosis: … component DropDownList → readable" and "DC selector (node 4): selected N … click event owned True; items [0] Aether \| [1] … " with the four DCs; "World list (node 7) … click event owned True; rows … → World/DC" for the shown page; nothing was clicked. | ☐ Pass ☐ Fail ☐ Not Tested |
 | D2 | Change the DC by hand (dropdown or ◁ ▷), Inspect again. | The selected index and the rows follow your choice. | ☐ Pass ☐ Fail ☐ Not Tested |
 | D3 | Click a World by hand (don't confirm), Inspect, then Cancel the dialog. | "SelectYesno: "Travel to <World>?"" and "AgentWorldTravel: DestinationWorldId=<that World's id>". | ☐ Pass ☐ Fail ☐ Not Tested |
 

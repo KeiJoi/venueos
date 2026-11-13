@@ -22,6 +22,11 @@ public interface INativeTravelGamePort
     /// <summary>Starts or stops counting congestion chat messages for <paramref name="operationId"/>.</summary>
     void BeginOperation(int operationId);
     void EndOperation(int operationId);
+
+    /// <summary>A read-only text description of the travel UI (the World Visit window's nodes, components, texts and
+    /// click-event owners, the dialogs and the agent). Never clicks. Captured automatically when an operation stops on
+    /// an unexpected UI, before the window is closed, so a single failed live attempt documents the real structure.</summary>
+    Task<string> DescribeUiAsync();
 }
 
 /// <summary>The reusable native World Visit / Data Center travel service (0.3.14), independent of ShoutRunner and of
@@ -145,6 +150,7 @@ public sealed class NativeTravelService(INativeTravelGamePort port, ITravelWorld
         var driver = new NativeWorldVisitDriver(target, op.Request.PreferredCities, port.Texts, regionDataCenters, AllowDataCenterSelection, port.UtcNow);
         lock (gate) op.Driver = driver;
         var token = op.Cts.Token;
+        string? uiCapture = null;
 
         try
         {
@@ -161,6 +167,8 @@ public sealed class NativeTravelService(INativeTravelGamePort port, ITravelWorld
                 if (action.Kind == NativeTravelActionKind.Finish) break;
                 if (action.Kind != NativeTravelActionKind.Wait)
                 {
+                    if (action.Kind == NativeTravelActionKind.CloseTravelUi && driver.Outcome is NativeTravelOutcome.UnexpectedUi or NativeTravelOutcome.SelectionMismatch)
+                        uiCapture = await CaptureUiAsync().ConfigureAwait(false);
                     var performed = await port.ExecuteAsync(action, fresh => driver.Revalidate(action, fresh), token).ConfigureAwait(false);
                     driver.Executed(action, performed, port.UtcNow);
                     if (driver.Outcome is not null) break;   // the action was the final cleanup
@@ -177,10 +185,27 @@ public sealed class NativeTravelService(INativeTravelGamePort port, ITravelWorld
         {
             // A port fault (game state read failed) ends the operation as Failed; it never propagates.
             await RunFinalActionAsync(driver.Cancel($"travel engine error: {ex.Message}", port.UtcNow), driver).ConfigureAwait(false);
-            return Result(op, driver, NativeTravelOutcome.Failed, $"travel engine error: {ex.Message}");
+            return Result(op, driver, NativeTravelOutcome.Failed, $"travel engine error: {ex.Message}", uiCapture);
         }
 
-        return Result(op, driver, driver.Outcome ?? NativeTravelOutcome.Failed, driver.OutcomeDetail);
+        return Result(op, driver, driver.Outcome ?? NativeTravelOutcome.Failed, driver.OutcomeDetail, uiCapture);
+    }
+
+    /// <summary>Maximum length of the automatic UI capture kept in a result's diagnostic.</summary>
+    public const int MaxUiCaptureLength = 12_000;
+
+    /// <summary>Best-effort, read-only: a failing capture never affects the operation.</summary>
+    private async Task<string?> CaptureUiAsync()
+    {
+        try
+        {
+            var text = await port.DescribeUiAsync().ConfigureAwait(false);
+            return text.Length <= MaxUiCaptureLength ? text : text[..MaxUiCaptureLength] + Environment.NewLine + "… (truncated)";
+        }
+        catch (Exception ex)
+        {
+            return $"(UI capture failed: {ex.Message})";
+        }
     }
 
     /// <summary>The cleanup after cancellation (closing VenueOS's own menus) runs without the cancelled token, but still
@@ -196,9 +221,10 @@ public sealed class NativeTravelService(INativeTravelGamePort port, ITravelWorld
         catch (Exception) { /* best-effort cleanup */ }
     }
 
-    private static NativeTravelResult Result(ActiveOperation op, NativeWorldVisitDriver driver, NativeTravelOutcome outcome, string detail) =>
+    private static NativeTravelResult Result(ActiveOperation op, NativeWorldVisitDriver driver, NativeTravelOutcome outcome, string detail, string? uiCapture) =>
         new(op.Id, outcome, detail, driver.Target, driver.Origin, driver.LastObserved,
-            $"native travel #{op.Id} ({op.Request.Owner}) → {NativeWorldVisitDriver.Describe(driver.Target)}: {outcome} — {detail}{Environment.NewLine}{string.Join(Environment.NewLine, driver.Trace)}");
+            $"native travel #{op.Id} ({op.Request.Owner}) → {NativeWorldVisitDriver.Describe(driver.Target)}: {outcome} — {detail}{Environment.NewLine}{string.Join(Environment.NewLine, driver.Trace)}"
+            + (uiCapture is null ? string.Empty : $"{Environment.NewLine}— Travel UI at the moment it stopped (read-only capture, before closing) —{Environment.NewLine}{uiCapture}"));
 
     private IReadOnlyCollection<string> RegionDataCenters(uint regionId) => catalog.LogicalDataCentersInRegion(regionId);
 }

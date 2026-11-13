@@ -20,11 +20,14 @@ namespace VenueOS.Plugin.Travel;
 /// Dalamud framework thread. Nothing here decides anything: <see cref="NativeWorldVisitDriver"/> decides, and this class
 /// reads the game into a <see cref="NativeTravelSnapshot"/> and performs one revalidated action at a time.
 ///
-/// <para><b>WorldTravelSelect layout (Patch 7.57/7.58).</b> Node 2 is the logical Data Center dropdown
-/// (<see cref="AtkComponentDropDownList"/>), visible only when cross-Data-Center travel is offered. Node 7 is the World list
-/// for the selected Data Center. Node 20 is the legacy single-Data-Center World list. Sources: SimpleTweaks
-/// ImprovedWorldVisit (17 Oct 2026, "Fix for Cross DC compatibility") and SRankSentinel NativeTravel.WorldVisit
-/// (11 Nov 2026, "Support Patch 7.58 regional World Visit"), both public; NOT yet verified live on this client. Every
+/// <para><b>WorldTravelSelect layout (Patch 7.58, VERIFIED by the owner's live Inspect on 2026-11-13).</b> Node 2 is a
+/// plain container (type 1, no component) for the regional section, visible when travel to other logical Data Centers
+/// is offered. Inside it: node 7, the World list (<see cref="AtkComponentList"/>) for the selected Data Center (labels
+/// and its window-owned click event verified live); node 4, the Data Center <see cref="AtkComponentDropDownList"/>;
+/// nodes 5 and 6, the two arrow Buttons beside it. Node 20 (TreeList, hidden on 7.58) is the legacy single-Data-Center
+/// list. Public sources (SimpleTweaks ImprovedWorldVisit, SRankSentinel NativeTravel.WorldVisit) treated node 2 as the
+/// dropdown; that read was refused safely live and corrected here. The dropdown's item labels and its list's click
+/// ownership remain to be verified live: the driver gates on both. Every
 /// component is type-checked; World rows are identified by the World their label names, never by position alone; a
 /// selection is dispatched only when the list's item-click event is registered to its expected owner
 /// (<see cref="HasOwnedClick"/>); and the confirmation is gated by the driver on the exact prompt text and
@@ -32,7 +35,8 @@ namespace VenueOS.Plugin.Travel;
 /// destination. No raw callback index is ever used for the Data Center or the World row.</para></summary>
 public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDisposable
 {
-    private const uint DataCenterSelectorNodeId = 2;
+    private const uint RegionalSectionNodeId = 2;     // container; visible ⇔ other Data Centers are offered
+    private const uint DataCenterSelectorNodeId = 4;  // the DropDownList inside it (live Inspect, 2026-11-13)
     private const uint RegionalWorldListNodeId = 7;
     private const uint LegacyWorldListNodeId = 20;
     private const uint ConfirmTemplateRowA = 12519;   // "Travel to <World>?"
@@ -123,6 +127,13 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
     /// button). Reads only; never clicks.</summary>
     public Task<string> DescribeRawAsync() => framework.RunOnFrameworkThread(DescribeRaw);
 
+    /// <inheritdoc />
+    public Task<string> DescribeUiAsync() => DescribeRawAsync();
+
+    /// <summary>The plain text of an encoded SeString (macros such as icons removed).</summary>
+    private static string SeText(ReadOnlySpan<byte> bytes) =>
+        bytes.IsEmpty ? string.Empty : new Lumina.Text.ReadOnly.ReadOnlySeStringSpan(bytes).ExtractText().Trim();
+
     // ----- reading -----
 
     private NativeTravelSnapshot ReadSnapshot()
@@ -189,7 +200,8 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
         var menu = &addon->PopupMenu.PopupMenu;
         if (menu->EntryNames is null || menu->EntryCount <= 0 || menu->EntryCount > 32) return null;
         var entries = new string[menu->EntryCount];
-        for (var i = 0; i < entries.Length; i++) entries[i] = menu->EntryNames[i].ToString().Trim();
+        // Parsed as SeString: entry names carry macro payloads (icons), whose raw bytes otherwise leak into the text.
+        for (var i = 0; i < entries.Length; i++) entries[i] = SeText(menu->EntryNames[i].AsSpan());
         return new MenuObservation(entries);
     }
 
@@ -212,10 +224,11 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
         if (addon is null || !addon->IsVisible) return null;
         if (!addon->IsReady) return new WorldTravelWindowObservation(false, false, null, null);
 
+        var section = addon->GetNodeById(RegionalSectionNodeId);
+        var regional = section is not null && section->IsVisible();
         var selectorNode = addon->GetNodeById(DataCenterSelectorNodeId);
-        var regional = selectorNode is not null && selectorNode->IsVisible();
         DataCenterSelectorObservation? selector = null;
-        if (regional)
+        if (regional && selectorNode is not null && selectorNode->IsVisible())
         {
             var dropdown = selectorNode->GetAsAtkComponentDropdownList();
             if (dropdown is not null && (AtkResNode*)dropdown->OwnerNode == selectorNode && dropdown->List is not null)
@@ -336,8 +349,10 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
             {
                 var addon = gameGui.GetAddonByName<AtkUnitBase>("WorldTravelSelect");
                 if (!IsReady(addon)) return false;
+                var section = addon->GetNodeById(RegionalSectionNodeId);
                 var node = addon->GetNodeById(DataCenterSelectorNodeId);
-                var dropdown = node is null ? null : node->GetAsAtkComponentDropdownList();
+                if (section is null || !section->IsVisible() || node is null || !node->IsVisible()) return false;
+                var dropdown = node->GetAsAtkComponentDropdownList();
                 if (dropdown is null || dropdown->List is null || (AtkResNode*)dropdown->OwnerNode != node) return false;
                 var list = dropdown->List;
                 if (!string.Equals(ReadItemText(list, action.Index), action.Label, StringComparison.OrdinalIgnoreCase) || !HasOwnedClick(list, (AtkEventListener*)dropdown)) return false;
@@ -350,8 +365,8 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
             {
                 var addon = gameGui.GetAddonByName<AtkUnitBase>("WorldTravelSelect");
                 if (!IsReady(addon)) return false;
-                var selectorNode = addon->GetNodeById(DataCenterSelectorNodeId);
-                var regional = selectorNode is not null && selectorNode->IsVisible();
+                var section = addon->GetNodeById(RegionalSectionNodeId);
+                var regional = section is not null && section->IsVisible();
                 var list = addon->GetComponentListById(regional ? RegionalWorldListNodeId : LegacyWorldListNodeId);
                 if (list is null || catalog.Resolve(ReadItemText(list, action.Index))?.Id != action.Id || !HasOwnedClick(list, (AtkEventListener*)addon)) return false;
                 list->SelectItem(action.Index, false);
@@ -468,15 +483,11 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
         var addon = gameGui.GetAddonByName<AtkUnitBase>("WorldTravelSelect");
         if (addon is null) { sb.AppendLine("WorldTravelSelect: closed"); return sb.ToString(); }
         sb.AppendLine($"WorldTravelSelect: ready {addon->IsReady} visible {addon->IsVisible}; nodes {addon->UldManager.NodeListCount}; AtkValues {addon->AtkValuesCount}");
-        for (var i = 0; i < addon->UldManager.NodeListCount && i < 64; i++)
-        {
-            var node = addon->UldManager.NodeList[i];
-            if (node is null) continue;
-            sb.Append($"  node id {node->NodeId,3} type {(int)node->Type,5} visible {node->IsVisible()}");
-            var component = node->GetComponent();
-            if (component is not null) sb.Append($" component {component->GetComponentType()}");
-            sb.AppendLine();
-        }
+        sb.AppendLine("  Node tree (path = parent component node ids; text = visible text; events = registered event types → listener):");
+        var budget = 400;
+        DumpNodes(sb, &addon->UldManager, addon, null, "", 0, ref budget);
+        if (budget <= 0) sb.AppendLine("  … node dump truncated");
+        DiagnoseSelectorNode(sb, addon);
 
         var window = ReadWindow();
         if (window?.DataCenters is { } dcs)
@@ -485,7 +496,7 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
         if (window?.Worlds is { } wl)
             sb.AppendLine($"  World list (node {(window.RegionalSelectorVisible ? RegionalWorldListNodeId : LegacyWorldListNodeId)}): selected {wl.SelectedIndex}, pending {wl.Pending}, click event owned {wl.EventVerified}; rows {string.Join(" | ", wl.Rows.Select((r, i) => $"[{i}] \"{r.Label}\" → {(r.World is null ? "?" : $"{r.World.Name}/{r.World.LogicalDataCenter}")}{(r.Disabled ? " (disabled)" : string.Empty)}"))}");
         else sb.AppendLine("  World list: not readable");
-        for (var i = 0; i < addon->AtkValuesCount && i < 64; i++)
+        for (var i = 0; i < addon->AtkValuesCount && i < 160; i++)
         {
             var v = addon->AtkValues[i];
             var shown = v.Type switch
@@ -500,5 +511,83 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>Read-only recursive dump of a node list and the node lists of its components (depth-limited).</summary>
+    private static void DumpNodes(StringBuilder sb, AtkUldManager* uld, AtkUnitBase* addon, AtkComponentBase* owner, string path, int depth, ref int budget)
+    {
+        if (uld is null || uld->NodeList is null || uld->NodeListCount > 512) return;
+        for (var i = 0; i < uld->NodeListCount && budget > 0; i++)
+        {
+            var node = uld->NodeList[i];
+            if (node is null) continue;
+            budget--;
+            sb.Append($"  {new string(' ', depth * 2)}{path}{node->NodeId} type {(int)node->Type} {(node->IsVisible() ? "visible" : "hidden")}");
+            var text = node->GetAsAtkTextNode();
+            if (text is not null)
+            {
+                var value = SeText(text->NodeText.AsSpan());
+                if (value.Length > 0) sb.Append($" text \"{(value.Length > 60 ? value[..60] + "…" : value).Replace("\n", "⏎").Replace("\r", string.Empty)}\"");
+            }
+
+            var component = node->GetComponent();
+            if (component is not null)
+            {
+                var type = component->GetComponentType();
+                sb.Append($" component {type}");
+                if (type is ComponentType.List or ComponentType.TreeList)
+                {
+                    var list = (AtkComponentList*)component;
+                    sb.Append($" items {list->GetItemCount()} selected {list->SelectedItemIndex}");
+                }
+                else if (type == ComponentType.DropDownList)
+                {
+                    var dd = (AtkComponentDropDownList*)component;
+                    sb.Append($" selected {dd->GetSelectedItemIndex()} list {(dd->List is null ? "null" : $"items {dd->List->GetItemCount()}")} ownerMatches {(AtkResNode*)dd->OwnerNode == node}");
+                }
+            }
+
+            AppendEvents(sb, node, addon, owner, component);
+            sb.AppendLine();
+            if (component is not null && depth < 3)
+                DumpNodes(sb, &component->UldManager, addon, component, $"{path}{node->NodeId}/", depth + 1, ref budget);
+        }
+    }
+
+    private static void AppendEvents(StringBuilder sb, AtkResNode* node, AtkUnitBase* addon, AtkComponentBase* owner, AtkComponentBase* self)
+    {
+        var entry = node->AtkEventManager.Event;
+        if (entry is null) return;
+        var parts = new List<string>();
+        for (var i = 0; entry is not null && i < 16; i++, entry = entry->NextEvent)
+        {
+            var listener = entry->Listener;
+            var who = listener == (AtkEventListener*)addon ? "window"
+                : self is not null && listener == (AtkEventListener*)self ? "this component"
+                : owner is not null && listener == (AtkEventListener*)owner ? "parent component"
+                : "other";
+            parts.Add($"{entry->State.EventType}(param {entry->Param})→{who}");
+        }
+
+        sb.Append($" events [{string.Join(", ", parts)}]");
+    }
+
+    /// <summary>Why node <see cref="DataCenterSelectorNodeId"/> is or isn't readable as a Data Center dropdown.</summary>
+    private static void DiagnoseSelectorNode(StringBuilder sb, AtkUnitBase* addon)
+    {
+        var section = addon->GetNodeById(RegionalSectionNodeId);
+        sb.AppendLine($"  Node {RegionalSectionNodeId} (regional section): {(section is null ? "no such node" : section->IsVisible() ? "visible" : "hidden")}");
+        var node = addon->GetNodeById(DataCenterSelectorNodeId);
+        if (node is null) { sb.AppendLine($"  Node {DataCenterSelectorNodeId} diagnosis: no such node"); return; }
+        var component = node->GetComponent();
+        var type = component is null ? "none (not a component node)" : component->GetComponentType().ToString();
+        var dropdown = node->GetAsAtkComponentDropdownList();
+        var reason = !node->IsVisible() ? "hidden"
+            : component is null ? "not a component"
+            : dropdown is null ? $"its component is {type}, not DropDownList"
+            : (AtkResNode*)dropdown->OwnerNode != node ? "the dropdown's owner node is a different node"
+            : dropdown->List is null ? "the dropdown has no list"
+            : "readable";
+        sb.AppendLine($"  Node {DataCenterSelectorNodeId} diagnosis: type {(int)node->Type}, {(node->IsVisible() ? "visible" : "hidden")}, component {type} → {reason}");
     }
 }

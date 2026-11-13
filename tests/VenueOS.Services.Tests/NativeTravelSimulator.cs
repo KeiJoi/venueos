@@ -146,6 +146,17 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
 
     public int Count(NativeTravelActionKind kind) => Executed.Count(a => a.Kind == kind);
 
+    /// <summary>UI captures taken, with whether the World Visit window was still open at that moment.</summary>
+    public readonly List<bool> UiCaptures = [];
+    public bool UiCaptureThrows;
+
+    public Task<string> DescribeUiAsync()
+    {
+        if (UiCaptureThrows) throw new InvalidOperationException("addon vanished");
+        UiCaptures.Add(WindowOpen);
+        return Task.FromResult($"SIMULATED UI: window {(WindowOpen ? "open" : "closed")}, selected DC {SelectedDc}, executed so far {Executed.Count}");
+    }
+
     private void Apply(NativeTravelAction a)
     {
         switch (a.Kind)

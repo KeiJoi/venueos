@@ -29,7 +29,7 @@ reported as a Data-Center-level skip.
 | 4 | Aetheryte menu option is transport/Aetheryte row 3 " Visit Another World Server.". | **[game data]**; **[screenshot]** menu: Aethernet. / Visit Another World Server. / Set Home Point. / … / Cancel. |
 | 5 | World Visit cities: aetheryte 8 Limsa Lominsa Lower Decks (territory 129), 2 New Gridania (132), 9 Ul'dah - Steps of Nald (130). | **[game data]** Aetheryte sheet; **[official]** "only available from the central aetheryte" |
 | 6 | The World Visit window (addon `WorldTravelSelect`) has, under WORLD LIST, a DC selector showing the selected DC with ◁ ▷ arrows; it defaults to the current DC; choosing a DC immediately shows that DC's 8 Worlds alphabetically; the current World is listed, greyed, with a home icon. | **[screenshot]** × 4 pages |
-| 7 | Node 2 is the logical DC selector (`AtkComponentDropDownList`, visible only when cross-DC is offered), node 7 is the regional World list, node 20 is the legacy single-DC list. | **[source]** SimpleTweaks ImprovedWorldVisit (17 Oct, "Fix for Cross DC compatibility"); SRankSentinel (11 Nov, "Support Patch 7.58 regional World Visit"). **[unverified]** on this client |
+| 7 | **Corrected by live Inspect (2026-11-13, QA attempt #1):** node 2 is a plain container (type 1, no component) for the regional section. Inside it, node 4 is the DC `AtkComponentDropDownList`, nodes 5 and 6 are the ◁ ▷ Buttons, and node 7 is the World list. Node 20 (TreeList) is hidden. The public sources treated node 2 as the dropdown; reading it that way was refused safely (UnexpectedUi, nothing clicked). | **[verified live]** node types and visibility; node 7 rows (8 Crystal Worlds) and its window-owned click event. **[unverified]** the node 4 dropdown's item labels and click ownership |
 | 8 | `AtkComponentDropDownList` (List, SelectItem, GetSelectedItemIndex, OpenStateChangePending, OwnerNode), `AtkComponentList` (GetItemCount, GetItemLabel, GetItemRenderer, GetItemDisabledState, SelectItem, DispatchItemEvent, SelectedItemIndex, IsUpdatePending), `AgentWorldTravel.DestinationWorldId` all exist. | **[structs]** (reflection over the dev-hooks DLL) |
 | 9 | Lifestream (newest 2.6.0.9, 16 Oct) has no DC dropdown handling. It builds its World lists from `World.DataCenter`, so on 7.58 data it treats all 32 NA Worlds as one DC and picks rows by index from a string array (`WorldTranslate` entries 3–10). | **[source]** Lifestream `b363201` |
 | 10 | A public plugin drives the DC page with a raw callback `(1, tab)` attributed to "Ls 2.6". Public Lifestream has no such code. | **[source]** MasterOfPuppets; not used by VenueOS (unverified provenance) |
@@ -135,15 +135,15 @@ touches ShoutRunner's checkpoint, and refuses to start while ShoutRunner runs or
 
 | File | Tests | Covers |
 |---|---|---|
-| `NativeTravelEngineTests.cs` | 45 | Real service + driver on the simulator: same-DC, the screenshot scenario (Cuchulainn → Primal → Behemoth), all NA DC pairs, label-based DC choice, teleport-first, lagging rows, misclick → never confirmed, wrong agent destination, inexact prompt, prompt changed between decision and click, revalidation skip, unowned events, corrupt labels, a distinct label from another region's DC, ignored dropdown (bounded), stale list forever, window never opens, leftover menu, congested / missing / disabled-DC, switch off, cross-region, unknown World, wrong World / DC arrival, congestion ×2, never departs, never arrives, one selection + one confirmation, busy, cancel before/after confirmation, ids, combat/mounted/logged out, no logout step |
+| `NativeTravelEngineTests.cs` | 49 | Real service + driver on the simulator: same-DC, the screenshot scenario (Cuchulainn → Primal → Behemoth), all NA DC pairs, label-based DC choice, teleport-first, lagging rows, misclick → never confirmed, wrong agent destination, inexact prompt, prompt changed between decision and click, revalidation skip, unowned events, corrupt labels, a distinct label from another region's DC, read-only UI capture on UnexpectedUi / SelectionMismatch (taken before closing; never on success; a failing capture changes nothing), ignored dropdown (bounded), stale list forever, window never opens, leftover menu, congested / missing / disabled-DC, switch off, cross-region, unknown World, wrong World / DC arrival, congestion ×2, never departs, never arrives, one selection + one confirmation, busy, cancel before/after confirmation, ids, combat/mounted/logged out, no logout step |
 | `NativeTravelPolicyTests.cs` | 20 | Confirmation templates (incl. 12624, the screenshot prompt, Jenova), label cleaning, menu entry, region rule, cities |
 | `ShoutRunnerNativeTravelIntegrationTests.cs` | 7 | Real ShoutRunnerService + real NativeTravelService: full Aether/Crystal/Dynamis/Primal route (96 shouts on their own World and DC, 3 DC selections, 32 confirmations), switch off, misclick → fault → Resume, congested row, Stop mid-travel, QA sends nothing and leaves the checkpoint alone, QA vs ShoutRunner concurrency |
 | `ShoutRunnerPatch758TravelTests.cs` | 21 methods (rewritten) | 0.3.14 classification incl. merged-DataCenter guard, mapping table, DC verification, multi-DC routes, DC skip + Resume, wrong-arrival bounds |
 | `NativeTravelSimulator.cs` | — | Simulated 7.58 window built from the screenshots, with fault switches |
 
-**Full validation (2026-11-12):** `dotnet test VenueOS.sln -c Debug` passes 1,581 of 1,581 (Core 69, Venues 23,
-Services 1,489). `dotnet build VenueOS.sln` passes in Debug and Release (clean, `--no-incremental`) with 0 warnings and 0 errors. The
-targeted travel filter (`ShoutRunner|NativeTravel`) runs 304 tests.
+**Full validation (2026-11-13, after QA fix 1):** `dotnet test VenueOS.sln -c Debug` passes 1,585 of 1,585 (Core 69, Venues 23,
+Services 1,493). `dotnet build VenueOS.sln` passes in Debug and Release (clean, `--no-incremental`) with 0 warnings and 0 errors. The
+targeted travel filter (`ShoutRunner|NativeTravel`) runs 308 tests (the mutation runs used 304, before the 4 UI-capture tests were added).
 
 **Mutation checks.** 15 hand-written mutants against the safety checks, each run against the 304 targeted tests.
 **15 of 15 killed.**
@@ -168,10 +168,12 @@ targeted travel filter (`ShoutRunner|NativeTravel`) runs 304 tests.
 
 ## 7. Requires live inspection (owner QA)
 
-1. That `WorldTravelSelect` node 2 is a dropdown whose list labels read "Aether", "Crystal", "Dynamis", "Primal", and
+1. That `WorldTravelSelect` node 4 (the dropdown inside the node 2 section) has list labels that read "Aether", "Crystal", "Dynamis", "Primal", and
    that its item-click event is owned by the dropdown. Inspect shows this.
 2. That `SelectItem` + `DispatchItemEvent` changes the page (the gated step).
-3. That node 7 rows read as World names and their click event is owned by the window. Inspect shows this.
+3. ~~That node 7 rows read as World names and their click event is owned by the window.~~ **Verified live 2026-11-13.**
+   Since that QA attempt, an UnexpectedUi or SelectionMismatch stop also captures this Inspect dump automatically,
+   before the window is closed, in the result's diagnostic.
 4. That the confirmation is the `SelectYesno` addon (OK / Cancel) and `AgentWorldTravel.DestinationWorldId` holds the
    selected World.
 5. Aetheryte interaction range (8 y threshold) after teleport arrival.
