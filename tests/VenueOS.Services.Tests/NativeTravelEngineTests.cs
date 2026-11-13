@@ -216,10 +216,77 @@ public sealed class NativeTravelEngineTests
         sim.DcEventUnverified = true;
         var result = Travel(service, "Adamantoise");
         Assert.Equal(NativeTravelOutcome.UnexpectedUi, result.Outcome);
-        Assert.Contains("not registered to the dropdown", result.Detail);
+        Assert.Contains("arrow buttons are not wired", result.Detail);
         Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectDataCenter));
         Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectWorld));
         Assert.Single(sim.UiCaptures);
+        Assert.False(sim.WindowOpen);
+    }
+
+    [Fact]
+    public void Aether_to_Primal_steps_the_arrows_forward_one_Data_Center_at_a_time()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        var result = Travel(service, "Behemoth");
+        Assert.Equal(NativeTravelOutcome.Arrived, result.Outcome);
+        Assert.Equal([1, 2, 3], sim.Executed.Where(a => a.Kind == NativeTravelActionKind.SelectDataCenter).Select(a => a.Index));
+        Assert.Contains(result.Diagnostic.Split('\n'), l => l.Contains("▷ from Aether to Crystal"));
+        Assert.Equal(1, sim.Count(NativeTravelActionKind.ConfirmTravel));
+    }
+
+    [Fact]
+    public void Primal_to_Aether_steps_the_arrows_back_one_Data_Center_at_a_time()
+    {
+        var (service, sim) = Rig("Behemoth");
+        Assert.Equal(NativeTravelOutcome.Arrived, Travel(service, "Adamantoise").Outcome);
+        Assert.Equal([2, 1, 0], sim.Executed.Where(a => a.Kind == NativeTravelActionKind.SelectDataCenter).Select(a => a.Index));
+    }
+
+    [Fact]
+    public void A_selector_whose_shown_Data_Center_cannot_be_read_is_never_stepped()
+    {
+        var (service, sim) = Rig("Diabolos", home: "Halicarnassus");
+        sim.DropdownReportsNoSelection = true;   // arrows verified, but the displayed text does not name a Data Center
+        var result = Travel(service, "Adamantoise");
+        Assert.Equal(NativeTravelOutcome.UnexpectedUi, result.Outcome);
+        Assert.Contains("does not show which Data Center is selected", result.Detail);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectDataCenter));
+    }
+
+    [Fact]
+    public void An_arrow_step_is_refused_when_the_page_changed_between_decision_and_press()
+    {
+        var (service, sim) = Rig("Cuchulainn");
+        var flipped = false;
+        sim.BeforeExecute = () => { if (sim.WindowOpen && !flipped) { flipped = true; sim.SelectedDc = "Primal"; } };
+        var result = Travel(service, "Behemoth");
+        Assert.Equal(NativeTravelOutcome.Arrived, result.Outcome);
+        Assert.Contains(sim.Refused, a => a.Kind == NativeTravelActionKind.SelectDataCenter);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectDataCenter));
+    }
+
+    [Fact]
+    public void An_arrow_step_that_would_now_lead_away_from_the_target_is_refused()
+    {
+        // Decided on Dynamis (step ◁ to Crystal toward Aether); the page is Aether by the time of the press: ▷ would go away.
+        var (service, sim) = Rig("Cuchulainn");
+        var flipped = false;
+        sim.BeforeExecute = () => { if (sim.WindowOpen && !flipped) { flipped = true; sim.SelectedDc = "Aether"; } };
+        Assert.Equal(NativeTravelOutcome.Arrived, Travel(service, "Adamantoise").Outcome);
+        Assert.Contains(sim.Refused, a => a.Kind == NativeTravelActionKind.SelectDataCenter);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectDataCenter));
+    }
+
+    [Fact]
+    public void A_selector_that_never_converges_is_stopped_after_the_step_limit_and_no_World_is_clicked()
+    {
+        var (service, sim) = Rig("Cuchulainn");
+        sim.ArrowsReversed = true;
+        var result = Travel(service, "Balmung");
+        Assert.Equal(NativeTravelOutcome.UnexpectedUi, result.Outcome);
+        Assert.Contains("within 4 steps", result.Detail);
+        Assert.Equal(NativeWorldVisitDriver.MaxDataCenterSteps, sim.Count(NativeTravelActionKind.SelectDataCenter));
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectWorld));
         Assert.False(sim.WindowOpen);
     }
 

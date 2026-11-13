@@ -91,6 +91,7 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
     public bool DropdownReportsNoSelection;       // live 7.58 (2026-11-13): selected index -1 while a page is shown
     public int SectionHiddenSnapshots;            // live 7.58: the window is ready a moment before its section shows
     public bool LegacyWindow;                     // single-Data-Center window without a selector
+    public bool ArrowsReversed;                   // fault: each arrow moves the other way (wrapping)
     private int sectionHiddenLeft;
     public int StaleRowSnapshotsAfterDcChange = 1;  // rows lag the dropdown by this many snapshots
     public bool StaleRowsForever;
@@ -184,7 +185,11 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
                 break;
             case NativeTravelActionKind.SelectDataCenter:
                 if (DropdownIgnoresSelection) break;
-                SelectedDc = DcOrder[a.Index];
+                // A real arrow press moves exactly one Data Center (live QA 2026-11-13): anything else is a defect.
+                if (Math.Abs(a.Index - Array.IndexOf(DcOrder, SelectedDc)) != 1)
+                    throw new InvalidOperationException($"non-adjacent Data Center step from {SelectedDc} to item {a.Index}");
+                var from = Array.IndexOf(DcOrder, SelectedDc);
+                SelectedDc = DcOrder[ArrowsReversed ? ((from - (a.Index - from)) % DcOrder.Length + DcOrder.Length) % DcOrder.Length : a.Index];
                 staleSnapshotsLeft = StaleRowSnapshotsAfterDcChange;
                 if (staleSnapshotsLeft == 0 && !StaleRowsForever) rowsDc = SelectedDc;
                 break;

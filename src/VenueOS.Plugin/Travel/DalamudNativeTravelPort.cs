@@ -37,6 +37,10 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
 {
     private const uint RegionalSectionNodeId = 2;     // container; visible ⇔ other Data Centers are offered
     private const uint DataCenterSelectorNodeId = 4;  // the DropDownList inside it (live Inspect, 2026-11-13)
+    // Live QA 2026-11-13 (owner pressed each arrow from Crystal: ◁ → Aether, ▷ → Dynamis): node 5 at x=158 is ◁ and
+    // sends ButtonClick(param 2) to the window; node 6 at x=182 is ▷ and sends ButtonClick(param 3) to the window.
+    private const uint PreviousArrowNodeId = 5, PreviousArrowParam = 2;
+    private const uint NextArrowNodeId = 6, NextArrowParam = 3;
     private const uint RegionalWorldListNodeId = 7;
     private const uint LegacyWorldListNodeId = 20;
     private const uint ConfirmTemplateRowA = 12519;   // "Travel to <World>?"
@@ -243,7 +247,10 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
                     var labels = new string[count];
                     var disabled = new bool[count];
                     for (var i = 0; i < count; i++) { labels[i] = ReadItemText(list, i); disabled[i] = list->GetItemDisabledState(i); }
-                    selector = new DataCenterSelectorObservation(labels, disabled, dropdown->GetSelectedItemIndex(), dropdown->OpenStateChangePending, HasOwnedClick(list, (AtkEventListener*)dropdown));
+                    // The dropdown reports index -1 on 7.58; the Data Center shown is its displayed text (verified live).
+                    var shownText = ReadDropdownShownText(dropdown);
+                    var shown = Array.FindIndex(labels, l => l.Length > 0 && string.Equals(l, shownText, StringComparison.OrdinalIgnoreCase));
+                    selector = new DataCenterSelectorObservation(labels, disabled, shown, dropdown->OpenStateChangePending, ArrowsVerified(addon));
                 }
             }
         }
@@ -320,6 +327,60 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
         return entry is null ? found : null;
     }
 
+    /// <summary>The single ButtonClick event on node <paramref name="nodeId"/> (a visible Button component), registered for
+    /// the window with <paramref name="param"/>; null when anything differs from the layout verified live.</summary>
+    private static AtkEvent* FindButtonClick(AtkUnitBase* addon, uint nodeId, uint param)
+    {
+        var node = addon->GetNodeById(nodeId);
+        if (node is null || !node->IsVisible()) return null;
+        var component = node->GetComponent();
+        if (component is null || component->GetComponentType() != ComponentType.Button) return null;
+        AtkEvent* found = null;
+        var entry = node->AtkEventManager.Event;
+        for (var i = 0; entry is not null && i < 32; i++, entry = entry->NextEvent)
+        {
+            if (entry->State.EventType != AtkEventType.ButtonClick) continue;
+            if (entry->Listener != (AtkEventListener*)addon || entry->Param != param || found is not null) return null;
+            found = entry;
+        }
+
+        return entry is null ? found : null;
+    }
+
+    /// <summary>Both Data Center arrows are wired as verified live, and ◁ is left of ▷.</summary>
+    private static bool ArrowsVerified(AtkUnitBase* addon)
+    {
+        if (FindButtonClick(addon, PreviousArrowNodeId, PreviousArrowParam) is null || FindButtonClick(addon, NextArrowNodeId, NextArrowParam) is null) return false;
+        return addon->GetNodeById(PreviousArrowNodeId)->X < addon->GetNodeById(NextArrowNodeId)->X;
+    }
+
+    /// <summary>The Data Center name the dropdown displays (the text inside its CheckBox; "Crystal" in the live Inspect).</summary>
+    private static string ReadDropdownShownText(AtkComponentDropDownList* dropdown)
+    {
+        var uld = &((AtkComponentBase*)dropdown)->UldManager;
+        if (uld->NodeList is null || uld->NodeListCount > 64) return string.Empty;
+        for (var i = 0; i < uld->NodeListCount; i++)
+        {
+            var node = uld->NodeList[i];
+            if (node is null || !node->IsVisible()) continue;
+            var component = node->GetComponent();
+            if (component is null || component->GetComponentType() != ComponentType.CheckBox) continue;
+            var inner = &component->UldManager;
+            if (inner->NodeList is null || inner->NodeListCount > 64) return string.Empty;
+            for (var j = 0; j < inner->NodeListCount; j++)
+            {
+                var textNode = inner->NodeList[j] is null || !inner->NodeList[j]->IsVisible() ? null : inner->NodeList[j]->GetAsAtkTextNode();
+                if (textNode is null) continue;
+                var text = NativeTravelPolicy.CleanLabel(SeText(textNode->NodeText.AsSpan()));
+                if (text.Length > 0) return text;
+            }
+
+            return string.Empty;
+        }
+
+        return string.Empty;
+    }
+
     private static bool IsReady(AtkUnitBase* addon) => addon is not null && addon->IsReady && addon->IsVisible;
 
     // ----- acting (framework thread, after revalidation) -----
@@ -355,18 +416,21 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
             }
             case NativeTravelActionKind.SelectDataCenter:
             {
+                // One arrow press (never the dropdown list, whose item clicks go to two listeners). The step must be to
+                // the adjacent Data Center named by the action, from the one shown right now.
                 var addon = gameGui.GetAddonByName<AtkUnitBase>("WorldTravelSelect");
                 if (!IsReady(addon)) return false;
-                var section = addon->GetNodeById(RegionalSectionNodeId);
-                var node = addon->GetNodeById(DataCenterSelectorNodeId);
-                if (section is null || !section->IsVisible() || node is null || !node->IsVisible()) return false;
-                var dropdown = node->GetAsAtkComponentDropdownList();
-                if (dropdown is null || dropdown->List is null || (AtkResNode*)dropdown->OwnerNode != node) return false;
-                var list = dropdown->List;
-                if (!string.Equals(ReadItemText(list, action.Index), action.Label, StringComparison.OrdinalIgnoreCase) || !HasOwnedClick(list, (AtkEventListener*)dropdown)) return false;
-                dropdown->SelectItem(action.Index);
-                if (dropdown->GetSelectedItemIndex() != action.Index) return false;
-                list->DispatchItemEvent(action.Index, AtkEventType.ListItemClick);
+                var window = ReadWindow();
+                if (window?.DataCenters is not { EventVerified: true, Pending: false } dcs || dcs.SelectedIndex < 0) return false;
+                if (action.Index < 0 || action.Index >= dcs.Labels.Count || !string.Equals(dcs.Labels[action.Index], action.Label, StringComparison.OrdinalIgnoreCase)) return false;
+                var step = action.Index - dcs.SelectedIndex;
+                if (Math.Abs(step) != 1) return false;
+                var nodeId = step < 0 ? PreviousArrowNodeId : NextArrowNodeId;
+                var click = FindButtonClick(addon, nodeId, step < 0 ? PreviousArrowParam : NextArrowParam);
+                var button = addon->GetNodeById(nodeId)->GetAsAtkComponentButton();
+                if (click is null || button is null || !button->IsEnabled) return false;
+                var data = new AtkEventData();
+                ((AtkEventListener*)addon)->ReceiveEvent(AtkEventType.ButtonClick, (int)click->Param, click, &data);
                 return true;
             }
             case NativeTravelActionKind.SelectWorld:
@@ -519,7 +583,7 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
 
         var window = ReadWindow();
         if (window?.DataCenters is { } dcs)
-            sb.AppendLine($"  DC selector (node {DataCenterSelectorNodeId}): selected {dcs.SelectedIndex}, pending {dcs.Pending}, click event owned {dcs.EventVerified}; items {string.Join(" | ", dcs.Labels.Select((l, i) => $"[{i}] {l}{(dcs.Disabled[i] ? " (disabled)" : string.Empty)}"))}");
+            sb.AppendLine($"  DC selector (node {DataCenterSelectorNodeId}): shows [{dcs.SelectedIndex}] (from its displayed text), pending {dcs.Pending}, arrows verified {dcs.EventVerified}; items {string.Join(" | ", dcs.Labels.Select((l, i) => $"[{i}] {l}{(dcs.Disabled[i] ? " (disabled)" : string.Empty)}"))}");
         else sb.AppendLine($"  DC selector (node {DataCenterSelectorNodeId}): {(window?.RegionalSelectorVisible == true ? "visible but not readable as a dropdown" : "not visible")}");
         if (window?.Worlds is { } wl)
             sb.AppendLine($"  World list (node {(window.RegionalSelectorVisible ? RegionalWorldListNodeId : LegacyWorldListNodeId)}): selected {wl.SelectedIndex}, pending {wl.Pending}, click event owned {wl.EventVerified}; rows {string.Join(" | ", wl.Rows.Select((r, i) => $"[{i}] \"{r.Label}\" → {(r.World is null ? "?" : $"{r.World.Name}/{r.World.LogicalDataCenter}")}{(r.Disabled ? " (disabled)" : string.Empty)}"))}");

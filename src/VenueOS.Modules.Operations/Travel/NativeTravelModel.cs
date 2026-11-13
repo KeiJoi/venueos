@@ -16,9 +16,10 @@ public sealed record MenuObservation(IReadOnlyList<string> Entries);
 /// not exactly one known World), and whether the game shows it disabled (congested or unavailable).</summary>
 public sealed record WorldRowObservation(string Label, TravelWorld? World, bool Disabled);
 
-/// <summary>The Data Center dropdown (WorldTravelSelect node 2): its items' labels, which are disabled, which is
-/// selected, whether a change is still pending, and whether its item-click event is registered to the dropdown itself
-/// (<paramref name="EventVerified"/>, the precondition for dispatching a selection).</summary>
+/// <summary>The Data Center selector (WorldTravelSelect node 4, a dropdown inside the node 2 section, with arrow Buttons
+/// 5 and 6): its items' labels, which are disabled, which Data Center is shown (<paramref name="SelectedIndex"/>, read from
+/// the selector's displayed text; -1 when unknown), whether a change is still pending, and whether the arrow buttons are
+/// wired exactly as verified live (<paramref name="EventVerified"/>, the precondition for stepping the selector).</summary>
 public sealed record DataCenterSelectorObservation(IReadOnlyList<string> Labels, IReadOnlyList<bool> Disabled, int SelectedIndex, bool Pending, bool EventVerified);
 
 /// <summary>The World list (regional node 7, or legacy node 20).</summary>

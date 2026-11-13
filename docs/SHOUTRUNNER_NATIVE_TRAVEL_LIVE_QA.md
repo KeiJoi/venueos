@@ -63,7 +63,7 @@ diagnostics; that's exactly what needs correcting. Don't turn the switch on.
 
 | # | Step | Expected | Result |
 |---|---|---|---|
-| C1 | Turn the switch on. Aether → a Primal World. | The window opens; the selector changes to Primal; the list changes to Primal's Worlds; the World is clicked; "Travel to <World>?"; arrival on that World, Primal. No logout, no character select, no trip home. | ☐ Pass ☐ Fail ☐ Not Tested |
+| C1 | Turn the switch on. Aether → a Primal World. | The window opens; VenueOS presses ▷ three times (trace: "step the Data Center selector ▷ from Aether to Crystal" … "to Primal"), one step at a time; the list changes to Primal's Worlds; the World is clicked; "Travel to <World>?"; arrival on that World, Primal. No logout, no character select, no trip home. | ☐ Pass ☐ Fail ☐ Not Tested |
 | C2 | Primal → a Crystal World. | Same as C1. | ☐ Pass ☐ Fail ☐ Not Tested |
 | C3 | Crystal → a Dynamis World. | Same as C1. | ☐ Pass ☐ Fail ☐ Not Tested |
 | C4 | Dynamis → an Aether World. | Same as C1. | ☐ Pass ☐ Fail ☐ Not Tested |

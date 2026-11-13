@@ -5,7 +5,7 @@ A short summary of each VenueOS release. Detailed notes are in `RELEASE.md`, and
 ## 0.3.14 — UNRELEASED (QA build)
 
 - **ShoutRunner:** travels with VenueOS's own World Visit and no longer uses Lifestream. It picks the World by name in the World Visit window and presses OK only when the dialog reads exactly "Travel to <World>?" for the World it wants. It never logs you out or sends you home.
-- **ShoutRunner (Patch 7.58):** VenueOS can switch Data Center with the World Visit window's new Data Center selector, but that step is off until it has been verified in game. While it is off, other Data Centers in your region are skipped before anything is clicked.
+- **ShoutRunner (Patch 7.58):** VenueOS can switch Data Center in the World Visit window by pressing its ◁ ▷ arrows one step at a time, checking each step. This step is off until it has been verified in game. While it is off, other Data Centers in your region are skipped before anything is clicked.
 - **ShoutRunner:** Data Centers are now read from the game's real logical Data Center. Patch 7.58 game data lists every North American World under "Aether" in the old field, which made 0.3.13 treat every NA World as Aether.
 - **ShoutRunner:** a World that is greyed out or missing in the World Visit list is skipped, and the rest of its Data Center continues.
 - **Native Travel QA (new):** a diagnostic section at the bottom of ShoutRunner's settings. It tests a single trip without any announcement, and Inspect describes the World Visit window without clicking anything. If travel stops because the window looks unexpected, VenueOS records the same description automatically before closing the window.

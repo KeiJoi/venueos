@@ -44,6 +44,9 @@ public sealed class NativeWorldVisitDriver
 
     public const int MaxInteractAttempts = 2;
     public const int MaxDataCenterSelectAttempts = 2;
+
+    /// <summary>Upper bound on arrow steps in one operation (a region has at most four logical Data Centers).</summary>
+    public const int MaxDataCenterSteps = 4;
     public const int MaxTeleportAttempts = 1;
 
     private readonly TravelWorld target;
@@ -56,7 +59,8 @@ public sealed class NativeWorldVisitDriver
 
     private DateTimeOffset phaseEnteredAt;
     private DateTimeOffset? teleportedAt, lastInteractAt, menuSelectedAt, lastDataCenterSelectAt, worldSelectedAt, confirmedAt;
-    private int teleportAttempts, interactAttempts, dataCenterSelectAttempts;
+    private int teleportAttempts, interactAttempts, dataCenterSelectAttempts, dataCenterSteps;
+    private int? dataCenterStepFrom;   // the shown selector index when the current arrow step was pressed
     private bool leftoverUiClosed, departureSeen, windowSeen, openedUi;
     private ShoutRunnerArrivalVerifier? arrival;
 
@@ -149,7 +153,9 @@ public sealed class NativeWorldVisitDriver
             && NativeTravelPolicy.IsWorldVisitMenuEntry(m.Entries[a.Index], texts.WorldVisitOption),
         NativeTravelActionKind.SelectDataCenter => allowDataCenterSelection && s.Window is { Ready: true, RegionalSelectorVisible: true, DataCenters: { } d } && s.Confirm is null
             && d is { Pending: false, EventVerified: true } && a.Index >= 0 && a.Index < d.Labels.Count && string.Equals(d.Labels[a.Index], a.Label, StringComparison.OrdinalIgnoreCase)
-            && !d.Disabled[a.Index] && string.Equals(a.Label, target.LogicalDataCenter, StringComparison.OrdinalIgnoreCase),
+            && d.SelectedIndex >= 0 && d.SelectedIndex < d.Labels.Count && Math.Abs(a.Index - d.SelectedIndex) == 1
+            && IndexOf(d.Labels, target.LogicalDataCenter) is var goal && goal >= 0 && !d.Disabled[goal]
+            && Math.Sign(goal - d.SelectedIndex) == Math.Sign(a.Index - d.SelectedIndex),
         NativeTravelActionKind.SelectWorld => s.Window is { Ready: true, Worlds: { } w } win && s.Confirm is null && w is { Pending: false, EventVerified: true }
             && a.Index >= 0 && a.Index < w.Rows.Count && w.Rows[a.Index].World?.Id == target.Id && a.Id == target.Id && !w.Rows[a.Index].Disabled
             && (!win.RegionalSelectorVisible || ShownDataCenter(win) is { } dc && string.Equals(dc, target.LogicalDataCenter, StringComparison.OrdinalIgnoreCase)),
@@ -168,7 +174,11 @@ public sealed class NativeWorldVisitDriver
             case NativeTravelActionKind.TeleportToCity: teleportAttempts++; teleportedAt = now; break;
             case NativeTravelActionKind.InteractWithAetheryte: interactAttempts++; lastInteractAt = now; openedUi = true; break;
             case NativeTravelActionKind.SelectMenuEntry: menuSelectedAt = now; break;
-            case NativeTravelActionKind.SelectDataCenter: dataCenterSelectAttempts++; lastDataCenterSelectAt = now; break;
+            case NativeTravelActionKind.SelectDataCenter:
+                if (dataCenterStepFrom is null) { dataCenterSteps++; dataCenterSelectAttempts = 0; dataCenterStepFrom = (int)a.Id; }
+                dataCenterSelectAttempts++;
+                lastDataCenterSelectAt = now;
+                break;
             case NativeTravelActionKind.SelectWorld: worldSelectedAt = now; Enter(now, NativeTravelPhase.VerifyingSelection, $"selected {target.Name}; waiting for the confirmation"); break;
             case NativeTravelActionKind.ConfirmTravel: confirmedAt = now; Enter(now, NativeTravelPhase.WaitingForDeparture, $"confirmed travel to {target.Name}"); break;
         }
@@ -272,19 +282,36 @@ public sealed class NativeWorldVisitDriver
             return SelectWorld(s, now);
         }
 
-        if (window.DataCenters is not { } dcs || dcs.Pending || !dcs.EventVerified || !SelectorLooksValid(dcs, out var why))
+        if (window.DataCenters is not { } dcs || dcs.Pending || !dcs.EventVerified || !SelectorLooksValid(dcs, out var why)
+            || dcs.SelectedIndex < 0 || dcs.SelectedIndex >= dcs.Labels.Count)
             return Elapsed(now) >= ListSettleTimeout
-                ? Fail(now, NativeTravelOutcome.UnexpectedUi, $"the Data Center selector could not be verified ({(window.DataCenters is null ? "it is shown, but not readable as a dropdown list" : !window.DataCenters.EventVerified ? "its click event is not registered to the dropdown" : window.DataCenters.Pending ? "a change is still pending" : DescribeInvalid(window.DataCenters))}); nothing was clicked")
+                ? Fail(now, NativeTravelOutcome.UnexpectedUi, $"the Data Center selector could not be verified ({(window.DataCenters is null ? "it is shown, but not readable as a dropdown list" : !window.DataCenters.EventVerified ? "its arrow buttons are not wired to the window as verified live" : window.DataCenters.Pending ? "a change is still pending" : !SelectorLooksValid(window.DataCenters, out _) ? DescribeInvalid(window.DataCenters) : "it does not show which Data Center is selected")}); nothing was clicked")
                 : NativeTravelAction.Wait("waiting for a verifiable Data Center selector");
 
         var index = IndexOf(dcs.Labels, target.LogicalDataCenter);
         if (index < 0) return Fail(now, NativeTravelOutcome.DataCenterUnavailable, $"{target.LogicalDataCenter} is not offered by the Data Center selector ({string.Join(", ", dcs.Labels)})");
         if (dcs.Disabled[index]) return Fail(now, NativeTravelOutcome.DataCenterUnavailable, $"{target.LogicalDataCenter} is disabled in the Data Center selector");
         if (!allowDataCenterSelection) return Fail(now, NativeTravelOutcome.Unsupported, "Data Center selection is awaiting live verification");
-        if (lastDataCenterSelectAt is { } last && now - last < DataCenterReselectInterval) return NativeTravelAction.Wait($"waiting for the {target.LogicalDataCenter} page");
-        if (dataCenterSelectAttempts >= MaxDataCenterSelectAttempts)
-            return Fail(now, NativeTravelOutcome.UnexpectedUi, $"selecting {target.LogicalDataCenter} in the dropdown did not take effect (still {ShownDataCenter(window) ?? "none"})");
-        return new(NativeTravelActionKind.SelectDataCenter, $"select Data Center {target.LogicalDataCenter} (item {index})", index, dcs.Labels[index]);
+
+        // Live QA (2026-11-13): the selector is stepped with its arrow buttons (◁ node 5 / ▷ node 6), one adjacent Data
+        // Center per press, toward the target. A step is complete once the shown Data Center has moved; the World rows
+        // must then follow before any World is chosen (SelectWorld's stale-list guard).
+        if (dataCenterStepFrom is { } from)
+        {
+            if (dcs.SelectedIndex != from) { Note(now, $"the selector now shows {dcs.Labels[dcs.SelectedIndex]}"); dataCenterStepFrom = null; }
+            else if (lastDataCenterSelectAt is { } last && now - last < DataCenterReselectInterval) return NativeTravelAction.Wait($"waiting for the selector to move from {dcs.Labels[from]}");
+            else if (dataCenterSelectAttempts >= MaxDataCenterSelectAttempts)
+                return Fail(now, NativeTravelOutcome.UnexpectedUi, $"pressing the Data Center arrow did not move the selector (still {dcs.Labels[from]}, wanted {target.LogicalDataCenter})");
+        }
+
+        if (dataCenterStepFrom is null && dataCenterSteps >= MaxDataCenterSteps)
+            return Fail(now, NativeTravelOutcome.UnexpectedUi, $"the Data Center selector did not reach {target.LogicalDataCenter} within {MaxDataCenterSteps} steps (shows {dcs.Labels[dcs.SelectedIndex]})");
+
+        var shown = dcs.SelectedIndex;
+        var next = shown + Math.Sign(index - shown);
+        return new(NativeTravelActionKind.SelectDataCenter,
+            $"step the Data Center selector {(next < shown ? "◁" : "▷")} from {dcs.Labels[shown]} to {dcs.Labels[next]} (toward {target.LogicalDataCenter})",
+            next, dcs.Labels[next], (uint)shown);
     }
 
     private NativeTravelAction SelectWorld(NativeTravelSnapshot s, DateTimeOffset now)
