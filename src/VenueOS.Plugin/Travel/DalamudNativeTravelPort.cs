@@ -301,18 +301,23 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
 
     /// <summary>True when exactly one ListItemClick event is registered on the list's owner node, and its listener is
     /// <paramref name="listener"/>: the component the game itself expects to receive the click.</summary>
-    private static bool HasOwnedClick(AtkComponentList* list, AtkEventListener* listener)
+    private static bool HasOwnedClick(AtkComponentList* list, AtkEventListener* listener) => FindOwnedClick(list, listener) is not null;
+
+    /// <summary>The single ListItemClick event registered on the list's owner node for <paramref name="listener"/>, or
+    /// null when there is none, more than one, or another listener also receives the list's item clicks.</summary>
+    private static AtkEvent* FindOwnedClick(AtkComponentList* list, AtkEventListener* listener)
     {
-        if (list is null || list->OwnerNode is null) return false;
+        if (list is null || list->OwnerNode is null) return null;
         var entry = list->OwnerNode->AtkEventManager.Event;
-        var matches = 0;
+        AtkEvent* found = null;
         for (var i = 0; entry is not null && i < 32; i++, entry = entry->NextEvent)
         {
             if (entry->State.EventType != AtkEventType.ListItemClick) continue;
-            if (entry->Listener != listener || ++matches > 1) return false;
+            if (entry->Listener != listener || found is not null) return null;
+            found = entry;
         }
 
-        return entry is null && matches == 1;
+        return entry is null ? found : null;
     }
 
     private static bool IsReady(AtkUnitBase* addon) => addon is not null && addon->IsReady && addon->IsVisible;
@@ -371,10 +376,20 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
                 var section = addon->GetNodeById(RegionalSectionNodeId);
                 var regional = section is not null && section->IsVisible();
                 var list = addon->GetComponentListById(regional ? RegionalWorldListNodeId : LegacyWorldListNodeId);
-                if (list is null || catalog.Resolve(ReadItemText(list, action.Index))?.Id != action.Id || !HasOwnedClick(list, (AtkEventListener*)addon)) return false;
+                if (list is null || catalog.Resolve(ReadItemText(list, action.Index))?.Id != action.Id) return false;
+                // Live QA (2026-11-13): DispatchItemEvent moved the list's selection but never reached the window (no
+                // confirmation, AgentWorldTravel destination stayed 0). A real row click delivers the ListItemClick
+                // event registered on node 7 (param 0, listener = the window) to the window's ReceiveEvent with the
+                // row's renderer and index. Exactly that registered event is delivered here; nothing else.
+                var click = FindOwnedClick(list, (AtkEventListener*)addon);
+                var renderer = list->GetItemRenderer(action.Index);
+                if (click is null || renderer is null) return false;
                 list->SelectItem(action.Index, false);
                 if (list->SelectedItemIndex != action.Index) return false;
-                list->DispatchItemEvent(action.Index, AtkEventType.ListItemClick);
+                var data = new AtkEventData();
+                data.ListItemData.ListItemRenderer = renderer;
+                data.ListItemData.SelectedIndex = action.Index;
+                ((AtkEventListener*)addon)->ReceiveEvent(AtkEventType.ListItemClick, (int)click->Param, click, &data);
                 return true;
             }
             case NativeTravelActionKind.ConfirmTravel:
@@ -548,7 +563,7 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
     {
         if (budget-- <= 0) return;
         var visible = node->IsVisible();
-        sb.Append($"  {new string(' ', depth * 2)}{path}{node->NodeId} type {(int)node->Type} {(visible ? "visible" : "hidden")}");
+        sb.Append($"  {new string(' ', depth * 2)}{path}{node->NodeId} type {(int)node->Type} {(visible ? "visible" : "hidden")} at ({node->X:0},{node->Y:0}) size {node->Width}x{node->Height}");
         var text = node->GetAsAtkTextNode();
         if (text is not null)
         {
