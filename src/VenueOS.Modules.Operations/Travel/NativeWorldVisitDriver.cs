@@ -152,7 +152,7 @@ public sealed class NativeWorldVisitDriver
             && !d.Disabled[a.Index] && string.Equals(a.Label, target.LogicalDataCenter, StringComparison.OrdinalIgnoreCase),
         NativeTravelActionKind.SelectWorld => s.Window is { Ready: true, Worlds: { } w } win && s.Confirm is null && w is { Pending: false, EventVerified: true }
             && a.Index >= 0 && a.Index < w.Rows.Count && w.Rows[a.Index].World?.Id == target.Id && a.Id == target.Id && !w.Rows[a.Index].Disabled
-            && (!win.RegionalSelectorVisible || SelectedDataCenter(win) is { } dc && string.Equals(dc, target.LogicalDataCenter, StringComparison.OrdinalIgnoreCase)),
+            && (!win.RegionalSelectorVisible || ShownDataCenter(win) is { } dc && string.Equals(dc, target.LogicalDataCenter, StringComparison.OrdinalIgnoreCase)),
         NativeTravelActionKind.ConfirmTravel => s.Confirm is { YesEnabled: true } c && NativeTravelPolicy.IsConfirmationFor(c.Prompt, target.Name, texts.ConfirmationTemplates)
             && (s.AgentDestinationWorldId == 0 || s.AgentDestinationWorldId == target.Id) && !TravelConfirmed,
         _ => true,
@@ -255,9 +255,20 @@ public sealed class NativeWorldVisitDriver
 
         if (!window.RegionalSelectorVisible)
         {
+            // Live QA (2026-11-13): right after opening, the window can report ready before its Data Center section is
+            // shown. Absence only counts once the window has had time to settle.
             if (target.LogicalDataCenterId != Origin!.LogicalDataCenterId)
-                return Fail(now, NativeTravelOutcome.Unsupported, $"the World Visit window shows no Data Center selector, so {target.LogicalDataCenter} cannot be chosen");
+                return Elapsed(now) >= ListSettleTimeout
+                    ? Fail(now, NativeTravelOutcome.Unsupported, $"the World Visit window shows no Data Center selector, so {target.LogicalDataCenter} cannot be chosen")
+                    : NativeTravelAction.Wait("waiting for the World Visit window's Data Center section");
             Enter(now, NativeTravelPhase.SelectingWorld, "legacy single-Data-Center window");
+            return SelectWorld(s, now);
+        }
+
+        // The page already shows the target Data Center: nothing on the selector needs to be touched.
+        if (string.Equals(ShownDataCenter(window), target.LogicalDataCenter, StringComparison.OrdinalIgnoreCase))
+        {
+            Enter(now, NativeTravelPhase.SelectingWorld, $"{target.LogicalDataCenter} is shown");
             return SelectWorld(s, now);
         }
 
@@ -266,28 +277,22 @@ public sealed class NativeWorldVisitDriver
                 ? Fail(now, NativeTravelOutcome.UnexpectedUi, $"the Data Center selector could not be verified ({(window.DataCenters is null ? "it is shown, but not readable as a dropdown list" : !window.DataCenters.EventVerified ? "its click event is not registered to the dropdown" : window.DataCenters.Pending ? "a change is still pending" : DescribeInvalid(window.DataCenters))}); nothing was clicked")
                 : NativeTravelAction.Wait("waiting for a verifiable Data Center selector");
 
-        if (string.Equals(SelectedDataCenter(window), target.LogicalDataCenter, StringComparison.OrdinalIgnoreCase))
-        {
-            Enter(now, NativeTravelPhase.SelectingWorld, $"{target.LogicalDataCenter} is selected");
-            return SelectWorld(s, now);
-        }
-
         var index = IndexOf(dcs.Labels, target.LogicalDataCenter);
         if (index < 0) return Fail(now, NativeTravelOutcome.DataCenterUnavailable, $"{target.LogicalDataCenter} is not offered by the Data Center selector ({string.Join(", ", dcs.Labels)})");
         if (dcs.Disabled[index]) return Fail(now, NativeTravelOutcome.DataCenterUnavailable, $"{target.LogicalDataCenter} is disabled in the Data Center selector");
         if (!allowDataCenterSelection) return Fail(now, NativeTravelOutcome.Unsupported, "Data Center selection is awaiting live verification");
         if (lastDataCenterSelectAt is { } last && now - last < DataCenterReselectInterval) return NativeTravelAction.Wait($"waiting for the {target.LogicalDataCenter} page");
         if (dataCenterSelectAttempts >= MaxDataCenterSelectAttempts)
-            return Fail(now, NativeTravelOutcome.UnexpectedUi, $"selecting {target.LogicalDataCenter} in the dropdown did not take effect (still {SelectedDataCenter(window) ?? "none"})");
+            return Fail(now, NativeTravelOutcome.UnexpectedUi, $"selecting {target.LogicalDataCenter} in the dropdown did not take effect (still {ShownDataCenter(window) ?? "none"})");
         return new(NativeTravelActionKind.SelectDataCenter, $"select Data Center {target.LogicalDataCenter} (item {index})", index, dcs.Labels[index]);
     }
 
     private NativeTravelAction SelectWorld(NativeTravelSnapshot s, DateTimeOffset now)
     {
         if (s.Window is not { } window) return WindowLost(now);
-        if (window.RegionalSelectorVisible && !string.Equals(SelectedDataCenter(window), target.LogicalDataCenter, StringComparison.OrdinalIgnoreCase))
+        if (window.RegionalSelectorVisible && !string.Equals(ShownDataCenter(window), target.LogicalDataCenter, StringComparison.OrdinalIgnoreCase))
         {
-            Enter(now, NativeTravelPhase.SelectingDataCenter, $"the selector shows {SelectedDataCenter(window) ?? "none"}, not {target.LogicalDataCenter}");
+            Enter(now, NativeTravelPhase.SelectingDataCenter, $"the selector shows {ShownDataCenter(window) ?? "none"}, not {target.LogicalDataCenter}");
             return SelectDataCenter(s, now);
         }
 
@@ -377,8 +382,16 @@ public sealed class NativeWorldVisitDriver
 
     private string DescribeInvalid(DataCenterSelectorObservation dcs) => SelectorLooksValid(dcs, out var why) ? "valid" : why;
 
-    private static string? SelectedDataCenter(WorldTravelWindowObservation window) =>
-        window.DataCenters is { } d && d.SelectedIndex >= 0 && d.SelectedIndex < d.Labels.Count ? d.Labels[d.SelectedIndex] : null;
+    /// <summary>The Data Center whose page the window shows: the dropdown's selected item when it reports one;
+    /// otherwise (live QA 2026-11-13: the 7.58 dropdown reports index -1 while showing a page) the single logical Data
+    /// Center that every listed World row resolves to. Null when neither is conclusive.</summary>
+    private static string? ShownDataCenter(WorldTravelWindowObservation window)
+    {
+        if (window.DataCenters is { } d && d.SelectedIndex >= 0 && d.SelectedIndex < d.Labels.Count) return d.Labels[d.SelectedIndex];
+        if (window.Worlds is not { Pending: false, Rows.Count: > 0 } w || w.Rows.Any(r => r.World is null)) return null;
+        var dcs = w.Rows.Select(r => r.World!.LogicalDataCenter).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        return dcs.Count == 1 ? dcs[0] : null;
+    }
 
     private static int IndexOf(IReadOnlyList<string> labels, string value)
     {

@@ -88,6 +88,10 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
     public bool DcEventUnverified, ListEventUnverified;
     public bool DcLabelsCorrupt;
     public string[]? DcLabelsOverride;            // exact labels the dropdown reports
+    public bool DropdownReportsNoSelection;       // live 7.58 (2026-11-13): selected index -1 while a page is shown
+    public int SectionHiddenSnapshots;            // live 7.58: the window is ready a moment before its section shows
+    public bool LegacyWindow;                     // single-Data-Center window without a selector
+    private int sectionHiddenLeft;
     public int StaleRowSnapshotsAfterDcChange = 1;  // rows lag the dropdown by this many snapshots
     public bool StaleRowsForever;
     public bool WindowNeverOpens;
@@ -173,6 +177,7 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
                 if (!WindowNeverOpens && AetheryteMenu[a.Index] == "Visit Another World Server.")
                 {
                     WindowOpen = true;
+                    sectionHiddenLeft = SectionHiddenSnapshots;
                     SelectedDc = Current.LogicalDataCenter;
                     rowsDc = SelectedDc;
                 }
@@ -222,10 +227,20 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
 
         var transitioning = InTransition(out var queued);
         WorldTravelWindowObservation? window = null;
-        if (WindowOpen)
+        if (WindowOpen && sectionHiddenLeft > 0)
+        {
+            if (!peek) sectionHiddenLeft--;
+            window = new WorldTravelWindowObservation(true, false, null, null);   // live: ready before any section is shown
+        }
+        else if (WindowOpen && LegacyWindow)
+        {
+            var legacyRows = Rows().Select(r => r with { Label = NativeTravelPolicy.CleanLabel(r.Label), World = Catalog.Resolve(r.Label) }).ToList();
+            window = new WorldTravelWindowObservation(true, false, null, new WorldListObservation(legacyRows, -1, false, !ListEventUnverified));
+        }
+        else if (WindowOpen)
         {
             var labels = DcLabelsOverride ?? (DcLabelsCorrupt ? ["Aether", "Aether", "Light", "Primal"] : DcOrder.Select(d => d == SelectedDc ? "\u25B6 " + d : d).Select(NativeTravelPolicy.CleanLabel).ToArray());
-            var selector = new DataCenterSelectorObservation(labels, [.. DcOrder.Select(d => DisabledDcs.Contains(d))], Array.IndexOf(DcOrder, SelectedDc), false, !DcEventUnverified);
+            var selector = new DataCenterSelectorObservation(labels, [.. DcOrder.Select(d => DisabledDcs.Contains(d))], DropdownReportsNoSelection ? -1 : Array.IndexOf(DcOrder, SelectedDc), false, !DcEventUnverified);
             var rows = Rows().Select(r => r with { Label = NativeTravelPolicy.CleanLabel(r.Label), World = Catalog.Resolve(r.Label) }).ToList();
             window = new WorldTravelWindowObservation(true, true, selector, new WorldListObservation(rows, -1, false, !ListEventUnverified));
         }

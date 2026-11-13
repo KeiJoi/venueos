@@ -226,6 +226,9 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
 
         var section = addon->GetNodeById(RegionalSectionNodeId);
         var regional = section is not null && section->IsVisible();
+        var legacy = addon->GetNodeById(LegacyWorldListNodeId);
+        // Live QA (2026-11-13): the addon can report ready a moment before either section is shown. Not ready until one is.
+        if (!regional && (legacy is null || !legacy->IsVisible())) return new WorldTravelWindowObservation(false, false, null, null);
         var selectorNode = addon->GetNodeById(DataCenterSelectorNodeId);
         DataCenterSelectorObservation? selector = null;
         if (regional && selectorNode is not null && selectorNode->IsVisible())
@@ -483,11 +486,21 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
         var addon = gameGui.GetAddonByName<AtkUnitBase>("WorldTravelSelect");
         if (addon is null) { sb.AppendLine("WorldTravelSelect: closed"); return sb.ToString(); }
         sb.AppendLine($"WorldTravelSelect: ready {addon->IsReady} visible {addon->IsVisible}; nodes {addon->UldManager.NodeListCount}; AtkValues {addon->AtkValuesCount}");
-        sb.AppendLine("  Node tree (path = parent component node ids; text = visible text; events = registered event types → listener):");
-        var budget = 400;
-        DumpNodes(sb, &addon->UldManager, addon, null, "", 0, ref budget);
-        if (budget <= 0) sb.AppendLine("  … node dump truncated");
         DiagnoseSelectorNode(sb, addon);
+        sb.AppendLine("  Selector section, in full (path = parent component node ids; text = visible text; events = event type → listener):");
+        foreach (var id in new[] { DataCenterSelectorNodeId, 5u, 6u })
+        {
+            var sectionNode = addon->GetNodeById(id);
+            if (sectionNode is null) { sb.AppendLine($"  {id}: no such node"); continue; }
+            var sectionBudget = 250;
+            DumpNode(sb, sectionNode, addon, null, "", 0, 6, ref sectionBudget);
+        }
+
+        DescribeDropdownInternals(sb, addon);
+        sb.AppendLine("  Whole window (hidden subtrees skipped, list rows after the first two collapsed):");
+        var budget = 400;
+        DumpNodes(sb, &addon->UldManager, addon, null, "", 0, 3, ref budget);
+        if (budget <= 0) sb.AppendLine("  … node dump truncated");
 
         var window = ReadWindow();
         if (window?.DataCenters is { } dcs)
@@ -504,7 +517,7 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
                 FFXIVClientStructs.FFXIV.Component.GUI.AtkValueType.Int => v.Int.ToString(),
                 FFXIVClientStructs.FFXIV.Component.GUI.AtkValueType.UInt => v.UInt.ToString(),
                 FFXIVClientStructs.FFXIV.Component.GUI.AtkValueType.Bool => v.Byte != 0 ? "true" : "false",
-                FFXIVClientStructs.FFXIV.Component.GUI.AtkValueType.String or FFXIVClientStructs.FFXIV.Component.GUI.AtkValueType.ManagedString or FFXIVClientStructs.FFXIV.Component.GUI.AtkValueType.ConstString => v.String.Value is null ? "(null)" : $"\"{v.String}\"",
+                FFXIVClientStructs.FFXIV.Component.GUI.AtkValueType.String or FFXIVClientStructs.FFXIV.Component.GUI.AtkValueType.ManagedString or FFXIVClientStructs.FFXIV.Component.GUI.AtkValueType.ConstString => v.String.Value is null ? "(null)" : $"\"{Shorten(SeText(v.String.AsSpan()), 100)}\"",
                 _ => "…",
             };
             sb.AppendLine($"  AtkValue[{i}] {v.Type} {shown}");
@@ -513,46 +526,87 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
         return sb.ToString();
     }
 
-    /// <summary>Read-only recursive dump of a node list and the node lists of its components (depth-limited).</summary>
-    private static void DumpNodes(StringBuilder sb, AtkUldManager* uld, AtkUnitBase* addon, AtkComponentBase* owner, string path, int depth, ref int budget)
+    /// <summary>Read-only recursive dump of a node list: subtrees of hidden nodes are skipped, and list rows after the
+    /// first two of the same list are collapsed into a count.</summary>
+    private static void DumpNodes(StringBuilder sb, AtkUldManager* uld, AtkUnitBase* addon, AtkComponentBase* owner, string path, int depth, int maxDepth, ref int budget)
     {
         if (uld is null || uld->NodeList is null || uld->NodeListCount > 512) return;
+        var rows = 0;
         for (var i = 0; i < uld->NodeListCount && budget > 0; i++)
         {
             var node = uld->NodeList[i];
             if (node is null) continue;
-            budget--;
-            sb.Append($"  {new string(' ', depth * 2)}{path}{node->NodeId} type {(int)node->Type} {(node->IsVisible() ? "visible" : "hidden")}");
-            var text = node->GetAsAtkTextNode();
-            if (text is not null)
-            {
-                var value = SeText(text->NodeText.AsSpan());
-                if (value.Length > 0) sb.Append($" text \"{(value.Length > 60 ? value[..60] + "…" : value).Replace("\n", "⏎").Replace("\r", string.Empty)}\"");
-            }
-
             var component = node->GetComponent();
-            if (component is not null)
-            {
-                var type = component->GetComponentType();
-                sb.Append($" component {type}");
-                if (type is ComponentType.List or ComponentType.TreeList)
-                {
-                    var list = (AtkComponentList*)component;
-                    sb.Append($" items {list->GetItemCount()} selected {list->SelectedItemIndex}");
-                }
-                else if (type == ComponentType.DropDownList)
-                {
-                    var dd = (AtkComponentDropDownList*)component;
-                    sb.Append($" selected {dd->GetSelectedItemIndex()} list {(dd->List is null ? "null" : $"items {dd->List->GetItemCount()}")} ownerMatches {(AtkResNode*)dd->OwnerNode == node}");
-                }
-            }
-
-            AppendEvents(sb, node, addon, owner, component);
-            sb.AppendLine();
-            if (component is not null && depth < 3)
-                DumpNodes(sb, &component->UldManager, addon, component, $"{path}{node->NodeId}/", depth + 1, ref budget);
+            if (component is not null && component->GetComponentType() == ComponentType.ListItemRenderer && ++rows > 2) continue;
+            DumpNode(sb, node, addon, owner, path, depth, maxDepth, ref budget);
         }
+
+        if (rows > 2) sb.AppendLine($"  {new string(' ', depth * 2)}{path}… +{rows - 2} more list rows (same structure)");
     }
+
+    private static void DumpNode(StringBuilder sb, AtkResNode* node, AtkUnitBase* addon, AtkComponentBase* owner, string path, int depth, int maxDepth, ref int budget)
+    {
+        if (budget-- <= 0) return;
+        var visible = node->IsVisible();
+        sb.Append($"  {new string(' ', depth * 2)}{path}{node->NodeId} type {(int)node->Type} {(visible ? "visible" : "hidden")}");
+        var text = node->GetAsAtkTextNode();
+        if (text is not null)
+        {
+            var value = SeText(text->NodeText.AsSpan());
+            if (value.Length > 0) sb.Append($" text \"{Shorten(value, 60)}\"");
+        }
+
+        var component = node->GetComponent();
+        if (component is not null)
+        {
+            var type = component->GetComponentType();
+            sb.Append($" component {type}");
+            if (type is ComponentType.List or ComponentType.TreeList)
+            {
+                var list = (AtkComponentList*)component;
+                sb.Append($" items {list->GetItemCount()} selected {list->SelectedItemIndex}");
+            }
+            else if (type == ComponentType.DropDownList)
+            {
+                var dd = (AtkComponentDropDownList*)component;
+                sb.Append($" selected {dd->GetSelectedItemIndex()} list {(dd->List is null ? "null" : $"items {dd->List->GetItemCount()}")} ownerMatches {(AtkResNode*)dd->OwnerNode == node}");
+            }
+        }
+
+        AppendEvents(sb, node, addon, owner, component);
+        sb.AppendLine();
+        if (component is not null && visible && depth < maxDepth)
+            DumpNodes(sb, &component->UldManager, addon, component, $"{path}{node->NodeId}/", depth + 1, maxDepth, ref budget);
+    }
+
+    /// <summary>The dropdown's own list component and who receives its item clicks: the evidence needed before any
+    /// Data Center item may ever be selected.</summary>
+    private static void DescribeDropdownInternals(StringBuilder sb, AtkUnitBase* addon)
+    {
+        var node = addon->GetNodeById(DataCenterSelectorNodeId);
+        var dd = node is null ? null : node->GetAsAtkComponentDropdownList();
+        if (dd is null) { sb.AppendLine("  Dropdown internals: not a dropdown"); return; }
+        sb.AppendLine($"  Dropdown internals: selected {dd->GetSelectedItemIndex()}, open-state change pending {dd->OpenStateChangePending}");
+        var list = dd->List;
+        if (list is null) { sb.AppendLine("    list: null"); return; }
+        var owner = list->OwnerNode;
+        var ownerText = owner is null ? "null" : $"{owner->NodeId} ({(((AtkResNode*)owner)->IsVisible() ? "visible" : "hidden")}; {(dd->IsOwnerNodeAncestorOf((AtkResNode*)owner) ? "inside the dropdown" : "NOT inside the dropdown")})";
+        sb.AppendLine($"    list: items {list->GetItemCount()}, selected {list->SelectedItemIndex}, update pending {list->IsUpdatePending}, owner node {ownerText}");
+        if (owner is null) return;
+        var entry = ((AtkResNode*)owner)->AtkEventManager.Event;
+        var parts = new List<string>();
+        for (var i = 0; entry is not null && i < 24; i++, entry = entry->NextEvent)
+        {
+            var l = entry->Listener;
+            var who = l == (AtkEventListener*)addon ? "window" : l == (AtkEventListener*)dd ? "dropdown" : l == (AtkEventListener*)list ? "the list itself" : "other";
+            parts.Add($"{entry->State.EventType}(param {entry->Param})→{who}");
+        }
+
+        sb.AppendLine($"    list owner node events: [{string.Join(", ", parts)}]");
+    }
+
+    private static string Shorten(string value, int max) =>
+        (value.Length > max ? value[..max] + "…" : value).Replace("\n", "⏎").Replace("\r", string.Empty);
 
     private static void AppendEvents(StringBuilder sb, AtkResNode* node, AtkUnitBase* addon, AtkComponentBase* owner, AtkComponentBase* self)
     {

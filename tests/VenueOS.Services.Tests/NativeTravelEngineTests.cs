@@ -191,6 +191,94 @@ public sealed class NativeTravelEngineTests
         Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectDataCenter));
     }
 
+    // ----- live QA 2026-11-13 (Diabolos [Crystal], home Halicarnassus [Dynamis]) -----
+
+    [Fact]
+    public void Live_layout_same_Data_Center_travel_never_touches_the_dropdown()
+    {
+        // As observed: the dropdown reports index -1 and its item click is not owned by it; the rows show Crystal.
+        var (service, sim) = Rig("Diabolos", home: "Halicarnassus");
+        sim.DropdownReportsNoSelection = true;
+        sim.DcEventUnverified = true;
+        var result = Travel(service, "Goblin");
+        Assert.Equal(NativeTravelOutcome.Arrived, result.Outcome);
+        Assert.Equal("Goblin", sim.Current.Name);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectDataCenter));
+        Assert.Equal(1, sim.Count(NativeTravelActionKind.ConfirmTravel));
+        Assert.Empty(sim.UiCaptures);
+    }
+
+    [Fact]
+    public void Live_layout_cross_Data_Center_travel_stops_without_touching_the_unverified_dropdown()
+    {
+        var (service, sim) = Rig("Diabolos", home: "Halicarnassus");
+        sim.DropdownReportsNoSelection = true;
+        sim.DcEventUnverified = true;
+        var result = Travel(service, "Adamantoise");
+        Assert.Equal(NativeTravelOutcome.UnexpectedUi, result.Outcome);
+        Assert.Contains("not registered to the dropdown", result.Detail);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectDataCenter));
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectWorld));
+        Assert.Single(sim.UiCaptures);
+        Assert.False(sim.WindowOpen);
+    }
+
+    [Fact]
+    public void A_Data_Center_section_that_appears_a_moment_after_the_window_opens_is_waited_for()
+    {
+        // Live attempt #2 ended "Unsupported … no Data Center selector" 0.0s after the window opened.
+        var (service, sim) = Rig("Diabolos", home: "Halicarnassus");
+        sim.SectionHiddenSnapshots = 3;
+        var result = Travel(service, "Adamantoise");
+        Assert.Equal(NativeTravelOutcome.Arrived, result.Outcome);
+        Assert.Equal(1, sim.Count(NativeTravelActionKind.SelectDataCenter));
+    }
+
+    [Fact]
+    public void A_Data_Center_section_that_never_appears_is_Unsupported_only_after_the_settle_time_and_nothing_is_clicked()
+    {
+        var (service, sim) = Rig("Diabolos", home: "Halicarnassus");
+        sim.SectionHiddenSnapshots = int.MaxValue;
+        var started = sim.Now;
+        var result = Travel(service, "Adamantoise");
+        Assert.Equal(NativeTravelOutcome.Unsupported, result.Outcome);
+        Assert.True(sim.Now - started >= NativeWorldVisitDriver.ListSettleTimeout);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectDataCenter));
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectWorld));
+        Assert.False(sim.WindowOpen);
+    }
+
+    [Fact]
+    public void A_legacy_single_Data_Center_window_visits_a_World_on_the_same_Data_Center()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.LegacyWindow = true;
+        Assert.Equal(NativeTravelOutcome.Arrived, Travel(service, "Cactuar").Outcome);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectDataCenter));
+    }
+
+    [Fact]
+    public void A_legacy_window_cannot_reach_another_Data_Center()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.LegacyWindow = true;
+        Assert.Equal(NativeTravelOutcome.Unsupported, Travel(service, "Behemoth").Outcome);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectWorld));
+    }
+
+    [Fact]
+    public void Stale_rows_with_no_dropdown_selection_never_lead_to_a_World_click()
+    {
+        // Rows lag the page forever and the dropdown reports nothing: the target page is never "shown", so no World is clicked.
+        var (service, sim) = Rig("Diabolos", home: "Halicarnassus");
+        sim.DropdownReportsNoSelection = true;
+        sim.StaleRowsForever = true;
+        var result = Travel(service, "Adamantoise");
+        Assert.NotEqual(NativeTravelOutcome.Arrived, result.Outcome);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.SelectWorld));
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.ConfirmTravel));
+    }
+
     [Fact]
     public void An_unexpected_UI_stop_captures_the_window_read_only_before_closing_it()
     {
