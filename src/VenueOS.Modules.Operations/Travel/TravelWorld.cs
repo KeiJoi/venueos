@@ -36,7 +36,17 @@ public static class WorldVisitCities
     public static WorldVisitCity? ForTerritory(uint territoryId) => All.FirstOrDefault(c => c.TerritoryId == territoryId);
 
     public static WorldVisitCity? ForName(string? name) =>
-        name is null ? null : All.FirstOrDefault(c => string.Equals(c.Name, name.Trim(), StringComparison.OrdinalIgnoreCase));
+        string.IsNullOrWhiteSpace(name) ? null : All.FirstOrDefault(c => string.Equals(NormalizeName(c.Name), NormalizeName(name), StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The World Visit cities among a ShoutRunner route's destinations, in route order, without duplicates. The
+    /// first one is where travel teleports when the character is not already at a World Visit aetheryte (owner
+    /// requirement, 2026-11-13), so the next World's stops begin where the character arrives.</summary>
+    public static IReadOnlyList<WorldVisitCity> FromRouteDestinations(IEnumerable<string?> destinations) =>
+        [.. destinations.Select(ForName).OfType<WorldVisitCity>().Distinct()];
+
+    /// <summary>Dash variants (game text uses an en dash in "Ul'dah – Steps of Nald") and whitespace runs compare equal.</summary>
+    private static string NormalizeName(string name) =>
+        string.Join(' ', name.Replace('\u2013', '-').Replace('\u2014', '-').Replace('\u2212', '-').Split(' ', StringSplitOptions.RemoveEmptyEntries));
 }
 
 /// <summary>Where native travel can take the character, under the Patch 7.58 rules (official NA/EU topic): World Visit

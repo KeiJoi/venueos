@@ -59,7 +59,10 @@ public sealed record NativeTravelSnapshot(
 
 // ----- What the driver asks the port to do -----
 
-public enum NativeTravelActionKind { Wait, TeleportToCity, InteractWithAetheryte, SelectMenuEntry, SelectDataCenter, SelectWorld, ConfirmTravel, CloseTravelUi, Finish }
+/// <remarks><see cref="ApproachAetheryte"/> / <see cref="StopApproach"/> (owner request 2026-11-13; the technique of public
+/// Lifestream b363201 <c>WorldChange.LockOn/EnableAutomove/DisableAutomove</c>): target the aetheryte, <c>/lockon on</c>,
+/// <c>/automove on</c>; then <c>/automove off</c>, <c>/lockon off</c>. Both commands are in the 7.58 TextCommand sheet.</remarks>
+public enum NativeTravelActionKind { Wait, TeleportToCity, ApproachAetheryte, StopApproach, InteractWithAetheryte, SelectMenuEntry, SelectDataCenter, SelectWorld, ConfirmTravel, CloseTravelUi, Finish }
 
 /// <summary>One step for the port. Every acting step names exactly what it expects to act on (index AND label or id),
 /// and the port re-reads the game and revalidates with <see cref="NativeWorldVisitDriver.Revalidate"/> in the same

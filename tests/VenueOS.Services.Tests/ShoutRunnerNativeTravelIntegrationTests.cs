@@ -17,7 +17,7 @@ public sealed class ShoutRunnerNativeTravelIntegrationTests
     private const string Gridania = "New Gridania";
     private const string Limsa = "Limsa Lominsa Lower Decks";
 
-    private sealed class NativeAutomation(NativeTravelSimulator sim, NativeTravelService travel) : IShoutRunnerAutomation
+    private sealed class NativeAutomation(NativeTravelSimulator sim, NativeTravelService travel, Func<IEnumerable<string>> routeDestinations) : IShoutRunnerAutomation
     {
         public readonly List<(string World, bool CrossDataCenter)> Requests = [];
         public void ResetForVenue() { }
@@ -28,7 +28,8 @@ public sealed class ShoutRunnerNativeTravelIntegrationTests
         public async Task<ShoutRunnerTransferOutcome> TravelToWorldAsync(string targetWorld, bool crossDataCenter, CancellationToken token)
         {
             Requests.Add((targetWorld, crossDataCenter));
-            var result = await travel.TravelAsync(new NativeTravelRequest(targetWorld, NativeTravelOwner.ShoutRunner, [WorldVisitCities.Uldah]), token);
+            // As in production: the World Visit cities on the run's destination list, first one preferred.
+            var result = await travel.TravelAsync(new NativeTravelRequest(targetWorld, NativeTravelOwner.ShoutRunner, WorldVisitCities.FromRouteDestinations(routeDestinations())), token);
             return ShoutRunnerNativeTravelMapping.ToTransferOutcome(result);
         }
         public Task<string?> TryGetCurrentPlaceNameAsync(CancellationToken token) => Task.FromResult<string?>(null);
@@ -64,11 +65,13 @@ public sealed class ShoutRunnerNativeTravelIntegrationTests
         public readonly VenueProfileService Profiles;
         public readonly List<(string World, string DataCenter, string Command)> Sent = [];
 
-        public Rig(string start, bool allowDc, params string[] dataCenters)
+        public Rig(string start, bool allowDc, params string[] dataCenters) : this(start, allowDc, [Uldah, Gridania, Limsa], dataCenters) { }
+
+        public Rig(string start, bool allowDc, string[] destinations, string[] dataCenters)
         {
             Sim = new NativeTravelSimulator(start, home: "Cuchulainn");
             Travel = new NativeTravelService(Sim, Sim.Catalog) { AllowDataCenterSelection = allowDc };
-            Automation = new NativeAutomation(Sim, Travel);
+            Automation = new NativeAutomation(Sim, Travel, () => Service!.Settings.Destinations);
             var host = new ModuleHost();
             Profiles = new VenueProfileService(new InMemoryVenueStore(), host);
             Chat = new ChatCommandService(Clock, new InlineFrameworkDispatcher(), command => { Sent.Add((Sim.Current.Name, Sim.Current.LogicalDataCenter, command)); return true; }, TimeSpan.Zero);
@@ -76,7 +79,7 @@ public sealed class ShoutRunnerNativeTravelIntegrationTests
             Service.Load(Profiles.Current.Id);
             Service.UpdateShoutMessage("Test shout");
             while (Service.Settings.Destinations.Count > 0) Service.RemoveDestinationAt(0);
-            foreach (var d in new[] { Uldah, Gridania, Limsa }) Service.AddDestination(d);
+            foreach (var d in destinations) Service.AddDestination(d);
             foreach (var dc in dataCenters) Service.SetDataCenterSelected(dc, true);
             Service.SetRepeatEnabled(false);
         }
@@ -95,6 +98,23 @@ public sealed class ShoutRunnerNativeTravelIntegrationTests
 
             Assert.True(condition(), $"Condition never met (state {Service.State}). Terminal: {string.Join(" | ", Texts().TakeLast(8))}");
         }
+    }
+
+    [Theory]
+    [InlineData(new[] { Uldah, Gridania, Limsa }, 9u)]
+    [InlineData(new[] { Gridania, Limsa, Uldah }, 2u)]
+    [InlineData(new[] { "The Gold Saucer", Limsa, Uldah }, 8u)]
+    public void Starting_away_from_a_World_Visit_aetheryte_teleports_to_the_first_World_Visit_city_on_the_list(string[] destinations, uint expectedAetheryte)
+    {
+        var rig = new Rig("Siren", allowDc: true, destinations, ["Aether"]);   // the first World (Adamantoise) needs travel
+        rig.Sim.Territory = 1186;                                               // a field zone, no World Visit aetheryte
+        rig.Sim.AetheryteDistance = 100f;
+        rig.Service.Start();
+        rig.PumpUntil(() => rig.Sim.Count(NativeTravelActionKind.ConfirmTravel) >= 1);
+        Assert.Equal(NativeTravelActionKind.TeleportToCity, rig.Sim.Executed[0].Kind);
+        Assert.Equal(expectedAetheryte, rig.Sim.Executed[0].Id);
+        Assert.Equal(1, rig.Sim.Count(NativeTravelActionKind.TeleportToCity));
+        rig.Service.Stop();
     }
 
     [Fact]

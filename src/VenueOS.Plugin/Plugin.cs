@@ -165,7 +165,7 @@ public sealed class Plugin : IDalamudPlugin
         // 0.3.14 native World Visit / Data Center travel: one shared service per client (ShoutRunner and the Native Travel
         // QA tool both use it; it refuses a second concurrent operation). No Lifestream dependency.
         travelWorlds = new VenueOS.Plugin.Travel.DalamudTravelWorldCatalog(DataManager, Log);
-        nativeTravelPort = new VenueOS.Plugin.Travel.DalamudNativeTravelPort(Framework, ClientState, ObjectTable, Condition, GameGui, TargetManager, ChatGui, DataManager, travelWorlds, Log);
+        nativeTravelPort = new VenueOS.Plugin.Travel.DalamudNativeTravelPort(Framework, ClientState, ObjectTable, Condition, GameGui, TargetManager, ChatGui, DataManager, travelWorlds, Log, ExecuteChatCommand);
         nativeTravel = new VenueOS.Modules.Operations.Travel.NativeTravelService(nativeTravelPort, travelWorlds);
         shoutRunnerAutomation = new VenueOS.Plugin.ShoutRunner.ShoutRunnerAutomationService(ClientState, ObjectTable, Condition, DataManager, Framework, nativeTravel, travelWorlds, () => shoutRunnerServiceRef?.Settings.Destinations ?? (IReadOnlyList<string>)[], Log);
         // Crash-recovery journal: a single small JSON file directly in the plugin's own Dalamud config directory,

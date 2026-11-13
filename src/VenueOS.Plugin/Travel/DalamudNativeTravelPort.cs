@@ -66,6 +66,8 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
     private readonly IDataManager data;
     private readonly ITravelWorldCatalog catalog;
     private readonly IPluginLog log;
+    private readonly Func<string, bool> executeCommand;
+    private volatile bool autoMoving;   // VenueOS turned /automove on and has not turned it off yet
     private readonly object congestionGate = new();
     private int congestionOperationId;
     private int congestionCount;
@@ -83,8 +85,9 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
         }
     }
 
-    public DalamudNativeTravelPort(IFramework framework, IClientState clientState, IObjectTable objectTable, ICondition condition, IGameGui gameGui, ITargetManager targetManager, IChatGui chatGui, IDataManager data, ITravelWorldCatalog catalog, IPluginLog log)
+    public DalamudNativeTravelPort(IFramework framework, IClientState clientState, IObjectTable objectTable, ICondition condition, IGameGui gameGui, ITargetManager targetManager, IChatGui chatGui, IDataManager data, ITravelWorldCatalog catalog, IPluginLog log, Func<string, bool> executeCommand)
     {
+        this.executeCommand = executeCommand;
         this.framework = framework;
         this.clientState = clientState;
         this.objectTable = objectTable;
@@ -98,7 +101,20 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
         chatGui.ChatMessageUnhandled += OnChatMessageUnhandled;
     }
 
-    public void Dispose() => chatGui.ChatMessageUnhandled -= OnChatMessageUnhandled;
+    public void Dispose()
+    {
+        chatGui.ChatMessageUnhandled -= OnChatMessageUnhandled;
+        if (autoMoving) _ = framework.RunOnFrameworkThread(StopMoving);
+    }
+
+    /// <summary>Turns off the auto-run VenueOS started (never touches movement it did not start). Framework thread.</summary>
+    private void StopMoving()
+    {
+        if (!autoMoving) return;
+        autoMoving = false;
+        if (!executeCommand("/automove off")) log.Warning("Native travel: could not send /automove off.");
+        executeCommand("/lockon off");
+    }
 
     public DateTimeOffset UtcNow => DateTimeOffset.UtcNow;
 
@@ -113,6 +129,8 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
 
     public void EndOperation(int operationId)
     {
+        // Safety net: an operation never ends with the character still running.
+        if (autoMoving) _ = framework.RunOnFrameworkThread(StopMoving);
         lock (congestionGate) if (congestionOperationId == operationId) { congestionOperationId = 0; congestionCount = 0; }
     }
 
@@ -398,6 +416,23 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
                 foreach (var entry in telepo->TeleportList) if (entry.AetheryteId == action.Id && entry.SubIndex == 0) { known = true; break; }
                 return known && telepo->Teleport(action.Id, 0);
             }
+            case NativeTravelActionKind.ApproachAetheryte:
+            {
+                // Lifestream's technique (public b363201, WorldChange.LockOn/EnableAutomove): target the aetheryte, lock on,
+                // auto-run. The driver stops it within reach, and on every failure or cancellation.
+                var aetheryte = objectTable.FirstOrDefault(o => o is not null && o.GameObjectId == action.ObjectId && o.ObjectKind == ObjectKind.Aetheryte && o.IsTargetable);
+                var self = objectTable.LocalPlayer;
+                if (aetheryte is null || self is null || System.Numerics.Vector3.Distance(self.Position, aetheryte.Position) >= NativeWorldVisitDriver.ApproachMaxDistance) return false;
+                targetManager.Target = aetheryte;
+                if (!executeCommand("/lockon on")) return false;
+                autoMoving = true;
+                if (executeCommand("/automove on")) return true;
+                StopMoving();
+                return false;
+            }
+            case NativeTravelActionKind.StopApproach:
+                StopMoving();
+                return true;
             case NativeTravelActionKind.InteractWithAetheryte:
             {
                 var target = objectTable.FirstOrDefault(o => o is not null && o.GameObjectId == action.ObjectId && o.ObjectKind == ObjectKind.Aetheryte && o.IsTargetable);
@@ -464,6 +499,7 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
                 return true;
             }
             case NativeTravelActionKind.CloseTravelUi:
+                StopMoving();
                 CloseIfOpen("SelectYesno");
                 CloseIfOpen("WorldTravelSelect");
                 CloseIfOpen("SelectString");

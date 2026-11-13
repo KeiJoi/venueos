@@ -86,6 +86,129 @@ public sealed class NativeTravelEngineTests
     }
 
     [Fact]
+    public async Task Inside_another_city_but_away_from_its_aetheryte_it_teleports_to_the_first_city_on_the_list()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.Territory = WorldVisitCities.LimsaLominsa.TerritoryId;   // in Limsa, but far from the aetheryte
+        sim.AetheryteDistance = 60f;
+        var result = await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.ShoutRunner, [WorldVisitCities.Uldah, WorldVisitCities.LimsaLominsa]), default);
+        Assert.Equal(NativeTravelOutcome.Arrived, result.Outcome);
+        Assert.Equal(NativeTravelActionKind.TeleportToCity, sim.Executed[0].Kind);
+        Assert.Equal(WorldVisitCities.Uldah.AetheryteId, sim.Executed[0].Id);
+    }
+
+    // ----- walking to an aetheryte the teleport left out of reach (owner, 2026-11-13: "Limsa is bad for that") -----
+
+    [Fact]
+    public async Task A_teleport_that_lands_out_of_reach_walks_to_the_aetheryte_then_stops_before_interacting()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.Territory = 1186;
+        sim.AetheryteDistance = 100f;
+        sim.TeleportArrivalDistance = 13f;   // beyond the 8y reach
+        var result = await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.ShoutRunner, [WorldVisitCities.LimsaLominsa]), default);
+        Assert.Equal(NativeTravelOutcome.Arrived, result.Outcome);
+        var kinds = sim.Executed.Select(a => a.Kind).ToList();
+        Assert.Equal([NativeTravelActionKind.TeleportToCity, NativeTravelActionKind.ApproachAetheryte, NativeTravelActionKind.StopApproach, NativeTravelActionKind.InteractWithAetheryte], kinds.Take(4));
+        Assert.False(sim.Walking);
+        Assert.False(sim.WalkingStoppedByEndOperation);   // the driver itself stopped walking
+        Assert.Equal(1, sim.Approaches);
+    }
+
+    [Fact]
+    public async Task Standing_in_the_destination_city_but_out_of_reach_walks_instead_of_teleporting()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.Territory = WorldVisitCities.LimsaLominsa.TerritoryId;
+        sim.AetheryteDistance = 20f;
+        var result = await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.ShoutRunner, [WorldVisitCities.LimsaLominsa]), default);
+        Assert.Equal(NativeTravelOutcome.Arrived, result.Outcome);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.TeleportToCity));
+        Assert.Equal(1, sim.Approaches);
+    }
+
+    [Fact]
+    public async Task A_blocked_walk_stops_moving_and_fails_without_interacting()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.Territory = WorldVisitCities.LimsaLominsa.TerritoryId;
+        sim.AetheryteDistance = 15f;
+        sim.ApproachBlocked = true;
+        var result = await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.ShoutRunner, [WorldVisitCities.LimsaLominsa]), default);
+        Assert.Equal(NativeTravelOutcome.NotReady, result.Outcome);
+        Assert.Contains("stopped getting closer", result.Detail);
+        Assert.Equal(NativeTravelActionKind.StopApproach, sim.Executed[^1].Kind);
+        Assert.False(sim.Walking);
+        Assert.False(sim.WalkingStoppedByEndOperation);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.InteractWithAetheryte));
+    }
+
+    [Fact]
+    public async Task An_aetheryte_beyond_the_walk_limit_is_never_walked_to()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.Territory = 1186;
+        sim.AetheryteDistance = 100f;
+        sim.TeleportArrivalDistance = 40f;   // even after the teleport, too far to walk
+        var result = await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.ShoutRunner, [WorldVisitCities.LimsaLominsa]), default);
+        Assert.Equal(NativeTravelOutcome.NotReady, result.Outcome);
+        Assert.Equal(0, sim.Approaches);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.InteractWithAetheryte));
+    }
+
+    [Fact]
+    public async Task Cancelling_while_walking_stops_the_character()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.Territory = WorldVisitCities.LimsaLominsa.TerritoryId;
+        sim.AetheryteDistance = 25f;
+        using var cts = new CancellationTokenSource();
+        sim.DelayHook = token =>
+        {
+            if (sim.Walking) cts.Cancel();
+            token.ThrowIfCancellationRequested();
+            sim.Now += NativeTravelService.PollInterval;
+            return Task.CompletedTask;
+        };
+        var result = await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.ShoutRunner, [WorldVisitCities.LimsaLominsa]), cts.Token);
+        Assert.Equal(NativeTravelOutcome.Cancelled, result.Outcome);
+        Assert.Equal(NativeTravelActionKind.StopApproach, sim.Executed[^1].Kind);
+        Assert.False(sim.Walking);
+        Assert.False(sim.WalkingStoppedByEndOperation);
+    }
+
+    [Fact]
+    public async Task Already_at_a_World_Visit_aetheryte_it_uses_that_one_without_teleporting()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.Territory = WorldVisitCities.LimsaLominsa.TerritoryId;
+        sim.AetheryteDistance = 4f;
+        var result = await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.ShoutRunner, [WorldVisitCities.Uldah]), default);
+        Assert.Equal(NativeTravelOutcome.Arrived, result.Outcome);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.TeleportToCity));
+        Assert.Equal(NativeTravelActionKind.InteractWithAetheryte, sim.Executed[0].Kind);
+    }
+
+    [Fact]
+    public async Task Without_a_World_Visit_city_on_the_list_it_falls_back_to_Limsa_Lominsa()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.Territory = 1186;
+        sim.AetheryteDistance = 100f;
+        var result = await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.ShoutRunner, []), default);
+        Assert.Equal(NativeTravelOutcome.Arrived, result.Outcome);
+        Assert.Equal(WorldVisitCities.LimsaLominsa.AetheryteId, sim.Executed[0].Id);
+    }
+
+    [Fact]
+    public void Route_cities_are_the_World_Visit_cities_on_the_list_in_order_with_tolerant_names()
+    {
+        var cities = WorldVisitCities.FromRouteDestinations(["The Gold Saucer", " new gridania ", "Ul'dah – Steps of Nald", "New Gridania", null, "Limsa Lominsa  Lower Decks"]);
+        Assert.Equal([WorldVisitCities.Gridania, WorldVisitCities.Uldah, WorldVisitCities.LimsaLominsa], cities);
+        Assert.Empty(WorldVisitCities.FromRouteDestinations(["Mist", "The Goblet"]));
+    }
+
+    [Fact]
     public async Task Away_from_a_World_Visit_aetheryte_it_teleports_to_the_preferred_city_first()
     {
         var (service, sim) = Rig("Adamantoise");

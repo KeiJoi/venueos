@@ -140,7 +140,7 @@ public sealed class ShoutRunnerAutomationService : IShoutRunnerAutomation, IDisp
     /// one of the three World Visit cities (so the next World's route can begin where the character arrives).</summary>
     public async Task<ShoutRunnerTransferOutcome> TravelToWorldAsync(string targetWorld, bool crossDataCenter, CancellationToken token)
     {
-        var cities = routeDestinations().Select(WorldVisitCities.ForName).OfType<WorldVisitCity>().Distinct().ToList();
+        var cities = WorldVisitCities.FromRouteDestinations(routeDestinations());
         var result = await travel.TravelAsync(new NativeTravelRequest(targetWorld, NativeTravelOwner.ShoutRunner, cities), token).ConfigureAwait(false);
         var line = $"ShoutRunner native travel #{result.OperationId} → {targetWorld} ({(crossDataCenter ? "other Data Center" : "same Data Center")}): {result.Outcome} — {result.Detail}";
         if (result.Outcome is NativeTravelOutcome.Arrived or NativeTravelOutcome.AlreadyThere) log.Information(line); else log.Warning(line + Environment.NewLine + result.Diagnostic);

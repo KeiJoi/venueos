@@ -42,6 +42,16 @@ public sealed class NativeWorldVisitDriver
     /// character beside the city aetheryte. Unverified live: the QA panel shows the measured distance.</summary>
     public const float AetheryteInteractRange = 8f;
 
+    /// <summary>Walking to the aetheryte (after a teleport that lands out of reach; Limsa Lominsa does). Only for an
+    /// aetheryte closer than <see cref="ApproachMaxDistance"/> (Lifestream's "reachable" limit); stops within
+    /// <see cref="ApproachStopDistance"/>, and gives up after <see cref="ApproachTimeout"/> or when it stops getting closer.</summary>
+    public const float ApproachMaxDistance = 30f;
+    public const float ApproachStopDistance = 6.5f;
+    public static readonly TimeSpan ApproachTimeout = TimeSpan.FromSeconds(10);
+    public static readonly TimeSpan ApproachStuckTimeout = TimeSpan.FromSeconds(2);
+    public static readonly TimeSpan ApproachSettle = TimeSpan.FromMilliseconds(600);
+    public const int MaxApproachAttempts = 1;
+
     public const int MaxInteractAttempts = 2;
     public const int MaxDataCenterSelectAttempts = 2;
 
@@ -62,6 +72,9 @@ public sealed class NativeWorldVisitDriver
     private int teleportAttempts, interactAttempts, dataCenterSelectAttempts, dataCenterSteps;
     private int? dataCenterStepFrom;   // the shown selector index when the current arrow step was pressed
     private bool leftoverUiClosed, departureSeen, windowSeen, openedUi;
+    private DateTimeOffset? approachingSince, approachStoppedAt, approachProgressAt;
+    private float approachBest = float.MaxValue;
+    private int approachAttempts;
     private ShoutRunnerArrivalVerifier? arrival;
 
     public NativeWorldVisitDriver(TravelWorld target, IReadOnlyList<WorldVisitCity> preferredCities, NativeTravelTexts texts, IReadOnlyCollection<string> regionDataCenters, bool allowDataCenterSelection, DateTimeOffset now)
@@ -147,6 +160,8 @@ public sealed class NativeWorldVisitDriver
     public bool Revalidate(NativeTravelAction a, NativeTravelSnapshot s) => a.Kind switch
     {
         NativeTravelActionKind.TeleportToCity => !s.BetweenAreas && !s.TravelQueued && s.TeleportReady && s.Window is null && s.Confirm is null,
+        NativeTravelActionKind.ApproachAetheryte => s.NearestAetheryte is { Targetable: true } p && p.ObjectId == a.ObjectId && p.Distance < ApproachMaxDistance
+            && s.Menu is null && s.Window is null && s.Confirm is null && !s.BetweenAreas && !s.TravelQueued && !s.Occupied && !s.Mounted && !s.InCombat,
         NativeTravelActionKind.InteractWithAetheryte => s.NearestAetheryte is { Targetable: true } n && n.ObjectId == a.ObjectId && n.Distance <= AetheryteInteractRange
             && s.Menu is null && s.Window is null && s.Confirm is null && !s.BetweenAreas && !s.Occupied && !s.Mounted && !s.InCombat,
         NativeTravelActionKind.SelectMenuEntry => s.Menu is { } m && a.Index >= 0 && a.Index < m.Entries.Count && m.Entries[a.Index] == a.Label
@@ -172,6 +187,8 @@ public sealed class NativeWorldVisitDriver
         switch (a.Kind)
         {
             case NativeTravelActionKind.TeleportToCity: teleportAttempts++; teleportedAt = now; break;
+            case NativeTravelActionKind.ApproachAetheryte: approachAttempts++; approachingSince = now; approachProgressAt = now; approachBest = float.MaxValue; break;
+            case NativeTravelActionKind.StopApproach: approachingSince = null; approachStoppedAt = now; break;
             case NativeTravelActionKind.InteractWithAetheryte: interactAttempts++; lastInteractAt = now; openedUi = true; break;
             case NativeTravelActionKind.SelectMenuEntry: menuSelectedAt = now; break;
             case NativeTravelActionKind.SelectDataCenter:
@@ -211,12 +228,37 @@ public sealed class NativeWorldVisitDriver
         }
 
         var city = WorldVisitCities.ForTerritory(s.TerritoryId);
+        // Not at a World Visit aetheryte: go to the FIRST World Visit city on the route's list (owner requirement), even
+        // from inside another city; only without one on the list, the current city's aetheryte, then Limsa Lominsa.
+        var destination = preferredCities.FirstOrDefault() ?? city ?? WorldVisitCities.LimsaLominsa;
+
+        if (approachingSince is { } walkingSince)
+        {
+            var distance = s.NearestAetheryte is { Targetable: true } near ? near.Distance : float.MaxValue;
+            if (distance <= ApproachStopDistance) return new(NativeTravelActionKind.StopApproach, $"stop walking: {distance:0.0}y from the aetheryte");
+            if (now - walkingSince >= ApproachTimeout) return Fail(now, NativeTravelOutcome.NotReady, $"could not walk to the aetheryte within {ApproachTimeout.TotalSeconds:0}s ({Yalms(distance)} away)");
+            if (distance < approachBest - 0.5f) { approachBest = distance; approachProgressAt = now; }
+            else if (now - approachProgressAt!.Value >= ApproachStuckTimeout) return Fail(now, NativeTravelOutcome.NotReady, $"stopped getting closer while walking to the aetheryte ({Yalms(distance)} away)");
+            return NativeTravelAction.Wait($"walking to the aetheryte ({Yalms(distance)})");
+        }
+
+        if (approachStoppedAt is { } stopped && now - stopped < ApproachSettle) return NativeTravelAction.Wait("coming to a stop at the aetheryte");
+
         if (city is not null && s.NearestAetheryte is { Targetable: true } aetheryte && aetheryte.Distance <= AetheryteInteractRange)
         {
             if (s.Mounted) return Fail(now, NativeTravelOutcome.NotReady, "the character is mounted at the aetheryte");
             if (s.Occupied) return Elapsed(now) >= StepTimeout ? Fail(now, NativeTravelOutcome.NotReady, "the character stayed occupied") : NativeTravelAction.Wait("waiting for the character to be free");
             Enter(now, NativeTravelPhase.OpeningWorldVisit, $"at the {city.Name} aetheryte ({aetheryte.Distance:0.0}y, object base id {aetheryte.BaseId})");
             return OpenWorldVisit(s, now);
+        }
+
+        // In the city we are heading for (typically just teleported into), with its aetheryte in sight but out of reach:
+        // walk to it rather than fail. Limsa Lominsa's arrival point is out of reach.
+        if (city is not null && city == destination && s.NearestAetheryte is { Targetable: true } far && far.Distance < ApproachMaxDistance
+            && approachAttempts < MaxApproachAttempts && !s.Mounted && !s.Occupied)
+        {
+            Note(now, $"the {city.Name} aetheryte is {far.Distance:0.0}y away, beyond the {AetheryteInteractRange:0}y reach: walking to it");
+            return new(NativeTravelActionKind.ApproachAetheryte, $"walk to the aetheryte ({far.Distance:0.0}y)", ObjectId: far.ObjectId, Id: far.BaseId);
         }
 
         if (teleportAttempts >= MaxTeleportAttempts)
@@ -226,7 +268,6 @@ public sealed class NativeWorldVisitDriver
         if (!s.TeleportReady)
             return Elapsed(now) >= StepTimeout ? Fail(now, NativeTravelOutcome.NotReady, "Teleport is not available right now") : NativeTravelAction.Wait("waiting for Teleport to be usable");
 
-        var destination = city ?? preferredCities.FirstOrDefault() ?? WorldVisitCities.LimsaLominsa;
         return new(NativeTravelActionKind.TeleportToCity, $"teleport to {destination.Name} for World Visit", Id: destination.AetheryteId, Label: destination.Name);
     }
 
@@ -420,6 +461,8 @@ public sealed class NativeWorldVisitDriver
         return dcs.Count == 1 ? dcs[0] : null;
     }
 
+    private static string Yalms(float distance) => distance == float.MaxValue ? "no aetheryte in sight" : $"{distance:0.0}y";
+
     private static int IndexOf(IReadOnlyList<string> labels, string value)
     {
         for (var i = 0; i < labels.Count; i++) if (string.Equals(labels[i], value, StringComparison.OrdinalIgnoreCase)) return i;
@@ -466,6 +509,12 @@ public sealed class NativeWorldVisitDriver
         // Before confirmation, the menus THIS operation opened are closed so the character is left free. A failure before
         // VenueOS opened anything closes nothing (a menu the player opened is theirs). After confirmation the game owns
         // the transfer and nothing is touched.
+        if (approachingSince is not null)
+        {
+            approachingSince = null;
+            return new(NativeTravelActionKind.StopApproach, $"stop walking ({outcome})");
+        }
+
         return closeUi && openedUi && !TravelConfirmed ? new(NativeTravelActionKind.CloseTravelUi, $"close travel menus ({outcome})") : Finished();
     }
 

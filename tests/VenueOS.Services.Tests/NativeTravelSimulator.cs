@@ -65,6 +65,10 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
     public TravelWorld Home;
     public uint Territory = WorldVisitCities.Uldah.TerritoryId;
     public float AetheryteDistance = 3f;
+    public float TeleportArrivalDistance = 3f;     // Limsa Lominsa lands out of reach (owner, 2026-11-13)
+    public bool Walking, ApproachBlocked;          // /automove toward the locked-on aetheryte; blocked = no progress
+    public bool WalkingStoppedByEndOperation;      // the port's safety net had to stop movement the driver left on
+    public int Approaches;
     public bool InCombat, Mounted, LoggedOut;
 
     // UI state
@@ -124,7 +128,11 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
     public DateTimeOffset UtcNow => Now;
 
     public void BeginOperation(int id) { operationId = id; CongestionMessages = 0; }
-    public void EndOperation(int id) { if (operationId == id) operationId = 0; }
+    public void EndOperation(int id)
+    {
+        if (operationId == id) operationId = 0;
+        if (Walking) { Walking = false; WalkingStoppedByEndOperation = true; }
+    }
 
     public Task DelayAsync(TimeSpan delay, CancellationToken token)
     {
@@ -170,7 +178,15 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
                 teleportAt = Now;
                 teleportCity = WorldVisitCities.All.First(c => c.AetheryteId == a.Id);
                 break;
+            case NativeTravelActionKind.ApproachAetheryte:
+                Walking = true;
+                Approaches++;
+                break;
+            case NativeTravelActionKind.StopApproach:
+                Walking = false;
+                break;
             case NativeTravelActionKind.InteractWithAetheryte:
+                if (Walking) throw new InvalidOperationException("interacted while still walking");
                 MenuOpen = true;
                 break;
             case NativeTravelActionKind.SelectMenuEntry:
@@ -222,6 +238,7 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
     private NativeTravelSnapshot Snapshot(bool peek = false)
     {
         if (!peek) SnapshotCount++;
+        if (!peek && Walking && !ApproachBlocked) AetheryteDistance = Math.Max(0.5f, AetheryteDistance - 1.2f);
         AdvanceTimeline();
 
         if (!peek && WindowOpen && rowsDc != SelectedDc && !StaleRowsForever)
@@ -269,7 +286,7 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
         {
             if (Now - t < TimeSpan.FromSeconds(3)) return true;
             Territory = teleportCity!.TerritoryId;
-            AetheryteDistance = 3f;
+            AetheryteDistance = TeleportArrivalDistance;
             teleportAt = null;
         }
 

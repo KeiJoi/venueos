@@ -8,6 +8,7 @@ A short summary of each VenueOS release. Detailed notes are in `RELEASE.md`, and
 - **ShoutRunner (Patch 7.58):** VenueOS can switch Data Center in the World Visit window by pressing its ◁ ▷ arrows one step at a time, checking each step. This step is off until it has been verified in game. While it is off, other Data Centers in your region are skipped before anything is clicked.
 - **ShoutRunner:** Data Centers are now read from the game's real logical Data Center. Patch 7.58 game data lists every North American World under "Aether" in the old field, which made 0.3.13 treat every NA World as Aether.
 - **ShoutRunner:** a World that is greyed out or missing in the World Visit list is skipped, and the rest of its Data Center continues.
+- **ShoutRunner:** when not standing at a World Visit aetheryte, it teleports to the first World Visit city on your destination list. If the teleport leaves the character out of reach of the aetheryte (Limsa Lominsa), it walks there and stops automatically.
 - **Native Travel QA (new):** a diagnostic section at the bottom of ShoutRunner's settings. It tests a single trip without any announcement, and Inspect describes the World Visit window without clicking anything. If travel stops because the window looks unexpected, VenueOS records the same description automatically before closing the window.
 
 ## 0.3.13 — 2026-11-12

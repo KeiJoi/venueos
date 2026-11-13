@@ -46,7 +46,9 @@ plus steps to reproduce.
 |---|---|---|---|
 | B1 | Stand in Ul'dah, Gridania or Limsa near the big aetheryte (or anywhere: VenueOS teleports to the chosen city). Pick a World on your current DC (e.g. Adamantoise → Cactuar). Start Travel Test. | The aetheryte menu opens and "Visit Another World Server." is chosen. The window opens on your DC, the World is clicked, and the dialog reads exactly "Travel to Cactuar?". OK is pressed. | ☐ Pass ☐ Fail ☐ Not Tested |
 | B2 | Wait. | You arrive on the chosen World; status "Arrived". Never Jenova or any other World. | ☐ Pass ☐ Fail ☐ Not Tested |
-| B3 | Start from outside a city (e.g. a field zone). | VenueOS teleports to the city chosen in "World Visit city", then continues as B1. | ☐ Pass ☐ Fail ☐ Not Tested |
+| B3 | Start from outside a city (e.g. a field zone). | VenueOS teleports to the city chosen in "World Visit city" (ShoutRunner: the first World Visit city on the destination list), then continues as B1. | ☐ Pass ☐ Fail ☐ Not Tested |
+| B4 | Choose Limsa Lominsa as the World Visit city and start from a field zone. | After the teleport, if the aetheryte is out of reach, the trace shows "walking to it", the character runs to the aetheryte and stops ("stop walking: …y"), and then the menu opens. Auto-run is off afterwards. | ☐ Pass ☐ Fail ☐ Not Tested |
+| B5 | During B4, press Cancel Travel Test while the character is running. | The character stops running (auto-run off); status "Cancelled". | ☐ Pass ☐ Fail ☐ Not Tested |
 
 ## D. Data Center selector (inspection first — before turning the switch on)
 
