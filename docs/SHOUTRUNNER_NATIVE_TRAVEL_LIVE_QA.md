@@ -84,7 +84,8 @@ diagnostics; that's exactly what needs correcting. Don't turn the switch on.
 
 | # | Step | Expected | Result |
 |---|---|---|---|
-| G1 | Target a World shown as unavailable/congested. | Status "WorldUnavailable" (or "Congested"); nothing clicked on that row. Take an Inspect of the window first: how the row reads is unverified. | ☐ Pass ☐ Fail ☐ Not Tested |
+| G1 | When a World is congested (busy evening hours), open the World Visit window by hand on its Data Center, press **Inspect (read-only)** and **Copy Diagnostics** before anything else. | The "World rows (drawn state)" line shows how that row differs (text colour, icons, disabled flag); any "SelectOk" or "_TextError" lines show the game's message. | ☐ Pass ☐ Fail ☐ Not Tested |
+| G1b | Close the window, then run Start Travel Test to that congested World and Copy Diagnostics. | Either "WorldUnavailable" without clicking the row (if the list flags it), or "… was selected but the game opened no confirmation …; nothing was confirmed" with the window capture. Never "Travel to …?" confirmed; the character stays put. | ☐ Pass ☐ Fail ☐ Not Tested |
 | G2 | In a ShoutRunner route, a congested World. | Only that World is SKIPPED; the rest of its DC continues. | ☐ Pass ☐ Fail ☐ Not Tested |
 
 ## H. Full ShoutRunner route (switch ON; a short message you're happy to shout)

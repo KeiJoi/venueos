@@ -4,7 +4,7 @@ VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational rele
 
 ## 0.3.14 — Native World Visit & Data Center Travel (UNRELEASED QA BUILD)
 
-**Not released.** A local QA build (`release/qa/VenueOS-0.3.14-QA.zip`) for the owner's live test. There is no tag, GitHub Release or `repo.json` change. Automated validation is complete (full suite 1620 / 1620, Debug and Release builds with 0 warnings / 0 errors; 15 / 15 safety mutants killed; see `docs/SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md` §6). **Live QA: Pending — owner testing; publication requires separate authorization.**
+**Not released.** A local QA build (`release/qa/VenueOS-0.3.14-QA.zip`) for the owner's live test. There is no tag, GitHub Release or `repo.json` change. Automated validation is complete (full suite 1625 / 1625, Debug and Release builds with 0 warnings / 0 errors; 15 / 15 safety mutants killed; see `docs/SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md` §6). **Live QA: Pending — owner testing; publication requires separate authorization.**
 
 ### ShoutRunner
 

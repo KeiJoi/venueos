@@ -566,6 +566,43 @@ public sealed class NativeTravelEngineTests
         Assert.Equal(0, sim.Count(NativeTravelActionKind.ConfirmTravel));
     }
 
+    // ----- a World whose click opens no confirmation (expected for congested Worlds; owner, 2026-11-13) -----
+
+    [Fact]
+    public void A_World_whose_click_opens_no_confirmation_is_unavailable_with_a_UI_capture_and_nothing_confirmed()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.UnselectableWorlds.Add("Cactuar");
+        var result = Travel(service, "Cactuar");
+        Assert.Equal(NativeTravelOutcome.WorldUnavailable, result.Outcome);
+        Assert.Contains("opened no confirmation", result.Detail);
+        Assert.Single(sim.UiCaptures);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.ConfirmTravel));
+        Assert.False(sim.WindowOpen || sim.ConfirmOpen || sim.MenuOpen);
+        Assert.Equal("Adamantoise", sim.Current.Name);
+    }
+
+    [Fact]
+    public void Two_unaccepted_World_selections_in_a_row_stop_travel_as_unexpected_UI()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.UnselectableWorlds.UnionWith(["Cactuar", "Faerie"]);
+        Assert.Equal(NativeTravelOutcome.WorldUnavailable, Travel(service, "Cactuar").Outcome);
+        var second = Travel(service, "Faerie");
+        Assert.Equal(NativeTravelOutcome.UnexpectedUi, second.Outcome);
+        Assert.Contains("2 World selections in a row opened no confirmation", second.Detail);
+    }
+
+    [Fact]
+    public void A_confirmed_travel_in_between_resets_the_unaccepted_selection_count()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.UnselectableWorlds.UnionWith(["Cactuar", "Faerie"]);
+        Assert.Equal(NativeTravelOutcome.WorldUnavailable, Travel(service, "Cactuar").Outcome);
+        Assert.Equal(NativeTravelOutcome.Arrived, Travel(service, "Gilgamesh").Outcome);
+        Assert.Equal(NativeTravelOutcome.WorldUnavailable, Travel(service, "Faerie").Outcome);
+    }
+
     [Fact]
     public void An_unexpected_UI_stop_captures_the_window_read_only_before_closing_it()
     {

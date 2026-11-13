@@ -110,6 +110,7 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
     public HashSet<string> DisabledWorlds = new(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> DisabledDcs = new(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> HiddenWorlds = new(StringComparer.OrdinalIgnoreCase);
+    public HashSet<string> UnselectableWorlds = new(StringComparer.OrdinalIgnoreCase);   // listed, not flagged disabled, but a click opens nothing
     public int CongestionMessagesAfterConfirm;
     public Action? BeforeExecute;                 // mutate the game between decision and action (revalidation tests)
     public Func<CancellationToken, Task>? DelayHook;
@@ -216,6 +217,7 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
             case NativeTravelActionKind.SelectWorld:
                 var rows = Rows();
                 var index = Math.Clamp(a.Index + SelectWorldRowOffset, 0, rows.Count - 1);
+                if (rows[index].World is { } clicked && UnselectableWorlds.Contains(clicked.Name)) break;
                 pendingDestination = rows[index].World;
                 AgentDestination = pendingDestination?.Id ?? 0;
                 ConfirmOpen = true;

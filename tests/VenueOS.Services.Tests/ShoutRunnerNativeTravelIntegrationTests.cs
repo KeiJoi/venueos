@@ -169,6 +169,31 @@ public sealed class ShoutRunnerNativeTravelIntegrationTests
     }
 
     [Fact]
+    public void A_World_whose_click_opens_no_confirmation_is_skipped_and_its_Data_Center_continues()
+    {
+        var rig = new Rig("Siren", allowDc: true, "Aether");
+        rig.Sim.UnselectableWorlds.Add("Faerie");
+        rig.Service.Start();
+        rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Stopped);
+        Assert.Contains(rig.Texts(), t => t.StartsWith("Faerie — SKIPPED", StringComparison.Ordinal));
+        Assert.DoesNotContain(rig.Sent, s => s.World == "Faerie");
+        Assert.Equal(7 * 3, rig.Sent.Count);
+        Assert.Contains("Aether — completed with skips.", rig.Texts());
+    }
+
+    [Fact]
+    public void Two_Worlds_in_a_row_that_open_no_confirmation_stop_the_run_resumably()
+    {
+        var rig = new Rig("Siren", allowDc: true, "Aether");
+        rig.Sim.UnselectableWorlds.UnionWith(["Cactuar", "Faerie"]);   // consecutive in the Aether route
+        rig.Service.Start();
+        rig.PumpUntil(() => rig.Service.State is ShoutRunnerState.Faulted or ShoutRunnerState.Stopped);
+        Assert.Equal(ShoutRunnerState.Faulted, rig.Service.State);
+        Assert.NotNull(rig.Store.Current);   // resumable
+        Assert.DoesNotContain(rig.Sent, s => s.World is "Cactuar" or "Faerie");
+    }
+
+    [Fact]
     public void A_congested_World_row_is_skipped_and_its_Data_Center_continues()
     {
         var rig = new Rig("Siren", allowDc: true, "Aether");

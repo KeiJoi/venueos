@@ -598,6 +598,8 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
         var confirm = ReadConfirm();
         sb.AppendLine(confirm is null ? "SelectYesno: closed" : $"SelectYesno: \"{confirm.Prompt.Replace("\n", "⏎")}\" yesEnabled={confirm.YesEnabled}");
 
+        DescribeAddonTexts(sb, "SelectOk");
+        DescribeAddonTexts(sb, "_TextError");
         var addon = gameGui.GetAddonByName<AtkUnitBase>("WorldTravelSelect");
         if (addon is null) { sb.AppendLine("WorldTravelSelect: closed"); return sb.ToString(); }
         sb.AppendLine($"WorldTravelSelect: ready {addon->IsReady} visible {addon->IsVisible}; nodes {addon->UldManager.NodeListCount}; AtkValues {addon->AtkValuesCount}");
@@ -624,6 +626,7 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
         if (window?.Worlds is { } wl)
             sb.AppendLine($"  World list (node {(window.RegionalSelectorVisible ? RegionalWorldListNodeId : LegacyWorldListNodeId)}): selected {wl.SelectedIndex}, pending {wl.Pending}, click event owned {wl.EventVerified}; rows {string.Join(" | ", wl.Rows.Select((r, i) => $"[{i}] \"{r.Label}\" → {(r.World is null ? "?" : $"{r.World.Name}/{r.World.LogicalDataCenter}")}{(r.Disabled ? " (disabled)" : string.Empty)}"))}");
         else sb.AppendLine("  World list: not readable");
+        DescribeRowStates(sb, addon, window?.RegionalSelectorVisible == true);
         for (var i = 0; i < addon->AtkValuesCount && i < 160; i++)
         {
             var v = addon->AtkValues[i];
@@ -718,6 +721,60 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
         }
 
         sb.AppendLine($"    list owner node events: [{string.Join(", ", parts)}]");
+    }
+
+    /// <summary>How each World row is drawn: its text colour, which images (icons) show and their part ids, and the list's
+    /// disabled flag. Live QA showed the current World greyed in screenshots while the disabled flag read false; this is
+    /// the evidence for how an unavailable (congested) World looks once one is seen.</summary>
+    private void DescribeRowStates(StringBuilder sb, AtkUnitBase* addon, bool regional)
+    {
+        var list = addon->GetComponentListById(regional ? RegionalWorldListNodeId : LegacyWorldListNodeId);
+        if (list is null) return;
+        var count = list->GetItemCount();
+        if (count is < 0 or > 32) return;
+        var parts = new List<string>();
+        for (var i = 0; i < count; i++)
+        {
+            var renderer = list->GetItemRenderer(i);
+            var state = new StringBuilder($"[{i}] {ReadItemText(list, i)} disabled={list->GetItemDisabledState(i)}");
+            if (renderer is not null && renderer->UldManager.NodeList is not null && renderer->UldManager.NodeListCount <= 64)
+            {
+                for (var j = 0; j < renderer->UldManager.NodeListCount; j++)
+                {
+                    var node = renderer->UldManager.NodeList[j];
+                    if (node is null || !node->IsVisible()) continue;
+                    var text = node->GetAsAtkTextNode();
+                    if (text is not null)
+                        state.Append($" text#{text->TextColor.R:X2}{text->TextColor.G:X2}{text->TextColor.B:X2}{text->TextColor.A:X2}");
+                    else if (node->Type == NodeType.Image)
+                        state.Append($" image{node->NodeId}(part {((AtkImageNode*)node)->PartId})");
+                    state.Append($" mul{node->MultiplyRed},{node->MultiplyGreen},{node->MultiplyBlue}");
+                }
+            }
+
+            parts.Add(state.ToString());
+        }
+
+        sb.AppendLine($"  World rows (drawn state): {string.Join(" | ", parts)}");
+    }
+
+    /// <summary>The visible text of a small addon (an OK-only dialog or the on-screen error line), read-only.</summary>
+    private void DescribeAddonTexts(StringBuilder sb, string name)
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(name);
+        if (addon is null || !addon->IsVisible || addon->UldManager.NodeList is null || addon->UldManager.NodeListCount > 128) return;
+        var texts = new List<string>();
+        for (var i = 0; i < addon->UldManager.NodeListCount; i++)
+        {
+            var node = addon->UldManager.NodeList[i];
+            if (node is null || !node->IsVisible()) continue;
+            var text = node->GetAsAtkTextNode();
+            if (text is null) continue;
+            var value = SeText(text->NodeText.AsSpan());
+            if (value.Length > 0) texts.Add($"\"{Shorten(value, 120)}\"");
+        }
+
+        sb.AppendLine($"{name}: open; texts {string.Join(" | ", texts)}");
     }
 
     private static string Shorten(string value, int max) =>

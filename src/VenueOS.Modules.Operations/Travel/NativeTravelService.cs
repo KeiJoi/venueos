@@ -39,6 +39,13 @@ public sealed class NativeTravelService(INativeTravelGamePort port, ITravelWorld
 {
     public static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(200);
 
+    /// <summary>A World whose selection opens no confirmation is skipped as unavailable. When this many operations in a row
+    /// end that way, the last one is reported as <see cref="NativeTravelOutcome.UnexpectedUi"/> instead: selecting Worlds
+    /// may no longer work at all, and a run must not silently skip every World.</summary>
+    public const int MaxConsecutiveUnacceptedSelections = 2;
+
+    private int consecutiveUnacceptedSelections;
+
     private readonly object gate = new();
     private int sequence;
     private ActiveOperation? active;
@@ -167,7 +174,7 @@ public sealed class NativeTravelService(INativeTravelGamePort port, ITravelWorld
                 if (action.Kind == NativeTravelActionKind.Finish) break;
                 if (action.Kind != NativeTravelActionKind.Wait)
                 {
-                    if (action.Kind == NativeTravelActionKind.CloseTravelUi && driver.Outcome is NativeTravelOutcome.UnexpectedUi or NativeTravelOutcome.SelectionMismatch)
+                    if (action.Kind == NativeTravelActionKind.CloseTravelUi && (driver.Outcome is NativeTravelOutcome.UnexpectedUi or NativeTravelOutcome.SelectionMismatch || driver.SelectionNotAccepted))
                         uiCapture = await CaptureUiAsync().ConfigureAwait(false);
                     var performed = await port.ExecuteAsync(action, fresh => driver.Revalidate(action, fresh), token).ConfigureAwait(false);
                     driver.Executed(action, performed, port.UtcNow);
@@ -188,7 +195,25 @@ public sealed class NativeTravelService(INativeTravelGamePort port, ITravelWorld
             return Result(op, driver, NativeTravelOutcome.Failed, $"travel engine error: {ex.Message}", uiCapture);
         }
 
-        return Result(op, driver, driver.Outcome ?? NativeTravelOutcome.Failed, driver.OutcomeDetail, uiCapture);
+        var outcome = driver.Outcome ?? NativeTravelOutcome.Failed;
+        var detail = driver.OutcomeDetail;
+        lock (gate)
+        {
+            if (driver.SelectionNotAccepted)
+            {
+                if (++consecutiveUnacceptedSelections >= MaxConsecutiveUnacceptedSelections)
+                {
+                    outcome = NativeTravelOutcome.UnexpectedUi;
+                    detail += $"; {consecutiveUnacceptedSelections} World selections in a row opened no confirmation, so travel stops in case selecting Worlds no longer works";
+                }
+            }
+            else if (driver.TravelConfirmed)
+            {
+                consecutiveUnacceptedSelections = 0;
+            }
+        }
+
+        return Result(op, driver, outcome, detail, uiCapture);
     }
 
     /// <summary>Maximum length of the automatic UI capture kept in a result's diagnostic.</summary>

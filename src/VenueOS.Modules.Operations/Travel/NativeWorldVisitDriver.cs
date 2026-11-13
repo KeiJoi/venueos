@@ -111,6 +111,10 @@ public sealed class NativeWorldVisitDriver
     public IReadOnlyList<string> Trace => trace;
     public bool TravelConfirmed => confirmedAt is not null;
 
+    /// <summary>The World row was clicked but the game opened no confirmation (a congested or otherwise unavailable
+    /// World is the expected cause; how such a row looks in the 7.58 list is not yet verified live).</summary>
+    public bool SelectionNotAccepted { get; private set; }
+
     /// <summary>Decides the next step from the latest snapshot.</summary>
     public NativeTravelAction Next(NativeTravelSnapshot s, DateTimeOffset now)
     {
@@ -441,7 +445,7 @@ public sealed class NativeWorldVisitDriver
 
         if (s.Window is null && !s.TravelQueued) return WindowLost(now);
         return now - (worldSelectedAt ?? phaseEnteredAt) >= StepTimeout
-            ? Fail(now, NativeTravelOutcome.UnexpectedUi, "no confirmation appeared after selecting the World")
+            ? NotAccepted(now)
             : NativeTravelAction.Wait("waiting for the confirmation");
     }
 
@@ -518,6 +522,13 @@ public sealed class NativeWorldVisitDriver
         Phase = phase;
         phaseEnteredAt = now;
         Note(now, $"→ {phase}: {detail}");
+    }
+
+    private NativeTravelAction NotAccepted(DateTimeOffset now)
+    {
+        SelectionNotAccepted = true;
+        return Fail(now, NativeTravelOutcome.WorldUnavailable,
+            $"{target.Name} was selected but the game opened no confirmation (probably congested or unavailable); nothing was confirmed");
     }
 
     private NativeTravelAction Succeed(DateTimeOffset now, NativeTravelOutcome outcome, string detail)
