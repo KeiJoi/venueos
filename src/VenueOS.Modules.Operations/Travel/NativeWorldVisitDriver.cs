@@ -40,7 +40,14 @@ public sealed class NativeWorldVisitDriver
 
     /// <summary>Horizontal distance within which the aetheryte is interacted with directly. Teleport arrival puts the
     /// character beside the city aetheryte. Unverified live: the QA panel shows the measured distance.</summary>
-    public const float AetheryteInteractRange = 8f;
+    /// <summary>The aetheryte can be used from here: horizontal distance under <see cref="AetheryteReach"/> and 3D distance
+    /// under <see cref="AetheryteReach3D"/>. These are the thresholds public Lifestream (b363201, <c>Utils.GetValidAetheryte</c>)
+    /// interacts at; live QA 2026-11-13 found 0.3.14's former 8 y too strict (blocked at 10.1 to 10.2 y in Limsa).</summary>
+    public const float AetheryteReach = 11f;
+    public const float AetheryteReach3D = 15f;
+
+    public static bool InReach(AetheryteObservation? a) =>
+        a is { Targetable: true } && a.Distance < AetheryteReach && MathF.Sqrt(a.Distance * a.Distance + a.Height * a.Height) < AetheryteReach3D;
 
     /// <summary>Walking to the aetheryte (after a teleport that lands out of reach; Limsa Lominsa does). Only for an
     /// aetheryte closer than <see cref="ApproachMaxDistance"/> (Lifestream's "reachable" limit); stops within
@@ -167,7 +174,7 @@ public sealed class NativeWorldVisitDriver
         NativeTravelActionKind.TeleportToCity => !s.BetweenAreas && !s.TravelQueued && s.TeleportReady && s.Window is null && s.Confirm is null,
         NativeTravelActionKind.ApproachAetheryte => s.NearestAetheryte is { Targetable: true } p && p.ObjectId == a.ObjectId && p.Distance < ApproachMaxDistance
             && s.Menu is null && s.Window is null && s.Confirm is null && !s.BetweenAreas && !s.TravelQueued && !s.Occupied && !s.Mounted && !s.InCombat,
-        NativeTravelActionKind.InteractWithAetheryte => s.NearestAetheryte is { Targetable: true } n && n.ObjectId == a.ObjectId && n.Distance <= AetheryteInteractRange
+        NativeTravelActionKind.InteractWithAetheryte => s.NearestAetheryte is { Targetable: true } n && n.ObjectId == a.ObjectId && InReach(n)
             && s.Menu is null && s.Window is null && s.Confirm is null && !s.BetweenAreas && !s.Occupied && !s.Mounted && !s.InCombat,
         NativeTravelActionKind.SelectMenuEntry => s.Menu is { } m && a.Index >= 0 && a.Index < m.Entries.Count && m.Entries[a.Index] == a.Label
             && NativeTravelPolicy.IsWorldVisitMenuEntry(m.Entries[a.Index], texts.WorldVisitOption),
@@ -246,7 +253,7 @@ public sealed class NativeWorldVisitDriver
         }
 
         if (teleportArrivedAt is { } landed && now - landed < TeleportArrivalSettle
-            && s.NearestAetheryte is not { Targetable: true, Distance: <= AetheryteInteractRange })
+            && !InReach(s.NearestAetheryte))
             return NativeTravelAction.Wait("arrived; waiting for the aetheryte to appear");
 
         // A menu left open by someone else is closed once, never driven.
@@ -266,15 +273,17 @@ public sealed class NativeWorldVisitDriver
         {
             var distance = s.NearestAetheryte is { Targetable: true } near ? near.Distance : float.MaxValue;
             if (distance <= ApproachStopDistance) return new(NativeTravelActionKind.StopApproach, $"stop walking: {distance:0.0}y from the aetheryte");
-            if (now - walkingSince >= ApproachTimeout) return Fail(now, NativeTravelOutcome.NotReady, $"could not walk to the aetheryte within {ApproachTimeout.TotalSeconds:0}s ({Yalms(distance)} away)");
+            var reachable = InReach(s.NearestAetheryte);
+            var blockedInReach = new NativeTravelAction(NativeTravelActionKind.StopApproach, $"stop walking: blocked at {Yalms(distance)}, which is within the aetheryte's reach");
+            if (now - walkingSince >= ApproachTimeout) return reachable ? blockedInReach : Fail(now, NativeTravelOutcome.NotReady, $"could not walk to the aetheryte within {ApproachTimeout.TotalSeconds:0}s ({Yalms(distance)} away)");
             if (distance < approachBest - 0.5f) { approachBest = distance; approachProgressAt = now; }
-            else if (now - approachProgressAt!.Value >= ApproachStuckTimeout) return Fail(now, NativeTravelOutcome.NotReady, $"stopped getting closer while walking to the aetheryte ({Yalms(distance)} away)");
+            else if (now - approachProgressAt!.Value >= ApproachStuckTimeout) return reachable ? blockedInReach : Fail(now, NativeTravelOutcome.NotReady, $"stopped getting closer while walking to the aetheryte ({Yalms(distance)} away)");
             return NativeTravelAction.Wait($"walking to the aetheryte ({Yalms(distance)})");
         }
 
         if (approachStoppedAt is { } stopped && now - stopped < ApproachSettle) return NativeTravelAction.Wait("coming to a stop at the aetheryte");
 
-        if (city is not null && s.NearestAetheryte is { Targetable: true } aetheryte && aetheryte.Distance <= AetheryteInteractRange)
+        if (city is not null && s.NearestAetheryte is { Targetable: true } aetheryte && InReach(aetheryte))
         {
             if (s.Mounted) return Fail(now, NativeTravelOutcome.NotReady, "the character is mounted at the aetheryte");
             if (s.Occupied) return Elapsed(now) >= StepTimeout ? Fail(now, NativeTravelOutcome.NotReady, "the character stayed occupied") : NativeTravelAction.Wait("waiting for the character to be free");
@@ -287,14 +296,14 @@ public sealed class NativeWorldVisitDriver
         if (city is not null && city == destination && s.NearestAetheryte is { Targetable: true } far && far.Distance < ApproachMaxDistance
             && approachAttempts < MaxApproachAttempts && !s.Mounted && !s.Occupied)
         {
-            Note(now, $"the {city.Name} aetheryte is {far.Distance:0.0}y away, beyond the {AetheryteInteractRange:0}y reach: walking to it");
+            Note(now, $"the {city.Name} aetheryte is {far.Distance:0.0}y away, out of reach (under {AetheryteReach:0}y needed): walking to it");
             return new(NativeTravelActionKind.ApproachAetheryte, $"walk to the aetheryte ({far.Distance:0.0}y)", ObjectId: far.ObjectId, Id: far.BaseId);
         }
 
         if (teleportAttempts >= MaxTeleportAttempts)
             return Fail(now, NativeTravelOutcome.NotReady, city is null
                 ? $"after teleporting, the character is not in a World Visit city (territory {s.TerritoryId})"
-                : $"after teleporting, no aetheryte is within {AetheryteInteractRange:0}y (nearest {s.NearestAetheryte?.Distance.ToString("0.0") ?? "none"})");
+                : $"after teleporting, no aetheryte is within reach (under {AetheryteReach:0}y; nearest {s.NearestAetheryte?.Distance.ToString("0.0") ?? "none"})");
         if (!s.TeleportReady)
             return Elapsed(now) >= StepTimeout ? Fail(now, NativeTravelOutcome.NotReady, "Teleport is not available right now") : NativeTravelAction.Wait("waiting for Teleport to be usable");
 
@@ -324,7 +333,7 @@ public sealed class NativeWorldVisitDriver
             return now - selected >= StepTimeout ? Fail(now, NativeTravelOutcome.UnexpectedUi, "the World Visit window did not open") : NativeTravelAction.Wait("waiting for the World Visit window");
         if (lastInteractAt is { } last && now - last < InteractRetryInterval) return NativeTravelAction.Wait("waiting for the aetheryte menu");
         if (interactAttempts >= MaxInteractAttempts) return Fail(now, NativeTravelOutcome.UnexpectedUi, "the aetheryte menu did not open");
-        if (s.NearestAetheryte is not { Targetable: true } aetheryte || aetheryte.Distance > AetheryteInteractRange)
+        if (s.NearestAetheryte is not { Targetable: true } aetheryte || !InReach(aetheryte))
             return Fail(now, NativeTravelOutcome.NotReady, "the aetheryte is no longer within reach");
         return new(NativeTravelActionKind.InteractWithAetheryte, $"interact with the aetheryte ({aetheryte.Distance:0.0}y)", ObjectId: aetheryte.ObjectId, Id: aetheryte.BaseId);
     }

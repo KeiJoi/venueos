@@ -7,7 +7,9 @@ namespace VenueOS.Modules.Operations.Travel;
 
 /// <summary>The nearest aetheryte object: <paramref name="BaseId"/> is its Aetheryte sheet row (8/2/9 for the three
 /// World Visit cities); <paramref name="Distance"/> is horizontal.</summary>
-public sealed record AetheryteObservation(ulong ObjectId, uint BaseId, float Distance, bool Targetable);
+/// <param name="Distance">Horizontal (X/Z) distance from the character, in yalms.</param>
+/// <param name="Height">Vertical offset (|Y difference|), in yalms.</param>
+public sealed record AetheryteObservation(ulong ObjectId, uint BaseId, float Distance, bool Targetable, float Height = 0f);
 
 /// <summary>An open SelectString menu (the aetheryte's options), entry text as rendered.</summary>
 public sealed record MenuObservation(IReadOnlyList<string> Entries);

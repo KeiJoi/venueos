@@ -132,6 +132,70 @@ public sealed class NativeTravelEngineTests
     }
 
     [Fact]
+    public async Task Live_QA_an_obstacle_at_10_y_is_within_reach_so_it_stops_walking_and_uses_the_aetheryte()
+    {
+        // Live QA 2026-11-13 runs #3/#4: arrival 12.7 y, blocked by objects at 10.1 to 10.2 y. The owner confirmed the menu
+        // opens from there; build 8175884 failed with "stopped getting closer … (10.2y away)".
+        var (service, sim) = Rig("Halicarnassus");
+        sim.Territory = 138;
+        sim.AetheryteDistance = 100f;
+        sim.TeleportArrivalDistance = 12.7f;
+        sim.ApproachBlockedAt = 10.2f;
+        var result = await service.TravelAsync(new NativeTravelRequest("Kraken", NativeTravelOwner.QaTest, [WorldVisitCities.LimsaLominsa]), default);
+        Assert.Equal(NativeTravelOutcome.Arrived, result.Outcome);
+        Assert.Contains("blocked at 10.2y, which is within the aetheryte's reach", result.Diagnostic);
+        Assert.Equal([NativeTravelActionKind.TeleportToCity, NativeTravelActionKind.ApproachAetheryte, NativeTravelActionKind.StopApproach, NativeTravelActionKind.InteractWithAetheryte], sim.Executed.Select(a => a.Kind).Take(4));
+        Assert.False(sim.Walking);
+    }
+
+    [Fact]
+    public async Task Landing_within_reach_uses_the_aetheryte_without_walking()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.Territory = 138;
+        sim.AetheryteDistance = 100f;
+        sim.TeleportArrivalDistance = 10.5f;
+        Assert.Equal(NativeTravelOutcome.Arrived, (await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.QaTest, [WorldVisitCities.LimsaLominsa]), default)).Outcome);
+        Assert.Equal(0, sim.Approaches);
+    }
+
+    [Fact]
+    public async Task Blocked_out_of_reach_still_fails_cleanly()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.Territory = 138;
+        sim.AetheryteDistance = 100f;
+        sim.TeleportArrivalDistance = 14f;
+        sim.ApproachBlockedAt = 11.5f;
+        var result = await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.QaTest, [WorldVisitCities.LimsaLominsa]), default);
+        Assert.Equal(NativeTravelOutcome.NotReady, result.Outcome);
+        Assert.Contains("stopped getting closer", result.Detail);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.InteractWithAetheryte));
+        Assert.False(sim.Walking);
+    }
+
+    [Theory]
+    [InlineData(10.9f, 0f, true)]
+    [InlineData(11.0f, 0f, false)]   // horizontal reach is strictly under 11 y (Lifestream)
+    [InlineData(5f, 13.9f, true)]    // 3D 14.8 y
+    [InlineData(5f, 14.2f, false)]   // 3D 15.05 y: too far above or below
+    public void Aetheryte_reach_matches_Lifestreams_thresholds(float horizontal, float height, bool expected) =>
+        Assert.Equal(expected, NativeWorldVisitDriver.InReach(new AetheryteObservation(1, 8, horizontal, true, height)));
+
+    [Fact]
+    public async Task An_aetheryte_well_above_or_below_is_not_in_reach_even_when_horizontally_close()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.Territory = WorldVisitCities.LimsaLominsa.TerritoryId;
+        sim.AetheryteDistance = 4f;
+        sim.AetheryteHeight = 20f;
+        sim.ApproachBlocked = true;   // walking cannot change the height
+        var result = await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.QaTest, [WorldVisitCities.LimsaLominsa]), default);
+        Assert.NotEqual(NativeTravelOutcome.Arrived, result.Outcome);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.InteractWithAetheryte));
+    }
+
+    [Fact]
     public async Task A_teleport_cast_that_never_completes_fails_after_the_teleport_timeout_without_touching_anything()
     {
         var (service, sim) = Rig("Adamantoise");

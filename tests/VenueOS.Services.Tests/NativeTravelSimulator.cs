@@ -69,6 +69,8 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
     public double TeleportCastSeconds = 5;         // live: the cast happens in the old zone, without a zone transition
     public bool TeleportCastInterrupted;           // the cast never completes (e.g. the character moved)
     public bool Walking, ApproachBlocked;          // /automove toward the locked-on aetheryte; blocked = no progress
+    public float? ApproachBlockedAt;               // an obstacle stops the walk at this distance (live: 10.1 to 10.2 y in Limsa)
+    public float AetheryteHeight;                  // vertical offset to the aetheryte
     public bool WalkingStoppedByEndOperation;      // the port's safety net had to stop movement the driver left on
     public int Approaches;
     public bool InCombat, Mounted, LoggedOut;
@@ -240,7 +242,7 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
     private NativeTravelSnapshot Snapshot(bool peek = false)
     {
         if (!peek) SnapshotCount++;
-        if (!peek && Walking && !ApproachBlocked) AetheryteDistance = Math.Max(0.5f, AetheryteDistance - 1.2f);
+        if (!peek && Walking && !ApproachBlocked) AetheryteDistance = Math.Max(Math.Min(ApproachBlockedAt ?? 0.5f, AetheryteDistance), AetheryteDistance - 1.2f);
         AdvanceTimeline();
 
         if (!peek && WindowOpen && rowsDc != SelectedDc && !StaleRowsForever)
@@ -273,7 +275,7 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
         return new NativeTravelSnapshot(
             !LoggedOut, !LoggedOut && !transitioning, transitioning, queued, Casting, Mounted, InCombat,
             LoggedOut ? null : Current, Home, Territory, !transitioning && teleportAt is null,
-            WorldVisitCities.ForTerritory(Territory) is not null || AetheryteDistance < 50 ? new AetheryteObservation(42, 9, AetheryteDistance, true) : null,
+            WorldVisitCities.ForTerritory(Territory) is not null || AetheryteDistance < 50 ? new AetheryteObservation(42, 9, AetheryteDistance, true, AetheryteHeight) : null,
             MenuOpen ? new MenuObservation(AetheryteMenu) : null,
             window,
             ConfirmOpen && prompt is not null ? new ConfirmObservation(prompt, true) : null,

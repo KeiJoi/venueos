@@ -209,7 +209,7 @@ public sealed unsafe class DalamudNativeTravelPort : INativeTravelGamePort, IDis
             var dx = o.Position.X - player.Position.X;
             var dz = o.Position.Z - player.Position.Z;
             var distance = MathF.Sqrt(dx * dx + dz * dz);
-            if (best is null || distance < best.Distance) best = new AetheryteObservation(o.GameObjectId, o.BaseId, distance, o.IsTargetable);
+            if (best is null || distance < best.Distance) best = new AetheryteObservation(o.GameObjectId, o.BaseId, distance, o.IsTargetable, MathF.Abs(o.Position.Y - player.Position.Y));
         }
 
         return best;
