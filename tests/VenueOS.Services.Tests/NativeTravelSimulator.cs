@@ -66,6 +66,8 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
     public uint Territory = WorldVisitCities.Uldah.TerritoryId;
     public float AetheryteDistance = 3f;
     public float TeleportArrivalDistance = 3f;     // Limsa Lominsa lands out of reach (owner, 2026-11-13)
+    public double TeleportCastSeconds = 5;         // live: the cast happens in the old zone, without a zone transition
+    public bool TeleportCastInterrupted;           // the cast never completes (e.g. the character moved)
     public bool Walking, ApproachBlocked;          // /automove toward the locked-on aetheryte; blocked = no progress
     public bool WalkingStoppedByEndOperation;      // the port's safety net had to stop movement the driver left on
     public int Approaches;
@@ -269,7 +271,7 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
 
         var prompt = PromptOverride ?? (pendingDestination is null ? null : $"Travel to {pendingDestination.Name}?");
         return new NativeTravelSnapshot(
-            !LoggedOut, !LoggedOut && !transitioning, transitioning, queued, false, Mounted, InCombat,
+            !LoggedOut, !LoggedOut && !transitioning, transitioning, queued, Casting, Mounted, InCombat,
             LoggedOut ? null : Current, Home, Territory, !transitioning && teleportAt is null,
             WorldVisitCities.ForTerritory(Territory) is not null || AetheryteDistance < 50 ? new AetheryteObservation(42, 9, AetheryteDistance, true) : null,
             MenuOpen ? new MenuObservation(AetheryteMenu) : null,
@@ -279,12 +281,16 @@ internal sealed class NativeTravelSimulator : INativeTravelGamePort
             CongestionMessages);
     }
 
+    /// <summary>The port reports the Casting condition as occupied.</summary>
+    private bool Casting => teleportAt is { } t && !TeleportCastInterrupted && Now - t < TimeSpan.FromSeconds(TeleportCastSeconds);
+
     private bool InTransition(out bool queued)
     {
         queued = false;
         if (teleportAt is { } t)
         {
-            if (Now - t < TimeSpan.FromSeconds(3)) return true;
+            if (TeleportCastInterrupted || Now - t < TimeSpan.FromSeconds(TeleportCastSeconds)) return false;   // casting: old zone
+            if (Now - t < TimeSpan.FromSeconds(TeleportCastSeconds + 3)) return true;                       // loading
             Territory = teleportCity!.TerritoryId;
             AetheryteDistance = TeleportArrivalDistance;
             teleportAt = null;

@@ -116,6 +116,39 @@ public sealed class NativeTravelEngineTests
     }
 
     [Fact]
+    public async Task Live_QA_field_zone_to_Limsa_waits_through_the_teleport_cast_then_walks_and_travels()
+    {
+        // Live QA 2026-11-13: started in Western La Noscea (territory 138), teleported to Limsa; 0.3.14 build c9da804
+        // gave up 0.2 s into the cast ("not in a World Visit city (territory 138)").
+        var (service, sim) = Rig("Balmung", home: "Halicarnassus");
+        sim.Territory = 138;
+        sim.AetheryteDistance = 100f;
+        sim.TeleportArrivalDistance = 13f;
+        var result = await service.TravelAsync(new NativeTravelRequest("Halicarnassus", NativeTravelOwner.QaTest, [WorldVisitCities.LimsaLominsa]), default);
+        Assert.Equal(NativeTravelOutcome.Arrived, result.Outcome);
+        Assert.Contains("arrived in Limsa Lominsa Lower Decks", result.Diagnostic);
+        Assert.Equal([NativeTravelActionKind.TeleportToCity, NativeTravelActionKind.ApproachAetheryte, NativeTravelActionKind.StopApproach, NativeTravelActionKind.InteractWithAetheryte], sim.Executed.Select(a => a.Kind).Take(4));
+        Assert.Equal(1, sim.Count(NativeTravelActionKind.TeleportToCity));
+    }
+
+    [Fact]
+    public async Task A_teleport_cast_that_never_completes_fails_after_the_teleport_timeout_without_touching_anything()
+    {
+        var (service, sim) = Rig("Adamantoise");
+        sim.Territory = 138;
+        sim.AetheryteDistance = 100f;
+        sim.TeleportCastInterrupted = true;
+        var started = sim.Now;
+        var result = await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.QaTest, [WorldVisitCities.LimsaLominsa]), default);
+        Assert.Equal(NativeTravelOutcome.NotReady, result.Outcome);
+        Assert.Contains("did not arrive within 60s", result.Detail);
+        Assert.True(sim.Now - started >= NativeWorldVisitDriver.TeleportTimeout);
+        Assert.Equal(1, sim.Count(NativeTravelActionKind.TeleportToCity));
+        Assert.Equal(0, sim.Approaches);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.InteractWithAetheryte));
+    }
+
+    [Fact]
     public async Task Standing_in_the_destination_city_but_out_of_reach_walks_instead_of_teleporting()
     {
         var (service, sim) = Rig("Adamantoise");

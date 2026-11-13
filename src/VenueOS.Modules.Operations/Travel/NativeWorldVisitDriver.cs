@@ -52,6 +52,10 @@ public sealed class NativeWorldVisitDriver
     public static readonly TimeSpan ApproachSettle = TimeSpan.FromMilliseconds(600);
     public const int MaxApproachAttempts = 1;
 
+    /// <summary>After arriving from a teleport, how long to let the city's objects (the aetheryte) appear before deciding
+    /// whether it is within reach.</summary>
+    public static readonly TimeSpan TeleportArrivalSettle = TimeSpan.FromSeconds(2);
+
     public const int MaxInteractAttempts = 2;
     public const int MaxDataCenterSelectAttempts = 2;
 
@@ -72,7 +76,8 @@ public sealed class NativeWorldVisitDriver
     private int teleportAttempts, interactAttempts, dataCenterSelectAttempts, dataCenterSteps;
     private int? dataCenterStepFrom;   // the shown selector index when the current arrow step was pressed
     private bool leftoverUiClosed, departureSeen, windowSeen, openedUi;
-    private DateTimeOffset? approachingSince, approachStoppedAt, approachProgressAt;
+    private DateTimeOffset? approachingSince, approachStoppedAt, approachProgressAt, teleportArrivedAt;
+    private WorldVisitCity? teleportTarget;
     private float approachBest = float.MaxValue;
     private int approachAttempts;
     private ShoutRunnerArrivalVerifier? arrival;
@@ -186,7 +191,11 @@ public sealed class NativeWorldVisitDriver
         if (!performed) return;
         switch (a.Kind)
         {
-            case NativeTravelActionKind.TeleportToCity: teleportAttempts++; teleportedAt = now; break;
+            case NativeTravelActionKind.TeleportToCity:
+                teleportAttempts++;
+                teleportedAt = now;
+                teleportTarget = WorldVisitCities.All.FirstOrDefault(c => c.AetheryteId == a.Id);
+                break;
             case NativeTravelActionKind.ApproachAetheryte: approachAttempts++; approachingSince = now; approachProgressAt = now; approachBest = float.MaxValue; break;
             case NativeTravelActionKind.StopApproach: approachingSince = null; approachStoppedAt = now; break;
             case NativeTravelActionKind.InteractWithAetheryte: interactAttempts++; lastInteractAt = now; openedUi = true; break;
@@ -218,6 +227,27 @@ public sealed class NativeWorldVisitDriver
         if (s.BetweenAreas || s.TravelQueued)
             return teleportedAt is { } t && now - t >= TeleportTimeout ? Fail(now, NativeTravelOutcome.NotReady, "the teleport did not finish") : NativeTravelAction.Wait("teleport in progress");
         if (s.InCombat) return Fail(now, NativeTravelOutcome.NotReady, "the character is in combat");
+
+        // Live QA (2026-11-13): a Teleport is a ~5 s cast in the old zone (no zone transition yet), then loading. It has
+        // only finished once the character stands in the destination city's territory, the zone loaded.
+        if (teleportedAt is { } teleported && teleportTarget is { } going && teleportArrivedAt is null)
+        {
+            if (s.TerritoryId == going.TerritoryId && !s.BetweenAreas && s.HasLocalPlayer)
+            {
+                teleportArrivedAt = now;
+                Note(now, $"arrived in {going.Name}");
+            }
+            else
+            {
+                return now - teleported >= TeleportTimeout
+                    ? Fail(now, NativeTravelOutcome.NotReady, $"the teleport to {going.Name} did not arrive within {TeleportTimeout.TotalSeconds:0}s (territory {s.TerritoryId})")
+                    : NativeTravelAction.Wait(s.BetweenAreas ? $"teleporting to {going.Name}: loading" : $"teleporting to {going.Name}: casting");
+            }
+        }
+
+        if (teleportArrivedAt is { } landed && now - landed < TeleportArrivalSettle
+            && s.NearestAetheryte is not { Targetable: true, Distance: <= AetheryteInteractRange })
+            return NativeTravelAction.Wait("arrived; waiting for the aetheryte to appear");
 
         // A menu left open by someone else is closed once, never driven.
         if ((s.Menu is not null || s.Window is not null || s.Confirm is not null) && interactAttempts == 0)
