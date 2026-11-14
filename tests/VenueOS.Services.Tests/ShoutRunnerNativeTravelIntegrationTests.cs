@@ -65,12 +65,15 @@ public sealed class ShoutRunnerNativeTravelIntegrationTests
         public readonly VenueProfileService Profiles;
         public readonly List<(string World, string DataCenter, string Command)> Sent = [];
 
-        public Rig(string start, bool allowDc, params string[] dataCenters) : this(start, allowDc, [Uldah, Gridania, Limsa], dataCenters) { }
+        /// <param name="allowDc">null leaves <see cref="NativeTravelService.AllowDataCenterSelection"/> at its shipped default,
+        /// which is what a fresh plugin load (and so a real ShoutRunner start) uses.</param>
+        public Rig(string start, bool? allowDc, params string[] dataCenters) : this(start, allowDc, [Uldah, Gridania, Limsa], dataCenters) { }
 
-        public Rig(string start, bool allowDc, string[] destinations, string[] dataCenters)
+        public Rig(string start, bool? allowDc, string[] destinations, string[] dataCenters)
         {
             Sim = new NativeTravelSimulator(start, home: "Cuchulainn");
-            Travel = new NativeTravelService(Sim, Sim.Catalog) { AllowDataCenterSelection = allowDc };
+            Travel = new NativeTravelService(Sim, Sim.Catalog);
+            if (allowDc is { } allow) Travel.AllowDataCenterSelection = allow;
             Automation = new NativeAutomation(Sim, Travel, () => Service!.Settings.Destinations);
             var host = new ModuleHost();
             Profiles = new VenueProfileService(new InMemoryVenueStore(), host);
@@ -117,6 +120,27 @@ public sealed class ShoutRunnerNativeTravelIntegrationTests
         rig.Service.Stop();
     }
 
+    /// <summary>Live QA 2026-11-13 (evening): the first full ShoutRunner run after the arrows were verified skipped every
+    /// other Data Center, because Data Center selection was still off by default and the QA switch resets on reload. A
+    /// fresh service must travel between Data Centers without anyone touching Native Travel QA.</summary>
+    [Fact]
+    public void A_fresh_plugin_load_travels_between_Data_Centers_without_touching_the_QA_switch()
+    {
+        var fresh = new NativeTravelSimulator("Balmung");
+        Assert.True(new NativeTravelService(fresh, fresh.Catalog).AllowDataCenterSelection);
+
+        var rig = new Rig("Balmung", allowDc: null, "Aether", "Crystal", "Dynamis", "Primal");   // starts on Crystal; the first World is Aether's
+        rig.Service.Start();
+        rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Stopped);
+
+        Assert.DoesNotContain(rig.Texts(), t => t.Contains("SKIPPED", StringComparison.Ordinal));
+        Assert.Equal(ShoutRunnerCatalog.CanonicalDataCenterOrder.SelectMany(ShoutRunnerCatalog.WorldsIn), rig.Sent.Select(s => s.World).Distinct());
+        Assert.Equal(32 * 3, rig.Sent.Count);
+        Assert.All(rig.Sent, s => Assert.Equal(ShoutRunnerCatalog.DataCenterFor(s.World), s.DataCenter));
+        Assert.Equal(4, rig.Sim.Count(NativeTravelActionKind.SelectDataCenter));          // Crystal→Aether, then the three boundaries
+        Assert.Contains("RUN 1 complete.", rig.Texts());
+    }
+
     [Fact]
     public void Full_route_Aether_Crystal_Dynamis_Primal_natively_with_every_shout_on_its_own_World_and_Data_Center()
     {
@@ -144,7 +168,7 @@ public sealed class ShoutRunnerNativeTravelIntegrationTests
         rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Stopped);
         Assert.Equal(8 * 3, rig.Sent.Count);
         Assert.All(rig.Sent, s => Assert.Equal("Aether", s.DataCenter));
-        Assert.Contains(rig.Texts(), t => t.StartsWith("Primal — SKIPPED: data center unavailable.", StringComparison.Ordinal) && t.Contains("awaiting live verification"));
+        Assert.Contains(rig.Texts(), t => t.StartsWith("Primal — SKIPPED: data center unavailable.", StringComparison.Ordinal) && t.Contains("switched off in Native Travel QA"));
         Assert.Equal(1, rig.Automation.Requests.Count(r => ShoutRunnerCatalog.DataCenterFor(r.World) == "Primal"));
         Assert.Equal(0, rig.Sim.Count(NativeTravelActionKind.SelectDataCenter));
     }

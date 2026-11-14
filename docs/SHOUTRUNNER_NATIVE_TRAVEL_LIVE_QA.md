@@ -95,7 +95,7 @@ diagnostics; that's exactly what needs correcting. Don't turn the switch on.
 | H1 | Select 2–4 Data Centers, start a run. | DCs in the fixed order (Aether, Crystal, Dynamis, Primal); every World once; three shouts per World. | ☐ Pass ☐ Fail ☐ Not Tested |
 | H2 | Watch DC boundaries. | The selector switches DC in the World Visit window; no logout, no character select, no trip home. | ☐ Pass ☐ Fail ☐ Not Tested |
 | H3 | Terminal / Diagnostics. | No "SKIPPED" except genuine congestion; any failure has a Diagnostics entry with the full travel trace. | ☐ Pass ☐ Fail ☐ Not Tested |
-| H4 | Switch OFF, run a two-DC route. | Your current DC runs; the other is "SKIPPED: … awaiting live verification …", with nothing clicked for it. | ☐ Pass ☐ Fail ☐ Not Tested |
+| H4 | Switch OFF in Native Travel QA, run a two-DC route. | Your current DC runs; the other is "SKIPPED: … switched off in Native Travel QA …", with nothing clicked for it. | ☐ Pass ☐ Fail ☐ Not Tested |
 
 ## F. Recovery
 

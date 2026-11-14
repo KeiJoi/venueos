@@ -96,8 +96,8 @@ public sealed class NativeTravelQaPanel(NativeTravelService travel, DalamudNativ
         Forms.ComboField(theme, "World Visit city (if a teleport is needed)", cities, ref cityIndex);
 
         var allow = travel.AllowDataCenterSelection;
-        if (UiKit.Toggle(theme, "Allow selecting another Data Center in the World Visit window (QA, this session only)", ref allow)) travel.AllowDataCenterSelection = allow;
-        ImGui.TextWrapped("The Data Center dropdown interaction is based on public 7.58 sources and has not been verified on your client. With this off, a World on another Data Center stops before anything is clicked.");
+        if (UiKit.Toggle(theme, "Allow selecting another Data Center in the World Visit window (on by default; switching it off lasts this session only)", ref allow)) travel.AllowDataCenterSelection = allow;
+        ImGui.TextWrapped("Data Center switching with the window's arrows was verified in game on 2026-11-13. With this off, a World on another Data Center stops before anything is clicked, and ShoutRunner skips that Data Center.");
 
         var blocked = shoutRunnerActive() ? "ShoutRunner is running — stop it first." : travel.IsBusy ? "A travel operation is already running." : null;
         if (blocked is not null) ImGui.TextDisabled(blocked);

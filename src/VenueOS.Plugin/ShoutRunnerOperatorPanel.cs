@@ -92,8 +92,8 @@ internal sealed class ShoutRunnerOperatorPanel(ShoutRunnerService service, Venue
         ImGui.Spacing();
         UiKit.BeginSectionCard("shoutrunner-datacenters", theme, "Data Centers");
         UiKit.InfoBanner(theme, "Fixed order", "Selected Data Centers are always visited in this order — Aether, Crystal, Dynamis, Primal — and cannot be reordered. Every World in a selected Data Center is visited automatically.");
-        // 0.3.14: native travel; the Data Center dropdown step stays off until it is verified live.
-        UiKit.InfoBanner(theme, "Travel (Patch 7.58)", "ShoutRunner travels with VenueOS's own World Visit (Lifestream is no longer used) and never logs you out. Moving to another Data Center uses the new Data Center selector in the World Visit window, which stays switched off until it has been verified in game: until then, other Data Centers are reported as skipped. A test switch is in Native Travel QA at the bottom of this page.");
+        // 0.3.14: native travel; Data Center switching (window arrows) verified live 2026-11-13 and on by default.
+        UiKit.InfoBanner(theme, "Travel (Patch 7.58)", "ShoutRunner travels with VenueOS's own World Visit (Lifestream is no longer used) and never logs you out. Moving to another Data Center in your region uses the Data Center arrows in the World Visit window. Data Centers in another region are skipped. Native Travel QA at the bottom of this page can switch Data Center changes off for the session.");
         ImGui.Spacing();
         foreach (var dc in ShoutRunnerCatalog.CanonicalDataCenterOrder)
         {

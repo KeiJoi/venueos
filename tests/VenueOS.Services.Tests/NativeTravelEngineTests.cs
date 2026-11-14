@@ -750,7 +750,7 @@ public sealed class NativeTravelEngineTests
         var (service, sim) = Rig("Cuchulainn", allowDc: false);
         var result = Travel(service, "Behemoth");
         Assert.Equal(NativeTravelOutcome.Unsupported, result.Outcome);
-        Assert.Contains("awaiting live verification", result.Detail);
+        Assert.Contains("switched off in Native Travel QA", result.Detail);
         Assert.Empty(sim.Executed);
     }
 

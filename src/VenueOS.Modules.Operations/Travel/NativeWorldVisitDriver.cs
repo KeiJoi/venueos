@@ -23,10 +23,10 @@ namespace VenueOS.Modules.Operations.Travel;
 /// <item>No logout, character select or Home World detour exists in this flow at all.</item>
 /// </list>
 ///
-/// <para><b>Data Center selection is gated</b> (<paramref name="allowDataCenterSelection"/>): the dropdown interaction
-/// follows the public SRankSentinel 7.58 implementation and SimpleTweaks' layout, but has not been verified on this
-/// client. Until the owner's live QA verifies it, a World on another logical Data Center finishes as
-/// <see cref="NativeTravelOutcome.Unsupported"/> with an explicit reason unless the QA switch enables it.</para></summary>
+/// <para><b>Data Center selection</b> (<paramref name="allowDataCenterSelection"/>) steps the window's ◁ ▷ arrows one
+/// Data Center at a time. It was verified live on 2026-11-13 and is on by default; when Native Travel QA switches it off,
+/// a World on another logical Data Center finishes as <see cref="NativeTravelOutcome.Unsupported"/> with an explicit
+/// reason before anything is clicked.</para></summary>
 public sealed class NativeWorldVisitDriver
 {
     public static readonly TimeSpan OverallTimeout = TimeSpan.FromMinutes(7);
@@ -99,7 +99,7 @@ public sealed class NativeWorldVisitDriver
         startedAt = now;
         phaseEnteredAt = now;
         Phase = NativeTravelPhase.ResolvingDestination;
-        Note(now, $"requested {Describe(target)}; Data Center selection {(allowDataCenterSelection ? "ENABLED (QA)" : "disabled (awaiting live verification)")}");
+        Note(now, $"requested {Describe(target)}; Data Center selection {(allowDataCenterSelection ? "enabled" : "SWITCHED OFF in Native Travel QA")}");
     }
 
     public NativeTravelPhase Phase { get; private set; }
@@ -138,7 +138,7 @@ public sealed class NativeWorldVisitDriver
                 if (!NativeTravelPolicy.CanVisit(s.CurrentWorld, s.HomeWorld, target))
                     return Fail(now, NativeTravelOutcome.Unsupported, $"{target.Name} is not reachable by World Visit from {s.CurrentWorld.Name} (different region, or the character is outside its Home World's region)");
                 if (s.CurrentWorld.LogicalDataCenterId != target.LogicalDataCenterId && !allowDataCenterSelection)
-                    return Fail(now, NativeTravelOutcome.Unsupported, $"{target.Name} is on {target.LogicalDataCenter}; selecting another Data Center in the World Visit window is awaiting live verification (enable it in Native Travel QA)");
+                    return Fail(now, NativeTravelOutcome.Unsupported, $"{target.Name} is on {target.LogicalDataCenter}; selecting another Data Center in the World Visit window is switched off in Native Travel QA for this session");
                 Enter(now, NativeTravelPhase.PreparingAetheryte, "capability confirmed");
                 goto case NativeTravelPhase.PreparingAetheryte;
 
@@ -375,7 +375,7 @@ public sealed class NativeWorldVisitDriver
         var index = IndexOf(dcs.Labels, target.LogicalDataCenter);
         if (index < 0) return Fail(now, NativeTravelOutcome.DataCenterUnavailable, $"{target.LogicalDataCenter} is not offered by the Data Center selector ({string.Join(", ", dcs.Labels)})");
         if (dcs.Disabled[index]) return Fail(now, NativeTravelOutcome.DataCenterUnavailable, $"{target.LogicalDataCenter} is disabled in the Data Center selector");
-        if (!allowDataCenterSelection) return Fail(now, NativeTravelOutcome.Unsupported, "Data Center selection is awaiting live verification");
+        if (!allowDataCenterSelection) return Fail(now, NativeTravelOutcome.Unsupported, "Data Center selection is switched off in Native Travel QA for this session");
 
         // Live QA (2026-11-13): the selector is stepped with its arrow buttons (◁ node 5 / ▷ node 6), one adjacent Data
         // Center per press, toward the target. A step is complete once the shown Data Center has moved; the World rows

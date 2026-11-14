@@ -95,11 +95,13 @@ Terminal: Cancelled, Unavailable, Congested, TimedOut, WrongDestination, Unexpec
 ### Data Center selection gate
 
 The dropdown interaction (`SelectItem(index)` + list `DispatchItemEvent(index, ListItemClick)`, after label and
-event-owner verification) follows **[source]** SRankSentinel and is **[unverified]** on this client. It is off by
-default (`NativeTravelService.AllowDataCenterSelection`, session-only, never saved). While it is off, a World on
-another logical DC finishes `Unsupported` before anything is clicked, and ShoutRunner skips that DC with a reason that
-points to the QA switch. Same-DC World Visit is not gated. When the owner's live QA passes, a follow-up release makes it
-the default.
+event-owner verification) follows **[source]** SRankSentinel and is **[unverified]** on this client. **Update (2026-11-13):** the
+arrow-stepping interaction that replaced it (§2 row 7) was verified live by the owner (Crystal → Aether → Primal →
+Aether). `NativeTravelService.AllowDataCenterSelection` is therefore **on by default**. The first full ShoutRunner run
+after that skipped the other DCs, because the switch was still off by default and resets on every reload. Native Travel
+QA can switch it off for the session (never saved). While it is off, a World on another logical DC finishes
+`Unsupported` before anything is clicked, and ShoutRunner skips that DC with a reason naming the switch. Same-DC World
+Visit is never gated.
 
 ## 4. ShoutRunner integration
 
@@ -137,13 +139,13 @@ touches ShoutRunner's checkpoint, and refuses to start while ShoutRunner runs or
 |---|---|---|
 | `NativeTravelEngineTests.cs` | 84 | Real service + driver on the simulator: same-DC, the screenshot scenario (Cuchulainn → Primal → Behemoth), all NA DC pairs, label-based DC choice, teleport-first, lagging rows, misclick → never confirmed, wrong agent destination, inexact prompt, prompt changed between decision and click, revalidation skip, unowned events, corrupt labels, a distinct label from another region's DC, read-only UI capture on UnexpectedUi / SelectionMismatch (taken before closing; never on success; a failing capture changes nothing), ignored dropdown (bounded), stale list forever, window never opens, leftover menu, congested / missing / disabled-DC, switch off, cross-region, unknown World, wrong World / DC arrival, congestion ×2, never departs, never arrives, one selection + one confirmation, busy, cancel before/after confirmation, ids, combat/mounted/logged out, no logout step |
 | `NativeTravelPolicyTests.cs` | 20 | Confirmation templates (incl. 12624, the screenshot prompt, Jenova), label cleaning, menu entry, region rule, cities |
-| `ShoutRunnerNativeTravelIntegrationTests.cs` | 7 | Real ShoutRunnerService + real NativeTravelService: full Aether/Crystal/Dynamis/Primal route (96 shouts on their own World and DC, 3 DC selections, 32 confirmations), switch off, misclick → fault → Resume, congested row, Stop mid-travel, QA sends nothing and leaves the checkpoint alone, QA vs ShoutRunner concurrency |
+| `ShoutRunnerNativeTravelIntegrationTests.cs` | 8 | Real ShoutRunnerService + real NativeTravelService: a fresh load crosses Data Centers with the switch untouched, full Aether/Crystal/Dynamis/Primal route (96 shouts on their own World and DC, 3 DC selections, 32 confirmations), switch off, misclick → fault → Resume, congested row, Stop mid-travel, QA sends nothing and leaves the checkpoint alone, QA vs ShoutRunner concurrency |
 | `ShoutRunnerPatch758TravelTests.cs` | 21 methods (rewritten) | 0.3.14 classification incl. merged-DataCenter guard, mapping table, DC verification, multi-DC routes, DC skip + Resume, wrong-arrival bounds |
 | `NativeTravelSimulator.cs` | — | Simulated 7.58 window built from the screenshots, with fault switches |
 
-**Full validation (2026-11-13, after the congestion hardening):** `dotnet test VenueOS.sln -c Debug` passes 1,625 of 1,625 (Core 69, Venues 23,
-Services 1,533). `dotnet build VenueOS.sln` passes in Debug and Release (clean, `--no-incremental`) with 0 warnings and 0 errors. The
-targeted travel filter (`ShoutRunner|NativeTravel`) runs 348 tests (the 15-mutant runs used 304. QA fix 2 added mutants Q1 and Q2, and the arrow fix added A1 to A5: direction, adjacency, step completion, step limit and unreadable shown DC. All 7 were killed. The first-city fix added 1 more and the walking fix added W1 to W3: walking stopped on failure, stop within reach, the 30 y walk limit. All killed).
+**Full validation (2026-11-13, after Data Center selection became the default):** `dotnet test VenueOS.sln -c Debug` passes 1,626 of 1,626 (Core 69, Venues 23,
+Services 1,534). `dotnet build VenueOS.sln` passes in Debug and Release (clean, `--no-incremental`) with 0 warnings and 0 errors. The
+targeted travel filter (`ShoutRunner|NativeTravel`) runs 349 tests (the 15-mutant runs used 304. QA fix 2 added mutants Q1 and Q2, and the arrow fix added A1 to A5: direction, adjacency, step completion, step limit and unreadable shown DC. All 7 were killed. The first-city fix added 1 more and the walking fix added W1 to W3: walking stopped on failure, stop within reach, the 30 y walk limit. All killed).
 
 **Mutation checks.** 15 hand-written mutants against the safety checks, each run against the 304 targeted tests.
 **15 of 15 killed.**

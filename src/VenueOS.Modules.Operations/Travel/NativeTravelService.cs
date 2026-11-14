@@ -62,9 +62,11 @@ public sealed class NativeTravelService(INativeTravelGamePort port, ITravelWorld
         public string? CancelReason { get; set; }
     }
 
-    /// <summary>Session-only QA switch for the unverified Data Center dropdown interaction (never persisted). Off by
-    /// default: a World on another logical Data Center then finishes as <see cref="NativeTravelOutcome.Unsupported"/>.</summary>
-    public bool AllowDataCenterSelection { get; set; }
+    /// <summary>Data Center selection in the World Visit window (the ◁ ▷ arrows). On by default since the owner verified it
+    /// live on 2026-11-13 (Crystal → Aether → Primal → Aether). Native Travel QA can switch it off for the session (never
+    /// persisted); a World on another logical Data Center then finishes as <see cref="NativeTravelOutcome.Unsupported"/>
+    /// before anything is clicked.</summary>
+    public bool AllowDataCenterSelection { get; set; } = true;
 
     public NativeTravelStatus Status
     {
