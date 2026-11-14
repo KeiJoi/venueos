@@ -269,9 +269,12 @@ public sealed class NativeWorldVisitDriver
         }
 
         var city = WorldVisitCities.ForTerritory(s.TerritoryId);
-        // Not at a World Visit aetheryte: go to the FIRST World Visit city on the route's list (owner requirement), even
-        // from inside another city; only without one on the list, the current city's aetheryte, then Limsa Lominsa.
-        var destination = preferredCities.FirstOrDefault() ?? city ?? WorldVisitCities.LimsaLominsa;
+        // Travel from where the character already is (owner, 2026-11-13: "it should world transfer from the last place it
+        // was"): inside a World Visit city with its aetheryte in reach or within walking distance, that city. Otherwise the
+        // FIRST World Visit city on the route's list, then Limsa Lominsa, never the city the character is standing in: a
+        // teleport within the same zone shows no territory change, so its arrival could not be told apart from its cast.
+        var walkable = city is not null && s.NearestAetheryte is { Targetable: true } close && close.Distance < ApproachMaxDistance;
+        var destination = walkable ? city! : preferredCities.FirstOrDefault(c => c != city) ?? WorldVisitCities.All.First(c => c != city);
 
         if (approachingSince is { } walkingSince)
         {

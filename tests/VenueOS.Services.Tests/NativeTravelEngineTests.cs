@@ -85,16 +85,41 @@ public sealed class NativeTravelEngineTests
         Assert.Empty(sim.Executed);
     }
 
-    [Fact]
-    public async Task Inside_another_city_but_away_from_its_aetheryte_it_teleports_to_the_first_city_on_the_list()
+    [Theory]
+    [InlineData(new[] { 9u, 8u }, 9u)]   // Ul'dah first on the list: Ul'dah
+    [InlineData(new[] { 8u, 2u }, 2u)]   // Limsa first, but that is where the character stands: the next one, Gridania
+    [InlineData(new[] { 8u }, 2u)]       // only Limsa on the list: another World Visit city (Gridania)
+    public async Task Inside_a_World_Visit_city_but_too_far_to_walk_it_teleports_to_a_listed_city_other_than_the_one_it_is_in(uint[] listed, uint expectedAetheryte)
     {
         var (service, sim) = Rig("Adamantoise");
         sim.Territory = WorldVisitCities.LimsaLominsa.TerritoryId;   // in Limsa, but far from the aetheryte
         sim.AetheryteDistance = 60f;
-        var result = await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.ShoutRunner, [WorldVisitCities.Uldah, WorldVisitCities.LimsaLominsa]), default);
+        var cities = listed.Select(id => WorldVisitCities.All.Single(c => c.AetheryteId == id)).ToList();
+        var result = await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.ShoutRunner, cities), default);
         Assert.Equal(NativeTravelOutcome.Arrived, result.Outcome);
         Assert.Equal(NativeTravelActionKind.TeleportToCity, sim.Executed[0].Kind);
-        Assert.Equal(WorldVisitCities.Uldah.AetheryteId, sim.Executed[0].Id);
+        Assert.Equal(expectedAetheryte, sim.Executed[0].Id);
+        Assert.Equal(1, sim.Count(NativeTravelActionKind.TeleportToCity));
+    }
+
+    /// <summary>Owner, 2026-11-13: "it shouldn't teleport back to one city then world transfer, it should world transfer
+    /// from the last place it was." A ShoutRunner World that ended in Limsa (landing out of reach) or in-reach in Gridania
+    /// travels from there, whatever city is first on the list.</summary>
+    [Theory]
+    [InlineData(129u, 13f)]   // Limsa Lominsa Lower Decks: the teleport landing, out of reach, so it walks
+    [InlineData(129u, 29f)]   // still within the 30 y walking limit
+    [InlineData(132u, 4f)]    // New Gridania, in reach
+    public async Task Inside_a_World_Visit_city_it_travels_from_there_instead_of_teleporting_to_the_first_city_on_the_list(uint territoryId, float distance)
+    {
+        var (service, sim) = Rig("Adamantoise");
+        var here = WorldVisitCities.ForTerritory(territoryId)!;
+        sim.Territory = here.TerritoryId;
+        sim.AetheryteDistance = distance;
+        var result = await service.TravelAsync(new NativeTravelRequest("Cactuar", NativeTravelOwner.ShoutRunner, [WorldVisitCities.Uldah, WorldVisitCities.Gridania, WorldVisitCities.LimsaLominsa]), default);
+        Assert.Equal(NativeTravelOutcome.Arrived, result.Outcome);
+        Assert.Equal(0, sim.Count(NativeTravelActionKind.TeleportToCity));
+        Assert.Equal(here.TerritoryId, sim.Territory);
+        Assert.Equal(distance > NativeWorldVisitDriver.AetheryteReach ? 1 : 0, sim.Count(NativeTravelActionKind.ApproachAetheryte));
     }
 
     // ----- walking to an aetheryte the teleport left out of reach (owner, 2026-11-13: "Limsa is bad for that") -----

@@ -117,8 +117,10 @@ Visit is never gated.
   | WrongDestination, NotStarted | World skipped; 2 in a row fault the run (0.3.13 rule) |
   | SelectionMismatch, UnexpectedUi, TimedOut, NotReady, Busy, Cancelled, Failed | run faults (resumable) |
 
-- World Visit city: the first of the route's destinations that is a World Visit city, so the next World's route
-  begins where the character arrives.
+- World Visit city: the city the character is already in (normally the World's last stop), when its aetheryte is in
+  reach or within the 30 y walking limit. Owner, 2026-11-13: "it should world transfer from the last place it was".
+  Otherwise the first of the route's World Visit cities that is NOT the current city (then any other World Visit
+  city). A teleport within the same zone shows no territory change, so its arrival could not be told from its cast.
 - Pre-shout guard: World and REAL logical DC (from `World.Unknown0`).
 - Lifestream: no longer referenced by ShoutRunner (no `/li`, IPC, busy polling or abort).
 - Unchanged: route planner, catalog and order, recovery journal, Line 1 / Line 2 (2 s), congestion two-strike, native
@@ -137,15 +139,15 @@ touches ShoutRunner's checkpoint, and refuses to start while ShoutRunner runs or
 
 | File | Tests | Covers |
 |---|---|---|
-| `NativeTravelEngineTests.cs` | 84 | Real service + driver on the simulator: same-DC, the screenshot scenario (Cuchulainn → Primal → Behemoth), all NA DC pairs, label-based DC choice, teleport-first, lagging rows, misclick → never confirmed, wrong agent destination, inexact prompt, prompt changed between decision and click, revalidation skip, unowned events, corrupt labels, a distinct label from another region's DC, read-only UI capture on UnexpectedUi / SelectionMismatch (taken before closing; never on success; a failing capture changes nothing), ignored dropdown (bounded), stale list forever, window never opens, leftover menu, congested / missing / disabled-DC, switch off, cross-region, unknown World, wrong World / DC arrival, congestion ×2, never departs, never arrives, one selection + one confirmation, busy, cancel before/after confirmation, ids, combat/mounted/logged out, no logout step |
+| `NativeTravelEngineTests.cs` | 85 | Real service + driver on the simulator: same-DC, the screenshot scenario (Cuchulainn → Primal → Behemoth), all NA DC pairs, label-based DC choice, teleport-first, lagging rows, misclick → never confirmed, wrong agent destination, inexact prompt, prompt changed between decision and click, revalidation skip, unowned events, corrupt labels, a distinct label from another region's DC, read-only UI capture on UnexpectedUi / SelectionMismatch (taken before closing; never on success; a failing capture changes nothing), ignored dropdown (bounded), stale list forever, window never opens, leftover menu, congested / missing / disabled-DC, switch off, cross-region, unknown World, wrong World / DC arrival, congestion ×2, never departs, never arrives, one selection + one confirmation, busy, cancel before/after confirmation, ids, combat/mounted/logged out, no logout step |
 | `NativeTravelPolicyTests.cs` | 20 | Confirmation templates (incl. 12624, the screenshot prompt, Jenova), label cleaning, menu entry, region rule, cities |
-| `ShoutRunnerNativeTravelIntegrationTests.cs` | 8 | Real ShoutRunnerService + real NativeTravelService: a fresh load crosses Data Centers with the switch untouched, full Aether/Crystal/Dynamis/Primal route (96 shouts on their own World and DC, 3 DC selections, 32 confirmations), switch off, misclick → fault → Resume, congested row, Stop mid-travel, QA sends nothing and leaves the checkpoint alone, QA vs ShoutRunner concurrency |
+| `ShoutRunnerNativeTravelIntegrationTests.cs` | 9 | Real ShoutRunnerService + real NativeTravelService: each World Visit starts in the last stop's city, a fresh load crosses Data Centers with the switch untouched, full Aether/Crystal/Dynamis/Primal route (96 shouts on their own World and DC, 3 DC selections, 32 confirmations), switch off, misclick → fault → Resume, congested row, Stop mid-travel, QA sends nothing and leaves the checkpoint alone, QA vs ShoutRunner concurrency |
 | `ShoutRunnerPatch758TravelTests.cs` | 21 methods (rewritten) | 0.3.14 classification incl. merged-DataCenter guard, mapping table, DC verification, multi-DC routes, DC skip + Resume, wrong-arrival bounds |
 | `NativeTravelSimulator.cs` | — | Simulated 7.58 window built from the screenshots, with fault switches |
 
-**Full validation (2026-11-13, after Data Center selection became the default):** `dotnet test VenueOS.sln -c Debug` passes 1,626 of 1,626 (Core 69, Venues 23,
-Services 1,534). `dotnet build VenueOS.sln` passes in Debug and Release (clean, `--no-incremental`) with 0 warnings and 0 errors. The
-targeted travel filter (`ShoutRunner|NativeTravel`) runs 349 tests (the 15-mutant runs used 304. QA fix 2 added mutants Q1 and Q2, and the arrow fix added A1 to A5: direction, adjacency, step completion, step limit and unreadable shown DC. All 7 were killed. The first-city fix added 1 more and the walking fix added W1 to W3: walking stopped on failure, stop within reach, the 30 y walk limit. All killed).
+**Full validation (2026-11-13, after travel started from the last stop's city):** `dotnet test VenueOS.sln -c Debug` passes 1,632 of 1,632 (Core 69, Venues 23,
+Services 1,540). `dotnet build VenueOS.sln` passes in Debug and Release (clean, `--no-incremental`) with 0 warnings and 0 errors. The
+targeted travel filter (`ShoutRunner|NativeTravel`) runs 355 tests (the 15-mutant runs used 304. QA fix 2 added mutants Q1 and Q2, and the arrow fix added A1 to A5: direction, adjacency, step completion, step limit and unreadable shown DC. All 7 were killed. The first-city fix added 1 more and the walking fix added W1 to W3: walking stopped on failure, stop within reach, the 30 y walk limit. All killed).
 
 **Mutation checks.** 15 hand-written mutants against the safety checks, each run against the 304 targeted tests.
 **15 of 15 killed.**

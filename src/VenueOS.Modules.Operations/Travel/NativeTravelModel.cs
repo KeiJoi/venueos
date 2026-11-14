@@ -138,9 +138,9 @@ public sealed record NativeTravelResult(int OperationId, NativeTravelOutcome Out
 /// <summary>Who asked for travel, so the QA tool and ShoutRunner can never run at the same time unnoticed.</summary>
 public enum NativeTravelOwner { ShoutRunner, QaTest }
 
-/// <param name="PreferredCities">Where to perform the World Visit when the character is not already at a World Visit
-/// aetheryte, in order of preference. ShoutRunner passes its route's city destinations, so the next World's route can
-/// begin where the character arrives.</param>
+/// <param name="PreferredCities">Where to perform the World Visit when the character is not in a World Visit city at all,
+/// in order of preference (inside one of the three cities, its own aetheryte is used). ShoutRunner passes its route's
+/// city destinations, so the next World's route can begin where the character arrives.</param>
 public sealed record NativeTravelRequest(string TargetWorld, NativeTravelOwner Owner, IReadOnlyList<WorldVisitCity> PreferredCities);
 
 /// <summary>The game text the driver matches against, read from game data by the port (English fallbacks otherwise).</summary>

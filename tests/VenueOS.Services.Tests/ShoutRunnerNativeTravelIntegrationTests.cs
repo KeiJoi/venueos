@@ -20,6 +20,10 @@ public sealed class ShoutRunnerNativeTravelIntegrationTests
     private sealed class NativeAutomation(NativeTravelSimulator sim, NativeTravelService travel, Func<IEnumerable<string>> routeDestinations) : IShoutRunnerAutomation
     {
         public readonly List<(string World, bool CrossDataCenter)> Requests = [];
+        public readonly List<uint> TravelStartTerritories = [];
+        /// <summary>When set, a destination teleport moves the simulated character into that city (Limsa lands out of
+        /// reach of its aetheryte, as live), so travel after a World's last stop starts from that city.</summary>
+        public bool DestinationTeleportsMoveCharacter;
         public void ResetForVenue() { }
         public void Abort() { if (travel.Status.Owner == NativeTravelOwner.ShoutRunner) travel.CancelActive("ShoutRunner stopped"); }
         public Task<ShoutRunnerReadinessOutcome> EnsureReadyAsync(CancellationToken token) => Task.FromResult(ShoutRunnerReadinessOutcome.ReadyNow());
@@ -28,6 +32,7 @@ public sealed class ShoutRunnerNativeTravelIntegrationTests
         public async Task<ShoutRunnerTransferOutcome> TravelToWorldAsync(string targetWorld, bool crossDataCenter, CancellationToken token)
         {
             Requests.Add((targetWorld, crossDataCenter));
+            TravelStartTerritories.Add(sim.Territory);
             // As in production: the World Visit cities on the run's destination list, first one preferred.
             var result = await travel.TravelAsync(new NativeTravelRequest(targetWorld, NativeTravelOwner.ShoutRunner, WorldVisitCities.FromRouteDestinations(routeDestinations())), token);
             return ShoutRunnerNativeTravelMapping.ToTransferOutcome(result);
@@ -35,7 +40,16 @@ public sealed class ShoutRunnerNativeTravelIntegrationTests
         public Task<string?> TryGetCurrentPlaceNameAsync(CancellationToken token) => Task.FromResult<string?>(null);
         public Task<ShoutRunnerObservedLocation?> TryGetCurrentLocationAsync(CancellationToken token) =>
             Task.FromResult<ShoutRunnerObservedLocation?>(new(sim.Current.Name, sim.Current.LogicalDataCenter));
-        public Task<ShoutRunnerTeleportOutcome> TeleportToDestinationAsync(string destinationName, CancellationToken token) => Task.FromResult(ShoutRunnerTeleportOutcome.Success());
+        public Task<ShoutRunnerTeleportOutcome> TeleportToDestinationAsync(string destinationName, CancellationToken token)
+        {
+            if (DestinationTeleportsMoveCharacter && WorldVisitCities.ForName(destinationName) is { } city)
+            {
+                sim.Territory = city.TerritoryId;
+                sim.AetheryteDistance = city == WorldVisitCities.LimsaLominsa ? 13f : 4f;
+            }
+
+            return Task.FromResult(ShoutRunnerTeleportOutcome.Success());
+        }
     }
 
     private sealed class Clock : IClock
@@ -118,6 +132,26 @@ public sealed class ShoutRunnerNativeTravelIntegrationTests
         Assert.Equal(expectedAetheryte, rig.Sim.Executed[0].Id);
         Assert.Equal(1, rig.Sim.Count(NativeTravelActionKind.TeleportToCity));
         rig.Service.Stop();
+    }
+
+    /// <summary>Owner, 2026-11-13: each World Visit starts from the city of the World's last stop (walking to Limsa's
+    /// aetheryte when its landing is out of reach), never by teleporting back to the first city on the list.</summary>
+    [Fact]
+    public void Each_World_Visit_starts_from_the_city_of_the_last_stop_without_teleporting_back_to_the_first_city()
+    {
+        var rig = new Rig("Siren", allowDc: true, [Uldah, Gridania, Limsa], ["Aether", "Crystal"]);
+        rig.Automation.DestinationTeleportsMoveCharacter = true;
+        rig.Service.Start();
+        rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Stopped);
+
+        Assert.Contains("RUN 1 complete.", rig.Texts());
+        Assert.Equal(16 * 3, rig.Sent.Count);
+        Assert.Equal(0, rig.Sim.Count(NativeTravelActionKind.TeleportToCity));
+        var later = rig.Automation.TravelStartTerritories.Skip(1).ToList();   // every travel after the first World's stops
+        Assert.NotEmpty(later);
+        Assert.All(later, t => Assert.NotNull(WorldVisitCities.ForTerritory(t)));
+        Assert.Contains(WorldVisitCities.LimsaLominsa.TerritoryId, later);
+        Assert.True(rig.Sim.Count(NativeTravelActionKind.ApproachAetheryte) > 0);   // Limsa's landing is walked, not re-teleported
     }
 
     /// <summary>Live QA 2026-11-13 (evening): the first full ShoutRunner run after the arrows were verified skipped every
