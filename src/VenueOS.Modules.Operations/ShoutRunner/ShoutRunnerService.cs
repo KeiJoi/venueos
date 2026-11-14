@@ -822,9 +822,12 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         var now = clock.UtcNow;
         while (boundary <= now) boundary += interval;
         nextRunAtUtc = boundary;
-        terminal.Add(Event(ShoutRunnerEventSeverity.InProgress, $"Next RUN scheduled for {boundary:t}."));
+        // Shown in the operator's local time, like every other ShoutRunner time (the terminal stamps use ToLocalTime);
+        // the boundary itself stays UTC for scheduling.
+        var localBoundary = boundary.ToLocalTime();
+        terminal.Add(Event(ShoutRunnerEventSeverity.InProgress, $"Next RUN scheduled for {localBoundary:t}."));
         State = ShoutRunnerState.WaitingRepeat;
-        StatusText = $"Waiting for next RUN — {boundary:t}";
+        StatusText = $"Waiting for next RUN — {localBoundary:t}";
     }
 
     private void EnterFaulted(string reason)

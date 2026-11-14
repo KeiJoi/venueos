@@ -145,8 +145,8 @@ touches ShoutRunner's checkpoint, and refuses to start while ShoutRunner runs or
 | `ShoutRunnerPatch758TravelTests.cs` | 21 methods (rewritten) | 0.3.14 classification incl. merged-DataCenter guard, mapping table, DC verification, multi-DC routes, DC skip + Resume, wrong-arrival bounds |
 | `NativeTravelSimulator.cs` | — | Simulated 7.58 window built from the screenshots, with fault switches |
 
-**Full validation (2026-11-13, after travel started from the last stop's city):** `dotnet test VenueOS.sln -c Debug` passes 1,632 of 1,632 (Core 69, Venues 23,
-Services 1,540). `dotnet build VenueOS.sln` passes in Debug and Release (clean, `--no-incremental`) with 0 warnings and 0 errors. The
+**Full validation (2026-11-13, after travel started from the last stop's city):** `dotnet test VenueOS.sln -c Debug` passes 1,633 of 1,633 (Core 69, Venues 23,
+Services 1,541). `dotnet build VenueOS.sln` passes in Debug and Release (clean, `--no-incremental`) with 0 warnings and 0 errors. The
 targeted travel filter (`ShoutRunner|NativeTravel`) runs 355 tests (the 15-mutant runs used 304. QA fix 2 added mutants Q1 and Q2, and the arrow fix added A1 to A5: direction, adjacency, step completion, step limit and unreadable shown DC. All 7 were killed. The first-city fix added 1 more and the walking fix added W1 to W3: walking stopped on failure, stop within reach, the 30 y walk limit. All killed).
 
 **Mutation checks.** 15 hand-written mutants against the safety checks, each run against the 304 targeted tests.

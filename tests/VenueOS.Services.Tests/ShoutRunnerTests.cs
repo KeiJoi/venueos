@@ -342,6 +342,24 @@ public sealed class ShoutRunnerServiceTests
         Assert.Equal(2, adamantoiseAttempts); // eligible again in RUN 2
     }
 
+    /// <summary>Owner, 2026-11-13: every ShoutRunner time shows local time except the next-RUN time, which showed UTC
+    /// (read as "server time"). The terminal line and the status both use the operator's local clock now. (Meaningful
+    /// on any machine not set to UTC, such as the owner's.)</summary>
+    [Fact] public void Next_run_time_is_shown_in_local_time_in_the_terminal_and_status()
+    {
+        var (service, _, clock, chat, _) = ReadyToStart(destinations: ["A"], dataCenters: ["Aether"]);
+        service.SetRepeatEnabled(true);
+        service.SetInterval(0, 1, 0);
+
+        service.Start();
+        PumpUntilSettled(service, clock, chat);
+
+        Assert.Equal(ShoutRunnerState.WaitingRepeat, service.State);
+        var local = service.NextRunAtUtc!.Value.ToLocalTime().ToString("t");
+        Assert.Contains(service.TerminalEvents, e => e.Text == $"Next RUN scheduled for {local}.");
+        Assert.Equal($"Waiting for next RUN — {local}", service.StatusText);
+    }
+
     [Fact] public void Data_center_unavailable_skips_remaining_worlds_in_that_data_center_only_after_recovery_succeeds()
     {
         var (service, automation, clock, chat, _) = ReadyToStart(destinations: ["A"], dataCenters: ["Aether"]);
