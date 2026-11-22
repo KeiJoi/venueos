@@ -314,7 +314,7 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     /// Cancels the run token immediately (which, combined with <see cref="Tick(DateTimeOffset)"/> no longer polling
     /// any run-phase task once <see cref="State"/> leaves those phases, is what makes a stale completion from before
     /// Stop unable to resurrect route state — nothing ever reads those abandoned <see cref="Task"/>s again), tells
-    /// automation to abort any in-flight Lifestream transfer and dismiss transfer UI, and — because a chat command
+    /// automation to cancel any in-flight travel operation and dismiss transfer UI, and — because a chat command
     /// already in <see cref="ChatCommandService"/>'s queue is enqueued with this same <paramref name="runCts"/>
     /// token — guarantees a not-yet-dispatched <c>/shout</c> is skipped rather than fired after Stop (see
     /// <see cref="ChatCommandService.TickAsync"/>'s own cancellation check; this is the exact mechanism
@@ -353,7 +353,7 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
     /// <see cref="IShoutRunnerAutomation.Abort"/> is only issued when a run was actually in progress
     /// (<see cref="IsActive"/> on entry). This is called on every venue activation (including startup), every venue
     /// switch, module disable and plugin dispose/<c>/xlreload</c> — nearly all of them with nothing running — and
-    /// Abort touches the live game (Lifestream abort + transfer-UI dismissal), which an idle ShoutRunner has no
+    /// Abort touches the live game (travel cancel + transfer-UI dismissal), which an idle ShoutRunner has no
     /// business doing. Before 0.3.8 it ran unconditionally, and its dismissal synthesized an Escape key that opened
     /// the FFXIV System Menu on every reload and venue switch (see
     /// <c>docs/SYSTEM_MENU_0.3.8_INVESTIGATION.md</c>).</summary>
@@ -558,7 +558,7 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
         var dc = runConfig!.DataCentersInOrder[dataCenterIndex];
         var world = currentWorlds[worldIndex];
         // 0.3.12: every non-successful transfer leaves one structured Diagnostics entry (operation id, requested and
-        // observed World ids, Data Center, Worlds observed, Lifestream state) plus where the run's checkpoint stands,
+        // observed World ids, Data Center, Worlds observed, transfer state) plus where the run's checkpoint stands,
         // so a report like "Arrived at Jenova instead of Cactuar" can be traced to its cause. The terminal stays readable.
         if (outcome.Result != ShoutRunnerTransferResult.Success)
             diagnostics.RecordFailure($"ShoutRunner RUN {RunNumber} {dc}/{world} (World {worldIndex + 1} of {currentWorlds.Count}) transfer {outcome.Result}: {outcome.Detail} | {outcome.Diagnostic ?? "no transfer diagnostics"} | checkpoint: {RecoveredJournal?.CurrentDataCenter ?? "-"}/{RecoveredJournal?.CurrentWorld ?? "-"}, {RecoveredJournal?.CompletedDestinationsInCurrentWorld.Count ?? 0} destination(s) completed there");
@@ -571,7 +571,7 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
                 consecutiveWrongDestinations++;
                 if (consecutiveWrongDestinations >= MaxConsecutiveWrongDestinations)
                 {
-                    EnterFaulted($"{outcome.Detail} {consecutiveWrongDestinations} transfers in a row ended on the wrong World, so the run stopped. Check Lifestream before resuming.");
+                    EnterFaulted($"{outcome.Detail} {consecutiveWrongDestinations} transfers in a row ended on the wrong World, so the run stopped. Check which World the character is on before resuming.");
                     return;
                 }
 
@@ -604,7 +604,7 @@ public sealed class ShoutRunnerService(IShoutRunnerAutomation automation, ChatCo
                 SkipRemainingDataCenter($"data center unavailable. {outcome.Detail}".Trim());
                 return;
             default:
-                // Reserved for a genuine infrastructure failure (Lifestream unavailable, or recovery-after-failure
+                // Reserved for a genuine infrastructure failure (travel unavailable, or recovery-after-failure
                 // itself could not restore a playable state) — see IShoutRunnerAutomation.TravelToWorldAsync's doc
                 // comment. Ending the whole automation here (rather than skipping just this World) avoids silently
                 // failing through every remaining World/Data Center one at a time for a condition that will not

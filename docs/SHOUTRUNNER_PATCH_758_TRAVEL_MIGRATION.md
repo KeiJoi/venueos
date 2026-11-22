@@ -219,7 +219,7 @@ Release artifact details are recorded in the 0.3.13 publication commit message.
 
 ---
 
-## Addendum — subsequent investigation (0.3.14, unreleased QA build)
+## Addendum — subsequent investigation (0.3.14)
 
 This report's findings above are kept as written. Later research (2026-11-11/12) corrects two of them; details are in
 [`SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md`](SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md) §2:

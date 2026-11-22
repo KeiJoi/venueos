@@ -1,9 +1,9 @@
 namespace VenueOS.Modules.Operations.ShoutRunner;
 
-/// <summary>The boundary around unsafe, game-version-sensitive travel automation (native teleport, Lifestream IPC,
-/// live game state, transfer-UI dismissal) — the same pattern as Party Finder's
+/// <summary>The boundary around unsafe, game-version-sensitive travel automation (native teleport, native World Visit
+/// travel, live game state, transfer-UI dismissal) — the same pattern as Party Finder's
 /// <c>VenueOS.Modules.Operations.PartyFinder.IPartyFinderAutomation</c> (per <c>NEW_MODULE_GUIDE.md</c> §30).
-/// Implemented by the real FFXIVClientStructs/ECommons/Lifestream-IPC engine in <c>VenueOS.Plugin</c>
+/// Implemented by the real FFXIVClientStructs/ECommons engine in <c>VenueOS.Plugin</c> (no Lifestream since 0.3.14)
 /// (<c>ShoutRunnerAutomationService</c>) so <see cref="ShoutRunnerService"/> and its tests never need a live
 /// Dalamud/game context — a fake implements this interface instead. Every method here does its own internal,
 /// bounded waiting/polling (mirroring the donor's actual wait loops, hardened — see the familiarization report
@@ -18,9 +18,9 @@ public interface IShoutRunnerAutomation
     /// <c>MacroRunner</c>, without actually reconstructing anything.</summary>
     void ResetForVenue();
 
-    /// <summary>Hard-cancels whatever the engine is currently doing: aborts Lifestream if a transfer is in flight,
+    /// <summary>Hard-cancels whatever the engine is currently doing: cancels any native travel operation in flight,
     /// dismisses any visible transfer UI, and lets any in-flight bounded wait observe cancellation. Called from
-    /// <c>ShoutRunnerService</c>'s Stop sequence — must return quickly and must never leave Lifestream mid-transfer
+    /// <c>ShoutRunnerService</c>'s Stop sequence — must return quickly and must never leave travel automation mid-transfer
     /// with nothing having told it to stop, unlike the donor's <c>Stop()</c> (familiarization report §14). Only ever
     /// called while a run is actually in progress — never as an idle "make sure everything is quiet" call — and must
     /// never synthesize an Escape key while the character is in the world (see <see cref="ShoutRunnerEscapePolicy"/>).</summary>

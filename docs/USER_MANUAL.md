@@ -1,6 +1,6 @@
 # VenueOS User Manual
 
-**Current version:** 0.3.14 (QA build, not yet released)
+**Current version:** 0.3.14
 **What it is:** VenueOS is a Dalamud plugin for Final Fantasy XIV — a single tablet-style operations console for running an in-game venue: attendance tracking, automatic guest greeting, VIP recognition, promotional shout routes, Party Finder recruitment, live host trivia, Bingo, raffles, tournament brackets, block-letter text composition, timed giveaways, extended macros, and manual Shout announcements.
 **Supported environment:** Windows FFXIV with Dalamud installed (API level 15). VenueOS is unofficial, third-party, and not affiliated with Square Enix or the Dalamud/XIVLauncher project.
 

@@ -284,7 +284,7 @@ This report was written against pre-7.58 Lifestream source and did not account f
 - L3 (a wrong-World arrival faults the run) is changed by product requirement in 0.3.13: the World is skipped and the
   route continues, and two consecutive wrong arrivals fault the run.
 
-## Addendum 2 — native travel (0.3.14, unreleased QA build)
+## Addendum 2 — native travel (0.3.14)
 
 ShoutRunner no longer uses Lifestream (no `/li`, IPC, busy polling or abort): see
 [`SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md`](SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md). The D1–D6 Lifestream-specific

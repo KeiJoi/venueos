@@ -125,6 +125,9 @@ public sealed partial class ShoutRunnerLifestreamCompatibilityTests
         Assert.Equal(ShoutRunnerArrivalVerifier.Verdict.WrongWorld, verdicts[^1]);
         Assert.True(v.EndedOnOriginWorld);
         Assert.Contains("ended back on Adamantoise", v.DescribeWrongWorld("Adamantoise"));
+        // 0.3.14: travel is native; operator-facing text must not point at Lifestream.
+        Assert.DoesNotContain("Lifestream", v.DescribeWrongWorld("Adamantoise"));
+        Assert.DoesNotContain("Lifestream", v.DescribeWrongWorld("Jenova"));
     }
 
     [Fact]
@@ -159,15 +162,16 @@ public sealed partial class ShoutRunnerLifestreamCompatibilityTests
     }
 
     [Fact]
-    public void Diagnostic_history_names_worlds_and_lifestream_state_but_nothing_else()
+    public void Diagnostic_history_names_worlds_and_transfer_state_but_nothing_else()
     {
         var v = new ShoutRunnerArrivalVerifier("Cactuar", "Adamantoise");
         Feed(v, (0.5, S("Adamantoise", busy: true, transitioning: true)), (40, S("Jenova", busy: false)));
         var text = v.DescribeHistory();
         Assert.Contains("Adamantoise → Jenova", text);
         Assert.Contains("transitions: 1", text);
-        Assert.Contains("Lifestream seen busy: yes", text);
-        Assert.Contains("last Lifestream busy: idle", text);
+        Assert.Contains("transfer seen busy: yes", text);
+        Assert.Contains("last transfer state: idle", text);
+        Assert.DoesNotContain("Lifestream", text);
     }
 
     // Transfer classification: the 0.3.12 Lifestream CanVisitSameDC/CanVisitCrossDC rule and its 8 cases were removed in
@@ -286,6 +290,7 @@ public sealed partial class ShoutRunnerLifestreamCompatibilityTests
         rig.Service.Start();
         rig.PumpUntil(() => rig.Service.State == ShoutRunnerState.Faulted);
         Assert.Contains(rig.Texts(), t => t.StartsWith("RUN 1 stopped — Travel to Faerie ended back on Jenova", StringComparison.Ordinal) && t.Contains("2 transfers in a row"));
+        Assert.DoesNotContain(rig.Texts(), t => t.Contains("Lifestream", StringComparison.OrdinalIgnoreCase));
         Assert.Equal("Faerie", rig.Store.Current!.CurrentWorld);
 
         rig.Service.Resume();

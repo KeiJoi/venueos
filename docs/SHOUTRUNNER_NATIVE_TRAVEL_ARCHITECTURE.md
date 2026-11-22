@@ -1,8 +1,10 @@
-# ShoutRunner Native World Visit & Data Center Travel (VenueOS 0.3.14 — UNRELEASED QA BUILD)
+# ShoutRunner Native World Visit & Data Center Travel (VenueOS 0.3.14)
 
-**Status:** implemented and automatically tested. **Live FFXIV QA pending** (owner, see
+**Status: released in VenueOS 0.3.14 (2026-11-22).** Implemented, automatically tested, and live-tested by the owner
+(the QA attempts in §2 row 7, then repeated full ShoutRunner runs across Data Centers), who accepted it for release.
+Not yet observed live: how a congested World looks in the 7.58 window (checklist G1/G1b in
 [`SHOUTRUNNER_NATIVE_TRAVEL_LIVE_QA.md`](SHOUTRUNNER_NATIVE_TRAVEL_LIVE_QA.md)). Nothing in this document was run inside
-FFXIV by the developer. Not published: no push, tag, GitHub Release or `repo.json` change.
+FFXIV by the developer.
 
 Evidence labels used below: **[game data]** read from this PC's installed 7.58 client files (build 2026.11.03) with
 Lumina; **[screenshot]** the owner's six screenshots in `C:\FFXIVplugs\FFXIV-World-DC-Travel`; **[official]** Lodestone;
@@ -145,6 +147,10 @@ touches ShoutRunner's checkpoint, and refuses to start while ShoutRunner runs or
 | `ShoutRunnerPatch758TravelTests.cs` | 21 methods (rewritten) | 0.3.14 classification incl. merged-DataCenter guard, mapping table, DC verification, multi-DC routes, DC skip + Resume, wrong-arrival bounds |
 | `NativeTravelSimulator.cs` | — | Simulated 7.58 window built from the screenshots, with fault switches |
 
+**Release validation (2026-11-22, release commit):** clean Debug and Release builds with 0 warnings and 0 errors;
+`dotnet test VenueOS.sln` passes 1,633 of 1,633 in Debug and in Release (Core 69, Venues 23, Services 1,541). The
+mutation checks below were run during QA and not repeated for the release.
+
 **Full validation (2026-11-13, after travel started from the last stop's city):** `dotnet test VenueOS.sln -c Debug` passes 1,633 of 1,633 (Core 69, Venues 23,
 Services 1,541). `dotnet build VenueOS.sln` passes in Debug and Release (clean, `--no-incremental`) with 0 warnings and 0 errors. The
 targeted travel filter (`ShoutRunner|NativeTravel`) runs 355 tests (the 15-mutant runs used 304. QA fix 2 added mutants Q1 and Q2, and the arrow fix added A1 to A5: direction, adjacency, step completion, step limit and unreadable shown DC. All 7 were killed. The first-city fix added 1 more and the walking fix added W1 to W3: walking stopped on failure, stop within reach, the 30 y walk limit. All killed).
@@ -172,6 +178,10 @@ targeted travel filter (`ShoutRunner|NativeTravel`) runs 355 tests (the 15-mutan
 
 ## 7. Requires live inspection (owner QA)
 
+At release: items 3 and 5 and the arrow-based Data Center step that replaced items 1–2 (§2 row 7, QA attempts #5–#10)
+are verified live. The dropdown path of items 1–2 is not used. Items 4 and 6 are exercised by every live trip (each
+confirmation was verified), but their flags were not inspected separately.
+
 1. That `WorldTravelSelect` node 4 (the dropdown inside the node 2 section) has list labels that read "Aether", "Crystal", "Dynamis", "Primal", and
    that its item-click event is owned by the dropdown. Inspect shows this.
 2. That `SelectItem` + `DispatchItemEvent` changes the page (the gated step).
@@ -185,9 +195,21 @@ targeted travel filter (`ShoutRunner|NativeTravel`) runs 355 tests (the 15-mutan
 
 ## 8. Known limitations
 
-- DC selection is gated until item 2 is verified live.
+- DC selection uses the window's ◁ ▷ arrows (verified live) and is on by default; Native Travel QA can switch it off
+  for the session. The dropdown list is never clicked.
 - Cross-region travel is not automated.
 - Congestion detection relies on disabled rows plus the existing chat markers. How a congested World looks in the
   7.58 list is **[unverified]**.
-- `ShoutRunnerArrivalVerifier` and the 0.3.12 Lifestream-era terminology in historical tests remain; their logic is
-  shared by native travel.
+- `ShoutRunnerArrivalVerifier` (0.3.12) is shared by native travel. At release its busy input and diagnostics were
+  renamed from Lifestream to the transfer state (`TravelBusy`, "transfer seen busy"); some historical test names keep
+  the Lifestream-era wording.
+
+## 9. Provenance and licensing
+
+No Lifestream source code is included. Lifestream's public repository has no license file, so nothing was copied from
+it. VenueOS reuses two facts from reading its public source (b363201): the in-game command sequence `/lockon` +
+`/automove on` / `/automove off` for walking to an aetheryte, and the aetheryte reach thresholds of
+`Utils.GetValidAetheryte`. Both are implemented in VenueOS's own code (`DalamudNativeTravelPort`, `NativeWorldVisitDriver`)
+with VenueOS's own stop, timeout and cleanup logic. The World-row click is delivered the way ECommons'
+`ClickHelper.InvokeReceiveEvent` does it, written against the 7.58 structs. ECommons (MIT) is already a VenueOS
+dependency.

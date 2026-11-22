@@ -1,17 +1,20 @@
-# VenueOS 0.3.14 (UNRELEASED QA build)
+# VenueOS 0.3.14 release
 
 VenueOS uses semantic versioning. `0.1.0` was the first pre-1.0 operational release; breaking persistence or protocol changes require a documented migration and a minor-version increase until 1.0.
 
-## 0.3.14 — Native World Visit & Data Center Travel (UNRELEASED QA BUILD)
+## 0.3.14 — ShoutRunner Native World Visit & Data Center Travel
 
-**Not released.** A local QA build (`release/qa/VenueOS-0.3.14-QA.zip`) for the owner's live test. There is no tag, GitHub Release or `repo.json` change. Automated validation is complete (full suite 1633 / 1633, Debug and Release builds with 0 warnings / 0 errors; 15 / 15 safety mutants killed; see `docs/SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md` §6). **Live QA: Pending — owner testing; publication requires separate authorization.**
+ShoutRunner now travels with VenueOS's own World Visit, including between the North American Data Centers through the Patch 7.58 World Visit window, and **no longer needs Lifestream installed or enabled**. Lifestream itself was not changed, and other VenueOS modules' requirements are unchanged. Automated validation is complete (full suite 1633 / 1633 in Debug and in Release, Debug and Release builds with 0 warnings / 0 errors; 15 / 15 safety mutants killed during QA; see `docs/SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md` §6). **Live QA: owner-tested.** The owner ran the new travel in FFXIV repeatedly before release (same-Data-Center World Visit, Data Center changes with the window arrows in both directions, the Limsa Lominsa teleport and walk, cancel while walking, and full ShoutRunner runs across Data Centers) and accepted it for release on 2026-11-22. How a congested World looks in the 7.58 window has not been observed live yet (checklist G1/G1b). The developer did not run anything inside FFXIV.
 
 ### ShoutRunner
 
-- **Native travel, no Lifestream.** A new reusable `NativeTravelService` drives the aetheryte → "Visit Another World Server" → World Visit window → verified confirmation → stable arrival flow. Every game access runs on the framework thread, one operation per client, with bounded timeouts.
+- **Native travel, no Lifestream.** ShoutRunner no longer calls Lifestream in any way (no `/li`, IPC, busy polling or abort) and no longer checks whether it is installed. A new reusable `NativeTravelService` drives the aetheryte → "Visit Another World Server" → World Visit window → verified confirmation → stable arrival flow. Every game access runs on the framework thread, one operation per client, with bounded timeouts.
 - **Safety.** OK is pressed only when the dialog's first line is exactly the game's "Travel to <World>?" template for the target and the game's own destination field agrees. World rows are chosen by the World their label names, never by position. Rows left over from the previous Data Center page are never used. Nothing is clicked unless the list's click event is registered to its expected owner.
 - **Patch 7.58 Data Centers.** Logical Data Center comes from `World.Unknown0`; 7.58 game data merges `World.DataCenter` to Aether for every NA World. The Data Center selector step (window arrows) was verified live on 2026-11-13 and is on by default; Native Travel QA can switch it off for the session.
+- **Aetheryte approach.** World Visit starts from the city the character is already in (normally the World's last stop). Outside the three World Visit cities, or more than 30 y from the aetheryte, it teleports to the first World Visit city on the destination list that is not the current one. An aetheryte in sight but out of reach (Limsa Lominsa's landing) is walked to with `/lockon` + `/automove`, which stops within reach, after 10 s or when blocked, and is always switched off again (on success, failure, cancel and plugin unload).
+- **Arrival.** Arrival needs the 0.3.12 stable observation on the target World and its logical Data Center, and the pre-shout guard still withholds any shout on the wrong World. Wrong-World messages no longer mention Lifestream.
 - **Route.** An unavailable World is skipped and its Data Center continues. A disabled Data Center or an unsupported combination (another region) skips the Data Center. Wrong arrivals keep the 0.3.13 skip-then-fault rule.
+- **Times.** The next RUN's start time (terminal and status) is shown in local time.
 - **Native Travel QA** diagnostic tool (Settings → Modules → ShoutRunner): single trips without announcements, read-only Inspect, Copy Diagnostics.
 
 Reports: `docs/SHOUTRUNNER_NATIVE_TRAVEL_ARCHITECTURE.md`, `docs/SHOUTRUNNER_NATIVE_TRAVEL_LIVE_QA.md`.

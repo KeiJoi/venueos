@@ -1,7 +1,11 @@
 # VenueOS 0.3.14 QA — Native World Visit & Data Center Travel: Live Test Checklist
 
 For: the owner's in-game test session. No source code needed. Mark each line **Pass / Fail / Not Tested**.
-Build: `release/qa/VenueOS-0.3.14-QA.zip` (unreleased; install steps in §0).
+Build: `release/qa/VenueOS-0.3.14-QA.zip` (install steps in §0).
+
+> **Historical checklist.** This was the pre-release QA checklist. 0.3.14 was released on 2026-11-22 after the owner's
+> live tests. Since then the Data Center switch is **on** by default (it no longer resets to off), and the release
+> installs normally from the repository. Congestion (G1/G1b) had not been observed live at release.
 
 The new travel engine is VenueOS's own. Lifestream is no longer used by ShoutRunner (leave it installed or not; it
 doesn't matter).
@@ -116,4 +120,6 @@ diagnostics; that's exactly what needs correcting. Don't turn the switch on.
 | I3 | Travel by hand to another World between destinations. | The next shout is withheld ("… withheld …"). | ☐ Pass ☐ Fail ☐ Not Tested |
 | I4 | Stop and Resume. | No repeated shouts; the run continues where it stopped. | ☐ Pass ☐ Fail ☐ Not Tested |
 
-Live QA status for this build: **Pending — owner testing.** Publication requires a separate, explicit authorization.
+Live QA status at release (2026-11-22): **owner-tested and accepted for release.** The owner reported same-DC World
+Visit, cross-DC arrow switching, the Limsa walk and repeated full ShoutRunner runs working live. Congestion (G1/G1b)
+not observed.

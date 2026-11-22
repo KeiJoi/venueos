@@ -236,7 +236,7 @@ public static class ShoutRunnerNativeTravelMapping
 public enum ShoutRunnerTransferResult { Success, WorldCongestedSkip, DataCenterUnavailableSkip, Failed, WrongDestination }
 
 /// <param name="Diagnostic">Technical detail for Diagnostics (operation id, requested/observed World ids, Data Center,
-/// Worlds observed, Lifestream state), kept out of the operator-facing terminal line
+/// Worlds observed, transfer state), kept out of the operator-facing terminal line
 /// (<paramref name="Detail"/>) so the terminal stays readable.</param>
 public sealed record ShoutRunnerTransferOutcome(ShoutRunnerTransferResult Result, string? Detail = null, string? Diagnostic = null)
 {
@@ -255,7 +255,7 @@ public sealed record ShoutRunnerTeleportOutcome(ShoutRunnerTeleportResult Result
     public static ShoutRunnerTeleportOutcome Failed(string detail) => new(ShoutRunnerTeleportResult.Failed, detail);
 }
 
-/// <summary>The result of the one shared readiness/recovery gate every live action (a Lifestream transfer, a
+/// <summary>The result of the one shared readiness/recovery gate every live action (a World transfer, a
 /// teleport, a shout) is required to pass through first — see the familiarization report §13's "confirmed hang" and
 /// the reconstruction brief's "HARD ROUTE INVARIANT." <see cref="Ready"/> false means recovery was attempted and
 /// failed within its bounded timeout, which ends the entire automation (not just the current World/Data Center) —

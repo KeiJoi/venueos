@@ -14,7 +14,8 @@ namespace VenueOS.Modules.Operations.ShoutRunner;
 /// ran. <c>ShoutRunnerAutomationService.WaitForCrossDataCenterTransferAsync</c>'s own equivalent branch already gets this right — it only
 /// trusts a "wrong World" result once Lifestream itself also reports it is no longer busy, i.e. once Lifestream
 /// believes its ENTIRE operation (including any intermediate city travel) is finished. This reproduces that same,
-/// already-proven criterion for the same-Data-Center path instead of inventing a new one.</summary>
+/// already-proven criterion for the same-Data-Center path instead of inventing a new one. (History: 0.3.12. Since
+/// 0.3.14 travel is native and the busy state is the game's own World Visit transfer, not Lifestream.)</summary>
 public static class ShoutRunnerSameDataCenterArrival
 {
     public enum Decision { Continue, Success, Failed }
@@ -22,15 +23,15 @@ public static class ShoutRunnerSameDataCenterArrival
     /// <param name="transitioning">The character is currently mid-zone-transition (<c>BetweenAreas</c>/<c>BetweenAreas51</c>).</param>
     /// <param name="seenTransition">At least one transition has been observed since this transfer began.</param>
     /// <param name="currentWorld">The character's current World, or null/empty if unknown.</param>
-    /// <param name="lifestreamBusy">Lifestream's own busy state, or null if it could not be determined right now —
+    /// <param name="travelBusy">Whether the transfer is still in progress, or null if it could not be determined right now —
     /// treated the same as "still busy" for the purpose of a wrong-World failure (never trust a wrong-World result
     /// on ambiguous information; keep waiting instead).</param>
-    public static Decision Evaluate(bool isLoggedIn, bool hasLocalPlayer, bool transitioning, bool seenTransition, string? currentWorld, string targetWorld, bool? lifestreamBusy)
+    public static Decision Evaluate(bool isLoggedIn, bool hasLocalPlayer, bool transitioning, bool seenTransition, string? currentWorld, string targetWorld, bool? travelBusy)
     {
         if (transitioning || !seenTransition || !isLoggedIn || !hasLocalPlayer) return Decision.Continue;
 
         var onTarget = !string.IsNullOrEmpty(currentWorld) && string.Equals(currentWorld, targetWorld, StringComparison.OrdinalIgnoreCase);
-        var confirmedNotBusy = lifestreamBusy == false;
+        var confirmedNotBusy = travelBusy == false;
 
         if (onTarget) return confirmedNotBusy ? Decision.Success : Decision.Continue;
         if (!string.IsNullOrEmpty(currentWorld) && confirmedNotBusy) return Decision.Failed;

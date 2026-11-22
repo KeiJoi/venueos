@@ -2,9 +2,9 @@
 
 A short summary of each VenueOS release. Detailed notes are in `RELEASE.md`, and full investigation reports are under `docs/`. Dates are release dates (UTC). Entries before 0.3.10 were reconstructed from the repository's tags, GitHub Releases, `RELEASE.md` and release commits.
 
-## 0.3.14 — UNRELEASED (QA build)
+## 0.3.14 — 2026-11-22
 
-- **ShoutRunner:** travels with VenueOS's own World Visit and no longer uses Lifestream. It picks the World by name in the World Visit window and presses OK only when the dialog reads exactly "Travel to <World>?" for the World it wants. It never logs you out or sends you home.
+- **ShoutRunner:** travels with VenueOS's own World Visit and no longer uses Lifestream, so you don't need Lifestream installed for ShoutRunner. It picks the World by name in the World Visit window and presses OK only when the dialog reads exactly "Travel to <World>?" for the World it wants. It never logs you out or sends you home.
 - **ShoutRunner (Patch 7.58):** VenueOS can switch Data Center in the World Visit window by pressing its ◁ ▷ arrows one step at a time, checking each step. It is on by default. Native Travel QA can switch it off for the session; other Data Centers in your region are then skipped before anything is clicked.
 - **ShoutRunner:** Data Centers are now read from the game's real logical Data Center. Patch 7.58 game data lists every North American World under "Aether" in the old field, which made 0.3.13 treat every NA World as Aether.
 - **ShoutRunner:** a World that is greyed out or missing in the World Visit list is skipped, and the rest of its Data Center continues.

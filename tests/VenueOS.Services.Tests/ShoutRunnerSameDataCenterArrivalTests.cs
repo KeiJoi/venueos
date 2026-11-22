@@ -13,37 +13,37 @@ public sealed class ShoutRunnerSameDataCenterArrivalTests
     {
         // Halicarnassus -> Ul'dah (a transition happened, then settled) while Lifestream is still busy performing
         // the actual World Visit to Cuchulainn.
-        var decision = ShoutRunnerSameDataCenterArrival.Evaluate(isLoggedIn: true, hasLocalPlayer: true, transitioning: false, seenTransition: true, currentWorld: "Halicarnassus", targetWorld: "Cuchulainn", lifestreamBusy: true);
+        var decision = ShoutRunnerSameDataCenterArrival.Evaluate(isLoggedIn: true, hasLocalPlayer: true, transitioning: false, seenTransition: true, currentWorld: "Halicarnassus", targetWorld: "Cuchulainn", travelBusy: true);
         Assert.Equal(ShoutRunnerSameDataCenterArrival.Decision.Continue, decision);
     }
 
     [Fact] public void An_unknown_lifestream_busy_state_never_trusts_a_wrong_world_result()
     {
-        var decision = ShoutRunnerSameDataCenterArrival.Evaluate(true, true, false, true, "Halicarnassus", "Cuchulainn", lifestreamBusy: null);
+        var decision = ShoutRunnerSameDataCenterArrival.Evaluate(true, true, false, true, "Halicarnassus", "Cuchulainn", travelBusy: null);
         Assert.Equal(ShoutRunnerSameDataCenterArrival.Decision.Continue, decision);
     }
 
     [Fact] public void Wrong_world_after_lifestream_confirms_it_is_finished_is_a_genuine_failure()
     {
-        var decision = ShoutRunnerSameDataCenterArrival.Evaluate(true, true, false, true, "Halicarnassus", "Cuchulainn", lifestreamBusy: false);
+        var decision = ShoutRunnerSameDataCenterArrival.Evaluate(true, true, false, true, "Halicarnassus", "Cuchulainn", travelBusy: false);
         Assert.Equal(ShoutRunnerSameDataCenterArrival.Decision.Failed, decision);
     }
 
     [Fact] public void Reaching_the_target_world_while_lifestream_is_still_busy_does_not_yet_succeed()
     {
-        var decision = ShoutRunnerSameDataCenterArrival.Evaluate(true, true, false, true, "Cuchulainn", "Cuchulainn", lifestreamBusy: true);
+        var decision = ShoutRunnerSameDataCenterArrival.Evaluate(true, true, false, true, "Cuchulainn", "Cuchulainn", travelBusy: true);
         Assert.Equal(ShoutRunnerSameDataCenterArrival.Decision.Continue, decision);
     }
 
     [Fact] public void Reaching_the_target_world_once_lifestream_confirms_finished_succeeds()
     {
-        var decision = ShoutRunnerSameDataCenterArrival.Evaluate(true, true, false, true, "Cuchulainn", "Cuchulainn", lifestreamBusy: false);
+        var decision = ShoutRunnerSameDataCenterArrival.Evaluate(true, true, false, true, "Cuchulainn", "Cuchulainn", travelBusy: false);
         Assert.Equal(ShoutRunnerSameDataCenterArrival.Decision.Success, decision);
     }
 
     [Fact] public void Still_mid_transition_never_decides_either_way()
     {
-        var decision = ShoutRunnerSameDataCenterArrival.Evaluate(true, true, transitioning: true, seenTransition: true, "Cuchulainn", "Cuchulainn", lifestreamBusy: false);
+        var decision = ShoutRunnerSameDataCenterArrival.Evaluate(true, true, transitioning: true, seenTransition: true, "Cuchulainn", "Cuchulainn", travelBusy: false);
         Assert.Equal(ShoutRunnerSameDataCenterArrival.Decision.Continue, decision);
     }
 
@@ -51,7 +51,7 @@ public sealed class ShoutRunnerSameDataCenterArrivalTests
     {
         // Covers "current World mismatch BEFORE World Visit completion does not immediately fault" at its most
         // literal: nothing has even started moving yet.
-        var decision = ShoutRunnerSameDataCenterArrival.Evaluate(true, true, false, seenTransition: false, "Halicarnassus", "Cuchulainn", lifestreamBusy: false);
+        var decision = ShoutRunnerSameDataCenterArrival.Evaluate(true, true, false, seenTransition: false, "Halicarnassus", "Cuchulainn", travelBusy: false);
         Assert.Equal(ShoutRunnerSameDataCenterArrival.Decision.Continue, decision);
     }
 
